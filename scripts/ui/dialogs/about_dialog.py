@@ -64,9 +64,9 @@ class AboutDialog(ThemeDialog):
         
         # GitHub Link
         github_label = QLabel(
-            '<a href="https://github.com/729244088/PyLog" '
+            '<a href="https://github.com/cj21701/PyLog" '
             'style="color: #7289da; text-decoration: none; font-size: 14px;">'
-            '⭐ github.com/729244088/PyLog</a>'
+            '⭐ github.com/cj21701/PyLog</a>'
         )
         github_label.setOpenExternalLinks(True)
         github_label.setAlignment(Qt.AlignCenter)

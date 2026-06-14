@@ -25,9 +25,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/729244088/PyLog"
-Repository = "https://github.com/729244088/PyLog"
-Issues = "https://github.com/729244088/PyLog/issues"
+Homepage = "https://github.com/cj21701/PyLog"
+Repository = "https://github.com/cj21701/PyLog"
+Issues = "https://github.com/cj21701/PyLog/issues"
 
 [tool.setuptools]
 packages = ["pylog_api"]

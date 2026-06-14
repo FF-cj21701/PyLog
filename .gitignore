@@ -91,6 +91,8 @@ coverage.xml
 tmp/
 scratch/
 projects/
+plugins/README.md
+scripts/ai_prompt_token_audit.py
 
 # === 打包产物 ===
 PyLog.spec
@@ -99,3 +101,4 @@ PyLog.spec
 test_*.py
 test_*.txt
 debug_*.py
+/*.png

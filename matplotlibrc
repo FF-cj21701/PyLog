@@ -1,0 +1,15 @@
+# Matplotlib configuration
+# Font settings
+font.family: sans-serif
+font.sans-serif: Microsoft YaHei, SimHei, DejaVu Sans, Bitstream Vera Sans, Computer Modern Sans Serif, Lucida Grande, Verdana, Geneva, Lucid, Arial, Helvetica, Avant Garde, sans-serif
+
+# Axes and minus sign
+axes.unicode_minus: False
+
+# 字体大小
+font.size: 10
+axes.titlesize: 12
+axes.labelsize: 10
+xtick.labelsize: 8
+ytick.labelsize: 8
+legend.fontsize: 10

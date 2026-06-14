@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        :root {
+            /* Default fallbacks */
+            --bg-primary: #ffffff;
+            --border-color: #e0e0e0;
+            --accent-color: #0078d7;
+            --text-primary: #333333;
+            
+            /* Ace Specific Aliases */
+            --ace-bg: var(--bg-primary);
+            --ace-gutter-bg: var(--bg-primary);
+            --ace-text: var(--text-primary);
+        }
+        
+        body { margin: 0; padding: 0; overflow: hidden; background: var(--bg-primary); color: var(--text-primary); font-family: 'Segoe UI', sans-serif; height: 100vh; width: 100vw; }
+        #editor-container { position: relative; width: 100%; height: 100%; }
+        #editor { width: 100%; height: 100%; }
+
+        /* Custom Scrollbar for Ace - Making it thin and modern */
+        .ace_scrollbar-v { 
+            width: 10px !important; 
+            right: 0; 
+            background: transparent !important; 
+        }
+        .ace_scrollbar-h { 
+            bottom: 0; 
+            background: transparent !important; 
+            height: 10px !important; 
+        }
+        .ace_scrollbar-inner { 
+            background: rgba(200, 200, 200, 0.5) !important; 
+            border-radius: 5px !important; 
+            border: 2px solid transparent !important;
+            background-clip: content-box !important;
+        }
+        .ace_scrollbar-inner:hover {
+            background: rgba(160, 160, 160, 0.8) !important;
+            background-clip: content-box !important;
+        }
+
+        /* Dark Mode Scrollbars for Ace */
+        html.dark-mode .ace_scrollbar-inner {
+            background: rgba(148, 163, 184, 0.3) !important;
+        }
+        html.dark-mode .ace_scrollbar-inner:hover {
+            background: rgba(148, 163, 184, 0.5) !important;
+        }
+        
+        /* Ensure the corner between scrollbars is transparent */
+        .ace_scrollbar-corner {
+            background: transparent !important;
+            display: none !important;
+            width: 0 !important;
+            height: 0 !important;
+        }
+
+        /* Hide default buttons and arrows aggressively */
+        .ace_scrollbar-button, 
+        .ace_scrollbar-arrow,
+        .ace_scrollbar-v-button,
+        .ace_scrollbar-h-button {
+            display: none !important;
+            opacity: 0 !important;
+            visibility: hidden !important;
+            pointer-events: none !important;
+            width: 0 !important;
+            height: 0 !important;
+            position: absolute !important;
+            left: -9999px !important;
+        }
+
+        /* Styling native webkit scrollbars (for the view itself) */
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(208, 208, 208, 0.5);
+            border-radius: 5px;
+            border: 2px solid transparent;
+            background-clip: content-box;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(160, 160, 160, 0.8);
+            background-clip: content-box;
+        }
+
+        /* Dark Mode Webkit Scrollbars */
+        html.dark-mode ::-webkit-scrollbar-thumb {
+            background: rgba(148, 163, 184, 0.3);
+        }
+        html.dark-mode ::-webkit-scrollbar-thumb:hover {
+            background: rgba(148, 163, 184, 0.5);
+        }
+        ::-webkit-scrollbar-button {
+            display: none;
+            width: 0;
+            height: 0;
+        }
+        ::-webkit-scrollbar-corner {
+            background: transparent;
+        }
+        
+        /* Modern Ace Tweaks */
+        .ace_gutter { background: var(--ace-gutter-bg) !important; color: var(--text-secondary) !important; border-right: 1px solid var(--border-color); }
+        .ace_active-line { background: rgba(0, 120, 215, 0.05) !important; }
+        .ace_cursor { border-left: 2px solid var(--accent-color) !important; }
+        .ace_selection { background: rgba(0, 120, 215, 0.25) !important; }
+
+        /* Dark Mode Specific Ace Overrides [RETIRED - Now dynamic] */
+        html.dark-mode .ace_gutter { border-right: 1px solid var(--border-color) !important; }
+        html.dark-mode .ace_editor, html.dark-mode .ace_content { background-color: var(--ace-bg) !important; }
+        
+        /* Diff Preview Markers */
+        .diff-add {
+            background-color: rgba(40, 167, 69, 0.2) !important;
+            position: absolute;
+            z-index: 20;
+        }
+        .diff-delete-point {
+            border-top: 2px solid rgba(220, 53, 69, 0.8) !important;
+            position: absolute;
+            z-index: 21;
+        }
+        .ace_gutter-cell.diff-add-gutter {
+            background-color: rgba(40, 167, 69, 0.25) !important;
+            color: #28a745 !important;
+            font-weight: bold;
+        }
+        .ace_gutter-cell.diff-delete-gutter {
+            border-left: 3px solid #dc3545 !important;
+            color: #dc3545 !important;
+        }
+    </style>
+    <style id="dynamic-theme-vars">
+        /* This will be populated dynamically by Python */
+    </style>
+</head>
+<body>
+    <div id="editor-container">
+        <div id="editor"></div>
+
+    <!-- Load Ace Editor from local resources -->
+    <script src="ace.js"></script>
+    <script src="mode-python.js"></script>
+    <script src="theme-monokai.js"></script>
+    <script src="ext-language_tools.js"></script>
+    
+    <script src="qwebchannel.js"></script>
+
+    <script>
+        var editor = null;
+
+        function initEditor() {
+            if (typeof ace === 'undefined') {
+                setTimeout(initEditor, 100);
+                return;
+            }
+
+            editor = ace.edit("editor");
+            editor.setTheme("ace/theme/chrome");
+            editor.session.setMode("ace/mode/python");
+            
+            // Modern IDE Options
+            editor.setOptions({
+                enableBasicAutocompletion: true,
+                enableLiveAutocompletion: true,
+                enableSnippets: true,
+                showPrintMargin: false,
+                fontFamily: "Consolas, 'Courier New', monospace",
+                fontSize: "14px",
+                animatedScroll: true,
+                cursorStyle: "smooth",
+                useSoftTabs: true,
+                tabSize: 4,
+                highlightActiveLine: true,
+                highlightSelectedWord: true,
+                scrollPastEnd: 0.5, // Allow scrolling past the end
+                behavioursEnabled: true,
+                wrapBehavioursEnabled: true,
+                autoScrollEditorIntoView: true,
+                copyWithEmptySelection: true,
+                useWorker: false // Disable web worker for local file access stability
+            });
+
+            window.editor = editor;
+
+            // Initialize WebChannel
+            if (typeof QWebChannel !== 'undefined') {
+                new QWebChannel(qt.webChannelTransport, function(channel) {
+                    window.pyBridge = channel.objects.pyBridge;
+                    
+                    pyBridge.getInitialContent(function(content) {
+                        editor.setValue(content, -1);
+                        editor.session.getUndoManager().reset(); // Clear undo history after initial load
+                    });
+                    
+                    editor.on("change", function() {
+                        pyBridge.onTextChanged(editor.getValue());
+                    });
+                });
+            }
+
+            // Track selection
+            editor.selection.on('changeSelection', function() {
+                var text = editor.getSelectedText();
+                if (text && text.trim().length > 0) {
+                    var range = editor.getSelectionRange();
+                    var cursor = editor.selection.getCursor(); 
+                    var coords = editor.renderer.textToScreenCoordinates(cursor.row, cursor.column);
+                    
+                    var startLine = range.start.row + 1;
+                    var endLine = range.end.row + 1;
+                    var lineStr = startLine === endLine ? "" + startLine : startLine + "-" + endLine;
+                    
+                    if (window.pyBridge) {
+                        window.pyBridge.onSelectionChanged(text, coords.pageX, coords.pageY, lineStr);
+                    }
+                } else {
+                    if (window.pyBridge) {
+                        window.pyBridge.onSelectionChanged("", 0, 0, "");
+                    }
+                }
+            });
+
+            // Also hide on scroll or change
+            editor.on('change', function() {
+                if (window.pyBridge) window.pyBridge.onSelectionChanged("", 0, 0, "");
+            });
+            
+            editor.renderer.on('afterRender', function() {
+                var text = editor.getSelectedText();
+                if (text && text.length > 0) {
+                    var range = editor.getSelectionRange();
+                    var cursor = editor.selection.getCursor();
+                    var coords = editor.renderer.textToScreenCoordinates(cursor.row, cursor.column);
+                    
+                    var startLine = range.start.row + 1;
+                    var endLine = range.end.row + 1;
+                    var lineStr = startLine === endLine ? "" + startLine : startLine + "-" + endLine;
+                    
+                    if (window.pyBridge) {
+                        window.pyBridge.onSelectionChanged(text, coords.pageX, coords.pageY, lineStr);
+                    }
+                }
+            });
+        }
+
+        // Initialize
+        window.addEventListener('load', initEditor);
+
+        // API for Python
+        window.setContent = function(content, silent) {
+            if (editor) {
+                if (silent) {
+                    var session = editor.getSession();
+                    var listeners = session._eventRegistry.change;
+                    var savedListeners = listeners ? [...listeners] : [];
+                    if (listeners) session._eventRegistry.change = [];
+                    
+                    editor.setValue(content, -1);
+                    editor.session.getUndoManager().reset();
+                    
+                    if (listeners) session._eventRegistry.change = savedListeners;
+                } else {
+                    editor.setValue(content, -1);
+                    editor.session.getUndoManager().reset();
+                }
+                return true;
+            }
+            return false;
+        };
+
+        window.isEditorInitialized = function() {
+            return typeof editor !== 'undefined' && editor !== null;
+        };
+
+        window.getContent = function() {
+            return editor ? editor.getValue() : "";
+        };
+
+        window.insertText = function(text) {
+            if (editor) editor.insert(text);
+        };
+
+        window.getSelectedText = function() {
+            return editor ? editor.getSelectedText() : "";
+        };
+
+        window.formatCode = function() {
+            var val = editor.getValue();
+            editor.setValue(val.trim(), -1);
+        };
+
+        // --- Preview Mode APIs ---
+        window._previewMarkers = [];
+        window._originalContent = "";
+        window._isPreviewActive = false;
+
+        window.showPreview = function(draftContent, diffBlocks) {
+            if (!editor) return false;
+            
+            // Backup original content
+            if (!window._isPreviewActive) {
+                window._originalContent = editor.getValue();
+            }
+            
+            window._isPreviewActive = true;
+            
+            // Set draft content via undoable replacement
+            var session = editor.session;
+            var Range = ace.require('ace/range').Range;
+            var range = new Range(0, 0, session.getLength(), 1);
+            session.replace(range, draftContent);
+            editor.selection.clearSelection(); // Prevent select-all ghosting
+            
+            // Markers logic
+            window.clearPreviewMarkers();
+            
+            if (diffBlocks && Array.isArray(diffBlocks)) {
+                diffBlocks.forEach(function(block) {
+                    if (block.type === 'add') {
+                        var markerId = session.addMarker(new Range(block.start_line, 0, block.end_line, 1), 'diff-add', "fullLine");
+                        window._previewMarkers.push(markerId);
+                        for (var i = block.start_line; i <= block.end_line; i++) {
+                            session.addGutterDecoration(i, 'diff-add-gutter');
+                        }
+                    } else if (block.type === 'delete-point') {
+                        var markerId = session.addMarker(new Range(block.line, 0, block.line, 1), 'diff-delete-point', "fullLine");
+                        window._previewMarkers.push(markerId);
+                        session.addGutterDecoration(block.line, 'diff-delete-gutter');
+                    }
+                });
+            }
+            
+            return true;
+        };
+
+        window.clearPreviewMarkers = function() {
+            if (editor) {
+                window._previewMarkers.forEach(function(id) {
+                    editor.session.removeMarker(id);
+                });
+                window._previewMarkers = [];
+                
+                var rowCount = editor.session.getLength();
+                for (var i = 0; i < rowCount; i++) {
+                    editor.session.removeGutterDecoration(i, 'diff-add-gutter');
+                    editor.session.removeGutterDecoration(i, 'diff-delete-gutter');
+                }
+            }
+        };
+
+        window.acceptPreview = function() {
+            if (!window._isPreviewActive) return;
+            window.clearPreviewMarkers();
+            window._isPreviewActive = false;
+            window._originalContent = "";
+            
+            if (window.pyBridge) {
+                window.pyBridge.onTextChanged(editor.getValue());
+                window.pyBridge.onPreviewAccepted();
+            }
+        };
+
+        window.rejectPreview = function() {
+            if (window._isPreviewActive && window._originalContent !== null) {
+                window.clearPreviewMarkers();
+                var session = editor.session;
+                var Range = ace.require('ace/range').Range;
+                session.replace(new Range(0, 0, session.getLength(), 1), window._originalContent);
+                editor.selection.clearSelection();
+                
+                window._isPreviewActive = false;
+                window._originalContent = "";
+                return true;
+            }
+            return false;
+        };
+
+        window.setTheme = function(theme) {
+            if (!editor) return;
+            theme = (theme || 'light').toLowerCase();
+            
+            if (theme === 'dark' || theme === 'sakura') {
+                document.documentElement.classList.add('dark-mode');
+                editor.setTheme("ace/theme/monokai");
+            } else {
+                document.documentElement.classList.remove('dark-mode');
+                editor.setTheme("ace/theme/chrome");
+            }
+        };
+    </script>
+</body>
+</html>

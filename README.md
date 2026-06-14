@@ -1,6 +1,6 @@
 # <img src="icons/restore.png" width="28" align="center"> PyLog (ALIVE)
 
-**AI-powered well log visualization and petrophysical analysis platform**
+**AI-powered well log visualization and data analysis platform**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-green.svg)](https://www.python.org/)
@@ -176,3 +176,5 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 - [pyqtgraph](https://www.pyqtgraph.org/) — Fast scientific plotting
 - [dlisio](https://github.com/equinor/dlisio) — DLIS file parser
 - [HDF5 / h5py](https://www.h5py.org/) — High-performance data storage
+- [geoscience-skills](https://github.com/SteadfastAsArt/geoscience-skills) — AI-powered geoscience assistant capabilities
+

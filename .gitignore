@@ -45,7 +45,7 @@ demo.db
 # === 文档 (仅保留 CHANGELOG 与截图) ===
 docs/*
 !docs/CHANGELOG.md
-!docs/screenshot.png
+!docs/Fig1.png
 
 # === 测试与脚本 (暂不公开) ===
 tests/

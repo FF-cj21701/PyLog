@@ -130,10 +130,10 @@ PyLog/
 1. Open the AI Assistant panel (**AI Assistant** button or `Ctrl+Shift+A`)
 2. Click the **Settings** gear icon
 3. Configure a connection profile:
-   - **Provider**: OpenAI / DeepSeek / Moonshot / Ollama / Custom
    - **API Key**: Your API key
-   - **Base URL**: API endpoint (auto-filled for known providers)
-   - **Model**: Model name (e.g., `gpt-4o`, `deepseek-chat`)
+   - **Base URL**: API endpoint URL (e.g., `https://api.openai.com/v1`)
+   - **Model Name**: Target model ID (click **Auto Fetch** to automatically retrieve a list of available models from your endpoint)
+
 4. Optionally configure the **file whitelist** for AI file access security
 
 ### Themes

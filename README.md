@@ -6,6 +6,8 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-green.svg)](https://www.python.org/)
 [![PySide6](https://img.shields.io/badge/GUI-PySide6-orange.svg)](https://doc.qt.io/qtforpython/)
 
+![PyLog Screenshot](docs/screenshot.png)
+
 ---
 
 ## ✨ Features

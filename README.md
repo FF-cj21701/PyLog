@@ -6,9 +6,6 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-green.svg)](https://www.python.org/)
 [![PySide6](https://img.shields.io/badge/GUI-PySide6-orange.svg)](https://doc.qt.io/qtforpython/)
 
-> [!NOTE]
-> This project was developed by AI under the guidance and direction of the developer, and the project documentation was written by AI.
-
 ---
 
 ## ✨ Features
@@ -180,4 +177,9 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 - [dlisio](https://github.com/equinor/dlisio) — DLIS file parser
 - [HDF5 / h5py](https://www.h5py.org/) — High-performance data storage
 - [geoscience-skills](https://github.com/SteadfastAsArt/geoscience-skills) — AI-powered geoscience assistant capabilities
+
+---
+
+> [!NOTE]
+> This project was developed by AI under the guidance and direction of the developer, and the project documentation was written by AI.
 

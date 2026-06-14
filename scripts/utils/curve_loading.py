@@ -59,7 +59,7 @@ def _resolve_depth_for_curve(local_db, well_id, curve_id, curves, target_len):
             DEPTH_CACHE.move_to_end(cache_key)
         else:
             if not isinstance(depth_data, np.ndarray):
-                logger.info(f"Pre-loading Depth Index into RAM: {best_match[1]} (Size: {len(depth_data)})")
+                # logger.info(f"Pre-loading Depth Index into RAM: {best_match[1]} (Size: {len(depth_data)})")
                 depth_data = np.array(depth_data)
             DEPTH_CACHE[cache_key] = depth_data
             while len(DEPTH_CACHE) > MAX_DEPTH_CACHE_ITEMS:

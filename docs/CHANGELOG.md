@@ -3,6 +3,111 @@
 - This changelog now uses bilingual titles and English body text for long-term encoding stability.
 - Some older entries were historically affected by mojibake. Those sections were normalized into readable English summaries while preserving dates and main themes.
 
+## [2026-06-20] - Plot Scroll Chain Stabilization / 绘图滚动链路稳定性优化
+
+- Reduced redundant header repaint signal connections in `HeaderWidget`, preventing repeated range-change callbacks from accumulating as curves are added to a track.
+- Added no-op guards around scrollbar value propagation to reduce unnecessary scroll handling during fine drag operations.
+- Restored image-track "refresh after settle" behavior so rapid scrollbar dragging can defer tile refresh work until scrolling stops, while still guaranteeing a final refresh when the settled depth range is unchanged.
+- Adjusted tiled image viewport handling so active scrollbar dragging can avoid immediate tile-request churn and let the final settled viewport drive the visible refresh.
+- Simplified `sync_viewboxes()` so the main plot `ViewBox` remains strongly synchronized while same-track overlay viewboxes are no longer redundantly forced through manual Y-range updates on every scroll step.
+- Refined depth/grid visual alignment by drawing Y grid lines directly from the shared physical-depth step calculation and by positioning the depth tick cache using its own cached pixel density.
+- Verified that the above changes preserve normal multi-track logging plot behavior, including mixed image/curve display, same-track multi-curve plotting, and standard interaction workflows.
+
+## [2026-06-19] - DLIS Curve Export / DLIS 曲线导出
+
+- Added a new `File -> Export DLIS...` workflow for exporting stored well curves back to `.dlis`.
+- Introduced a dedicated export dialog with:
+  - well selection on the left
+  - frame/folder-grouped curve selection on the right
+  - custom output file naming with well-name default
+  - inline export progress shown directly inside the export dialog footer instead of a separate progress popup
+- Added a new DLIS export service in `scripts/data/dlis_exporter.py` based on `dliswriter`.
+- Preserved frame/folder structure during export:
+  - each folder/frame is exported as a DLIS frame
+  - matching depth curves are auto-included per frame when required for frame indexing
+- Expanded export data-shape support:
+  - 1D curves are supported
+  - 2D curves are supported and round-trip through `dlisio`
+  - 3D+ curves are skipped with an explicit warning instead of failing the whole export
+- Added DLIS unit compatibility handling:
+  - common units such as `API`, `g/cm3`, and `ohm.m` are normalized to writer-compatible values when possible
+  - unsupported units are exported as blank units instead of blocking file creation
+- Improved export feedback:
+  - export result messages now list exported curves
+  - skipped curves and unit normalization details are summarized after export
+  - progress now reflects both pre-write preparation and the underlying logical-record write phase from `dliswriter`
+- Updated dependency metadata to include `dliswriter`.
+- Added regression coverage in `tests/test_dlis_export.py` for:
+  - dialog grouping and default naming
+  - frame-preserving export behavior
+  - automatic depth injection
+  - 2D export support
+  - 3D skip behavior
+  - unit normalization
+  - missing dependency handling
+- Current verification command:
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_dlis_export tests.test_tree_controller_menus tests.test_manual_table_dialog`
+- Current result:
+  - `Ran 13 tests ... OK`
+
+
+## [2026-06-18] - Curve Explorer Integrity & Template Identity Clarification / 曲线管理完整性与模板标识澄清
+
+- Repaired missing folder rename support in the curve explorer:
+  - restored the folder `Rename` action in `scripts/ui/tree_controller.py`
+  - added `DBManager.update_folder_name(...)` in `scripts/data/db_manager.py`
+- Refactored explorer context-menu construction in `scripts/ui/tree_controller.py` so blank-area, well, folder, curve, and multi-selection menus are built through shared helpers instead of one long inline branch.
+- Hardened folder lifecycle behavior in `scripts/data/db_manager.py`:
+  - `delete_folder(...)` now recursively removes child folders before deleting the parent
+  - `move_folder(...)` now rejects self-parent and descendant-cycle moves
+- Expanded explorer move semantics:
+  - cross-well curve transfer now carries the related depth curve with the moved/copied curve group
+  - cross-well folder transfer now preserves nested folder structure in the target well
+  - moved curve groups are placed into an isolated destination folder/frame instead of being forced to match the target well's existing depth index
+- Added regression coverage in `tests/test_ai_tool_specs.py` and `tests/test_tree_controller_menus.py` for:
+  - folder rename persistence
+  - recursive folder delete
+  - folder-cycle prevention
+  - curve explorer menu completeness
+  - cross-well curve transfer with depth carry-over
+  - cross-well folder transfer with preserved subfolder hierarchy
+- Clarified the current template-identity direction:
+  - plot/template restoration should prefer stable curve identity (`well_id`, `curve_id`, and folder-qualified source names) over display legend text
+  - display titles and real curve identifiers are now treated as separate concerns in the template lookup path
+  - this avoids template reapplication drift when visible curve titles differ from the underlying stored curve name
+- Current verification commands:
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_ai_tool_specs.DBManagerFolderRenameTests tests.test_ai_tool_specs.TreeControllerCrossWellTransferTests tests.test_ai_tool_specs.TemplateIdentityRegressionTests tests.test_tree_controller_menus`
+- Current results:
+  - `Ran 13 tests ... OK`
+
+### Data Viewer Unification / Data Viewer 统一
+
+- Replaced the old split between lightweight preview and compare-table implementations with a single table-viewing surface centered on `scripts/ui/widgets/data_viewer_widget.py`.
+- Renamed the former Data Compare workflow to Data Viewer across the workspace-facing UI:
+  - MDI window titles now use `Data Viewer N`
+  - tree context-menu entries now use `Data Viewer`
+  - related internal entry points were renamed from compare-oriented wording to viewer-oriented wording
+- Removed the dedicated `DataPreviewDialog` implementation path and changed curve double-click behavior to open the unified MDI Data Viewer instead of a separate popup preview table.
+- Standardized table behavior across single-curve and multi-curve viewing:
+  - leading row-index column plus `Depth`
+  - shared copy behavior
+  - header click selects entire columns
+  - optional full-source tooltip support for compared curves
+- Expanded Data Viewer support for 2D curves:
+  - a single 2D curve can now open directly in Data Viewer
+  - 2D slices use numeric headers (`1`, `2`, `3`, ...)
+  - mixed 1D/2D content on the same viewer page is still intentionally restricted
+- Refined column sizing behavior for readability:
+  - row-index and depth columns auto-size to content
+  - regular data columns now use a stable fixed width instead of content-driven resizing
+- Removed the top-level menu-bar Data Viewer entry so the viewer is opened through direct curve interaction and tree context actions rather than a standalone empty page command.
+- Added and updated regression coverage for the unified viewer model and tree menu wording in:
+  - `tests/test_ai_tool_specs.py`
+  - `tests/test_tree_controller_menus.py`
+- Current verification commands:
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_ai_tool_specs.DataViewerModelTests tests.test_tree_controller_menus`
+- Current results:
+  - `Ran 11 tests ... OK`
 
 ## [2026-06-06] - Plot Cache Budgeting / 绘图缓存上限控制
 

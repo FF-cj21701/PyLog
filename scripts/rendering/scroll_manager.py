@@ -60,7 +60,8 @@ class ScrollManager(QObject):
         update_scrollbar: bool = True,
         force_low_res: bool = False,
         force: bool = False,
-        only_track = None
+        only_track = None,
+        refresh_unchanged_images: bool = False,
     ) -> None:
         """
         Unified Kernel for Depth Multi-track Sync + Hard Slicing.
@@ -102,10 +103,21 @@ class ScrollManager(QObject):
 
         # [OPTIMIZATION] If range hasn't changed and we have a specific track, only update that one.
         current_last_min = getattr(lw, 'last_y_min', -9999.0)
-        range_changed = (abs(min_y - current_last_min) > 0.001) or force
+        current_last_max = getattr(lw, 'last_y_max', -9999.0)
+        range_changed = (
+            abs(min_y - current_last_min) > 0.001
+            or abs(max_y - current_last_max) > 0.001
+            or force
+        )
         lw.last_y_min = min_y
+        lw.last_y_max = max_y
 
         try:
+            if (not range_changed) and only_track is None and not refresh_unchanged_images:
+                if update_scrollbar:
+                    self._update_scrollbar_range()
+                return
+
             # [OPTIMIZATION] Calculate horizontal visible range for freezing
             sb_h = lw.scroll_area.horizontalScrollBar()
             view_left = sb_h.value()
@@ -148,7 +160,13 @@ class ScrollManager(QObject):
                     if hasattr(pw, 'getViewBox'):
                         # Apply hard slicing (if enabled) for LINE CURVES
                         if lw.enable_hard_slicing and isinstance(pw, InteractivePlotWidget):
-                            self._apply_hard_slicing(track, min_y, max_y, force=force)
+                            self._apply_hard_slicing(
+                                track,
+                                min_y,
+                                max_y,
+                                force=force,
+                                interactive=force_low_res,
+                            )
 
                         # [FIX] Always check for image data cache updates
                         if isinstance(pw, InteractivePlotWidget) and hasattr(pw, 'image_data_cache'):
@@ -184,7 +202,13 @@ class ScrollManager(QObject):
         master_vb = self.lw.get_master_viewbox()
         if master_vb:
             (min_y, max_y) = master_vb.viewRange()[1]
-            self.apply_depth_range(min_y, max_y, update_scrollbar=True, force_low_res=False)
+            self.apply_depth_range(
+                min_y,
+                max_y,
+                update_scrollbar=True,
+                force_low_res=False,
+                refresh_unchanged_images=True,
+            )
 
     # ─── Scroll Events ───────────────────────────────────────
 
@@ -216,6 +240,8 @@ class ScrollManager(QObject):
         if not master_vb:
             return
         (min_y, max_y) = master_vb.viewRange()[1]
+        if abs(new_min - min_y) <= 0.001:
+            return
         height = max_y - min_y
         new_max = new_min + height
         # Use force_low_res during scrollbar movement
@@ -263,12 +289,21 @@ class ScrollManager(QObject):
 
         # [FIX] Safety check for min_y
         if not np.isnan(min_y):
-            lw.v_scrollbar.setValue(int(min_y * lw.SCROLL_PRECISION))
+            new_value = int(min_y * lw.SCROLL_PRECISION)
+            if lw.v_scrollbar.value() != new_value:
+                lw.v_scrollbar.setValue(new_value)
         lw.v_scrollbar.blockSignals(False)
 
     # ─── Hard Slicing ────────────────────────────────────────
 
-    def _apply_hard_slicing(self, track, min_y: float, max_y: float, force: bool = False) -> None:
+    def _apply_hard_slicing(
+        self,
+        track,
+        min_y: float,
+        max_y: float,
+        force: bool = False,
+        interactive: bool = False,
+    ) -> None:
         """Ultra-fast viewport slicing using numpy searchsorted."""
         if not hasattr(track.plot_widget, 'curves'):
             return
@@ -293,13 +328,22 @@ class ScrollManager(QObject):
             last_slice = curve_obj.get('_last_slice', None)
 
             view_pts = max(10, end_idx - start_idx)
-            # Buffer is 1x the viewport size on each side, capped between 500 and 5000 points.
-            buffer = max(500, min(view_pts, 5000))
+            # Keep a much larger slice while the user is actively dragging/scrolling.
+            # This reduces expensive setData churn that otherwise shows up as
+            # "stick, then jump" during long scrollbar moves.
+            if interactive:
+                buffer = max(2000, min(view_pts * 3, 20000))
+                safe_margin_ratio = 0.4
+            else:
+                # Buffer is 1x the viewport size on each side, capped between 500 and 5000 points.
+                buffer = max(500, min(view_pts, 5000))
+                safe_margin_ratio = 0.2
 
             if not force and last_slice is not None:
                 l_start, l_end = last_slice
-                # Safe margin is 20% of the buffer
-                safe_margin = int(buffer * 0.2)
+                # Interactive scrolling tolerates a wider safe area to avoid re-slicing on
+                # every small movement; settled rendering tightens this back up.
+                safe_margin = int(buffer * safe_margin_ratio)
                 if (start_idx > l_start + safe_margin) and (end_idx < l_end - safe_margin):
                     continue  # Still within the safe inner bound of the current slice!
 
@@ -318,8 +362,12 @@ class ScrollManager(QObject):
                 # Filter non-positives before log10 to avoid warnings
                 data_slice = np.log10(np.clip(data_slice, 1e-10, None))
 
+            new_slice = (start, end)
+            if not force and last_slice == new_slice:
+                continue
+
             item.setData(data_slice, depth_slice)
-            curve_obj['_last_slice'] = (start, end)
+            curve_obj['_last_slice'] = new_slice
 
     # ─── Image Slice Management ──────────────────────────────
 
@@ -349,8 +397,21 @@ class ScrollManager(QObject):
             view_height_px = pw.height()
             # [FIX] If height is 0, wait until next layout cycle
             if view_height_px > 0:
-                item.update_viewport(min_y, max_y, view_height_px, loading_indices=cache.get('tiles_loading'))
-                self._prune_stale_tile_workers(track, cache, getattr(item, '_needed_indices', set()))
+                # For image tracks, active scrollbar dragging should avoid
+                # immediate tile refresh work and only settle-refresh once the
+                # user pauses on a target depth range.
+                request_tiles = (not force_low_res) or force
+                prune_tiles = request_tiles
+                item.update_viewport(
+                    min_y,
+                    max_y,
+                    view_height_px,
+                    loading_indices=cache.get('tiles_loading'),
+                    request_tiles=request_tiles,
+                    prune_tiles=prune_tiles,
+                )
+                if request_tiles:
+                    self._prune_stale_tile_workers(track, cache, getattr(item, '_needed_indices', set()))
 
     def _prune_stale_tile_workers(self, track, cache, needed_indices):
         """Drop queued tile jobs that are no longer in the current viewport."""

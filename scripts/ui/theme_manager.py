@@ -78,6 +78,16 @@ class ThemeManager:
         # Recursive propagation for settings framework classes
         if hasattr(dialog, 'update_theme'):
             dialog.update_theme()
+
+    @classmethod
+    def apply_curve_table_surface(cls, widget, theme_name=None):
+        """Apply shared table-workbench styling to non-dialog widgets."""
+        curve_qss = cls.get_curve_table_surface_qss(theme_name)
+        existing_qss = widget.styleSheet() or ""
+        if existing_qss:
+            widget.setStyleSheet(f"{existing_qss}\n{curve_qss}")
+        else:
+            widget.setStyleSheet(curve_qss)
             
     @classmethod
     def get_main_qss(cls, theme_name=None):
@@ -416,6 +426,172 @@ class ThemeManager:
                 background-color: {c('explorer_header_bg')};
                 border: {b_weight} solid {c('border_std')};
             }}
+        """
+
+    @classmethod
+    def get_curve_table_surface_qss(cls, theme_name=None):
+        """Shared QSS for curve-table workbenches used in dialogs and MDI pages."""
+        if theme_name is None:
+            theme_name = app_config.get_theme_name()
+
+        c = lambda t: app_config.get_theme_color(t)
+        is_manga = theme_name == "Manga"
+        b_weight = "2px" if is_manga else "1px"
+        b_radius = "0px" if is_manga else "4px"
+        table_frame_weight = "1px"
+
+        return f"""
+            QWidget {{
+                background-color: {c('window_bg')};
+                color: {c('text_main')};
+            }}
+            QWidget#curveTableToolbar {{
+                background-color: {c('bg_pure')};
+                border: {b_weight} solid {c('border_dark')};
+                border-radius: {b_radius};
+                padding: 10px;
+            }}
+            QWidget#curveTableRoot {{
+                background-color: {c('window_bg')};
+            }}
+            QLabel#curveTableTitle {{
+                color: {c('accent')};
+                font-size: 15px;
+                font-weight: bold;
+                padding: 0 2px;
+                background: transparent;
+            }}
+            QLabel#curveTableStatus {{
+                color: {c('text_dim')};
+                background-color: {c('bg_header')};
+                border-left: 3px solid {c('accent')};
+                border-top: {b_weight} solid {c('border_std')};
+                border-bottom: {b_weight} solid {c('border_std')};
+                padding: 6px 10px;
+            }}
+            QLabel {{
+                color: {c('text_main')};
+            }}
+            QLineEdit {{
+                border: {b_weight} solid {c('input_border')};
+                border-radius: {b_radius};
+                padding: 5px 8px;
+                background: {c('input_bg')};
+                color: {c('text_main')};
+            }}
+            QLineEdit:focus {{
+                border-color: {c('accent')};
+                background: {c('bg_pure')};
+            }}
+            QPushButton {{
+                background-color: {c('button_bg')};
+                border: {b_weight} solid {c('input_border')};
+                border-radius: {b_radius};
+                padding: 6px 18px;
+                color: {c('text_main')};
+                min-width: 80px;
+                font-weight: 500;
+            }}
+            QWidget#curveTableToolbar QPushButton {{
+                min-width: 96px;
+            }}
+            QPushButton:hover {{
+                background-color: {c('button_hover')};
+                border-color: {c('border_dark')};
+            }}
+            QPushButton:pressed {{
+                background-color: {c('border_dark')};
+            }}
+            QPushButton:default {{
+                background-color: {c('primary')};
+                border: {b_weight} solid {c('primary')};
+                color: #FFFFFF;
+                font-weight: bold;
+            }}
+            QPushButton:default:hover {{
+                background-color: {c('primary_hover')};
+                border-color: {c('primary_hover')};
+            }}
+            QPushButton:default:pressed {{
+                background-color: {c('primary_pressed')};
+                border-color: {c('primary_pressed')};
+            }}
+            QAbstractScrollArea {{
+                background-color: {c('bg_pure')};
+                border: none;
+            }}
+            QAbstractScrollArea > QWidget {{
+                background-color: {c('bg_pure')};
+            }}
+            QTableWidget, QTableView {{
+                background-color: {c('bg_pure')};
+                color: {c('text_main')};
+                gridline-color: {c('border_std')};
+                selection-background-color: {c('accent_light')};
+                selection-color: {c('text_main')};
+                alternate-background-color: {c('bg_pure')};
+                border: {table_frame_weight} solid {c('border_std')};
+            }}
+            QTableView {{
+                border-radius: {b_radius};
+                outline: none;
+            }}
+            QTableView::item, QTableWidget::item {{
+                padding: 2px 6px;
+                border: none;
+            }}
+            QTableView::item:selected, QTableWidget::item:selected {{
+                background-color: {c('accent_light')};
+                color: {c('text_main')};
+            }}
+            QHeaderView::section:horizontal {{
+                background-color: {c('explorer_header_bg')};
+                color: {c('text_main')};
+                border: none;
+                border-right: {table_frame_weight} solid {c('border_std')};
+                border-bottom: {table_frame_weight} solid {c('border_std')};
+                padding: 4px 6px;
+                font-weight: bold;
+            }}
+            QHeaderView::section:vertical {{
+                background-color: {c('bg_pure')};
+                color: {c('text_main')};
+                border: none;
+                border-bottom: {b_weight} solid {c('border_std')};
+                padding: 2px 4px;
+                font-weight: normal;
+            }}
+            QTableCornerButton::section {{
+                background-color: {c('bg_pure')};
+                border: none;
+                border-bottom: {b_weight} solid {c('border_std')};
+            }}
+            QScrollBar:vertical {{
+                background: {c('input_bg')};
+                width: 12px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {c('scrollbar_handle')};
+                min-height: 20px;
+                border-radius: {b_radius};
+                margin: 2px;
+                border: {b_weight} solid {c('border_dark')};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+            QScrollBar:horizontal {{
+                background: {c('input_bg')};
+                height: 12px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: {c('scrollbar_handle')};
+                min-width: 20px;
+                border-radius: {b_radius};
+                margin: 2px;
+                border: {b_weight} solid {c('border_dark')};
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; }}
         """
 
     @classmethod

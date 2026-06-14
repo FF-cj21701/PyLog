@@ -471,6 +471,20 @@ class LogWidget(QWidget):
         for i in range(self.splitter.count()):
             w = self.splitter.widget(i)
             self.splitter.setStretchFactor(i, 1 if isinstance(w, TrackSpacer) else 0)
+
+    def add_empty_track(self, index=None):
+        """Add an empty standard curve track with no curves."""
+        track = CurveTrackContainer(self)
+        track.track_name = None
+
+        if hasattr(self, 'header_toggle'):
+            track.header.setVisible(not self.header_toggle.isChecked())
+
+        self._add_track_to_layout(track, index=index, width=200)
+
+        for i in range(self.splitter.count()):
+            w = self.splitter.widget(i)
+            self.splitter.setStretchFactor(i, 1 if isinstance(w, TrackSpacer) else 0)
         
     def get_master_viewbox(self):
         """Find the first legitimate plot widget ViewBox to act as master."""

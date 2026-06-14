@@ -3,7 +3,7 @@ import pyqtgraph as pg
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QGroupBox, QFormLayout, QLineEdit, 
                                QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox, QPushButton, 
                                QDialogButtonBox, QFontComboBox, QColorDialog, QGridLayout,
-                               QWidget, QStackedWidget, QListWidget, QListWidgetItem, QLabel,
+                               QWidget, QStackedWidget, QListWidget, QListWidgetItem, QLabel, QScrollArea,
                                QStyle, QProgressBar)
 from PySide6.QtCore import Qt, QRect
 from PySide6.QtGui import QFont, QColor, QPainter, QLinearGradient, QBrush
@@ -666,13 +666,19 @@ class UnifiedSettingsDialog(ThemeDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(410, 520)
+        self.resize(450, 750)
+        self.setMinimumSize(350, 600)
         self.apply_callback = None
         
         main_layout = QVBoxLayout()
         self.setLayout(main_layout)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setFrameShape(QScrollArea.NoFrame)
         self.content_stack = QStackedWidget()
-        main_layout.addWidget(self.content_stack)
+        self.scroll_area.setWidget(self.content_stack)
+        main_layout.addWidget(self.scroll_area)
 
         # Pre-instantiate widgets to ensure smooth stacks
         self.line_curve_w = LineCurveSettingsWidget({}, {})

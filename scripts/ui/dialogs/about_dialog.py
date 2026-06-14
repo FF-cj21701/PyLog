@@ -98,6 +98,7 @@ class AboutDialog(ThemeDialog):
             "• <b>NumPy & SciPy</b> — Numerical Computing (BSD)<br>"
             "• <b>Matplotlib</b> — Publication-Quality Plotting (PSF)<br>"
             "• <b>dlisio</b> — DLIS Log Data Parser (LGPL)<br>"
+            "• <b>dliswriter</b> — DLIS File Writer (MIT)<br>"
             "• <b>OpenAI</b> — AI Assistant Integration (Apache 2.0)"
         )
         tech_label = QLabel(tech_stack)
@@ -132,4 +133,3 @@ class AboutDialog(ThemeDialog):
         # Final Assembly
         self.scroll_area.setWidget(scroll_content)
         main_layout.addWidget(self.scroll_area)
-

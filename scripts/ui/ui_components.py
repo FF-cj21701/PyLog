@@ -55,10 +55,11 @@ class TrackSpacer(QWidget):
         self.customContextMenuRequested.connect(self.show_context_menu)
 
     def show_context_menu(self, pos):
-        menu = QMenu(self); add_depth_act = QAction("Add Depth Track", self)
+        menu = QMenu(self); add_depth_act = QAction("Add Depth Track", self); add_empty_act = QAction("Add Empty Track", self)
         log_w = self.find_log_widget()
         add_depth_act.triggered.connect(lambda: log_w.add_depth_track() if log_w else None)
-        menu.addAction(add_depth_act); menu.exec(self.mapToGlobal(pos))
+        add_empty_act.triggered.connect(lambda: log_w.add_empty_track() if log_w else None)
+        menu.addAction(add_depth_act); menu.addAction(add_empty_act); menu.exec(self.mapToGlobal(pos))
 
     def paintEvent(self, event):
         QPainter(self).fillRect(self.rect(), QColor(app_config.get_theme_color("plot_bg")))

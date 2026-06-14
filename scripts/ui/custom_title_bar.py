@@ -34,6 +34,7 @@ class ModernTitleBar(QWidget):
         
         # --- Left: Menu Bar Area ---
         self.menu_container = QWidget()
+        self.menu_container.setObjectName("TitleBarMenuContainer")
         self.menu_layout = QHBoxLayout(self.menu_container)
         self.menu_layout.setContentsMargins(5, 0, 0, 0)
         self.menu_layout.setSpacing(0)
@@ -51,6 +52,7 @@ class ModernTitleBar(QWidget):
         
         # --- Right: Window Controls ---
         self.controls_container = QWidget()
+        self.controls_container.setObjectName("TitleBarControlsContainer")
         self.controls_layout = QHBoxLayout(self.controls_container)
         self.controls_layout.setContentsMargins(0, 0, 0, 0)
         self.controls_layout.setSpacing(0)
@@ -129,17 +131,16 @@ class ModernTitleBar(QWidget):
 
     def update_theme(self):
         """Update colors based on AppConfig."""
-        is_dark = app_config.get_theme_name() == 'Dark'
         bg = app_config.get_theme_color("bg_pure")
         text = app_config.get_theme_color("text_main")
         accent = app_config.get_theme_color("accent")
         accent_light = app_config.get_theme_color("accent_light")
         border = app_config.get_theme_color("border_std")
+        btn_hover = "rgba(128, 128, 128, 60)"
+        close_hover = "#E81123"
+        close_hover_text = "white"
         
         # Button styles (QSS for better hover states)
-        btn_hover = "rgba(128, 128, 128, 60)"
-        close_hover = "#E81123" # Standard Windows red
-        
         if hasattr(self, 'menu_bar') and self.menu_bar:
             self.menu_bar.setStyleSheet(f"""
                 QMenuBar {{ background: transparent; border: none; color: {text}; font-size: 11pt; }}
@@ -155,6 +156,9 @@ class ModernTitleBar(QWidget):
                 background-color: {bg};
                 border-bottom: {b_weight} solid {border};
             }}
+            #TitleBarMenuContainer, #TitleBarControlsContainer {{
+                background: transparent;
+            }}
             QLabel {{ color: {text}; border: none; background: transparent; }}
             #TitleButton, #TitleButtonClose {{
                 background-color: transparent;
@@ -168,7 +172,7 @@ class ModernTitleBar(QWidget):
             }}
             #TitleButtonClose:hover {{
                 background-color: {close_hover};
-                color: white;
+                color: {close_hover_text};
             }}
         """
         self.setStyleSheet(qss)

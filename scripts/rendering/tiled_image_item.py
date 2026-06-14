@@ -94,7 +94,15 @@ class TiledImageItem(QGraphicsObject):
         # Container itself is invisible (ItemHasNoContents)
         pass
 
-    def update_viewport(self, min_y, max_y, view_height_px, loading_indices=None):
+    def update_viewport(
+        self,
+        min_y,
+        max_y,
+        view_height_px,
+        loading_indices=None,
+        request_tiles=True,
+        prune_tiles=True,
+    ):
         """
         Calculates which tiles are needed for the current viewport (Fixed 15m mode).
         """
@@ -113,26 +121,30 @@ class TiledImageItem(QGraphicsObject):
             if idx in self.tile_meta:
                 self.tile_meta[idx]["last_used"] = now
         
-        # 1. Clear tiles far away (LRU replacement for simplicity)
-        visible_buffer = 2 # Keep 2 tiles above/below
-        to_remove = []
-        for idx in self.tiles:
-            if idx < (start_idx - visible_buffer) or idx > (end_idx + visible_buffer):
-                to_remove.append(idx)
-        
-        for idx in to_remove:
-            self._remove_tile(idx)
+        # 1. Clear tiles far away (LRU replacement for simplicity).
+        # During active scrollbar dragging we can skip pruning so the old image
+        # remains visible until the user settles on a new depth range.
+        if prune_tiles:
+            visible_buffer = 2 # Keep 2 tiles above/below
+            to_remove = []
+            for idx in self.tiles:
+                if idx < (start_idx - visible_buffer) or idx > (end_idx + visible_buffer):
+                    to_remove.append(idx)
+            
+            for idx in to_remove:
+                self._remove_tile(idx)
 
-        self._prune_tile_cache()
+            self._prune_tile_cache()
 
         # 2. Identify missing tiles
-        for idx in needed_indices:
-            # [ANTI-LOOP] Only emit signal if tile is NOT already loading
-            if idx not in self.tiles and idx not in loading_indices:
-                t_min = idx * self.m_per_tile
-                t_max = t_min + self.m_per_tile
-                logger.debug(f"[DEBUG_TILE] Requesting tile {idx} (new and not loading)")
-                self.tile_requested.emit(idx, t_min, t_max)
+        if request_tiles:
+            for idx in needed_indices:
+                # [ANTI-LOOP] Only emit signal if tile is NOT already loading
+                if idx not in self.tiles and idx not in loading_indices:
+                    t_min = idx * self.m_per_tile
+                    t_max = t_min + self.m_per_tile
+                    logger.debug(f"[DEBUG_TILE] Requesting tile {idx} (new and not loading)")
+                    self.tile_requested.emit(idx, t_min, t_max)
 
     def set_tile_data(self, idx, indexed_slice, lut, actual_min, actual_max):
         """Apply rendered data to a specific tile."""

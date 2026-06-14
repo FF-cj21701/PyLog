@@ -33,6 +33,7 @@ class HeaderWidget(QWidget):
         self._blur_effect.setBlurRadius(10)
         self._blur_effect.setBlurHints(QGraphicsBlurEffect.PerformanceHint)
         self._updating_blur = False
+        self._connected_vb = None
         
         # Transparent background by default
         self.setAutoFillBackground(False)
@@ -53,15 +54,28 @@ class HeaderWidget(QWidget):
         if info.get('is_image'): self.is_image = True
         self.items.append(info)
         
-        # [NEW] Connect to plot's ViewBox for real-time blur updates
+        # Connect once per owning ViewBox so repeated curve additions do not
+        # stack duplicate header repaint callbacks during scrolling.
         parent = self.parent()
         if parent and hasattr(parent, 'plot_widget'):
             pw = parent.plot_widget
-            if hasattr(pw, 'plotItem') and pw.plotItem.vb:
+            vb = pw.plotItem.vb if hasattr(pw, 'plotItem') and pw.plotItem else None
+            if vb and vb is not self._connected_vb:
+                if self._connected_vb:
+                    try:
+                        self._connected_vb.sigYRangeChanged.disconnect(self.update)
+                    except:
+                        pass
+                    try:
+                        self._connected_vb.sigXRangeChanged.disconnect(self.update)
+                    except:
+                        pass
                 try:
-                    pw.plotItem.vb.sigYRangeChanged.connect(self.update)
-                    pw.plotItem.vb.sigXRangeChanged.connect(self.update)
-                except: pass
+                    vb.sigYRangeChanged.connect(self.update)
+                    vb.sigXRangeChanged.connect(self.update)
+                    self._connected_vb = vb
+                except:
+                    pass
         
         self.adjust_height()
         self.update()
@@ -225,6 +239,19 @@ class HeaderWidget(QWidget):
         if not self.items: self.items.append({'name': '', 'unit': unit, 'min':0, 'max':0, 'color':app_config.get_theme_color('text_main'), 'range_visible': self.default_range_visible})
         else: self.items[0]['unit'] = unit
         self.adjust_height(); self.update()
+
+    def closeEvent(self, event):
+        if self._connected_vb:
+            try:
+                self._connected_vb.sigYRangeChanged.disconnect(self.update)
+            except:
+                pass
+            try:
+                self._connected_vb.sigXRangeChanged.disconnect(self.update)
+            except:
+                pass
+            self._connected_vb = None
+        super().closeEvent(event)
         
     def paintEvent(self, event):
         log_widget = self.find_log_widget()

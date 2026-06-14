@@ -135,6 +135,7 @@ class FramelessMessageDialog(ThemeDialog):
         self.setLayout(layout)
         
         content_widget = QWidget()
+        content_widget.setStyleSheet("background: transparent; border: none;")
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(10, 5, 10, 5)
         
@@ -142,7 +143,7 @@ class FramelessMessageDialog(ThemeDialog):
         msg_label = QLabel(message)
         msg_label.setWordWrap(True)
         msg_label.setAlignment(Qt.AlignCenter)
-        msg_label.setStyleSheet("font-size: 11pt; margin-bottom: 5px;")
+        msg_label.setStyleSheet("font-size: 11pt; margin-bottom: 5px; background: transparent; border: none;")
         content_layout.addWidget(msg_label)
         
         layout.addWidget(content_widget)

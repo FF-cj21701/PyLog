@@ -21,17 +21,19 @@ class MenuManager:
         # --- Actions ---
         mw.new_plot_action = QAction("Plot", mw)
         mw.new_plot_action.triggered.connect(mw.new_plot_window)
-        
         mw.export_action = QAction("Export Plot (JPG/PDF)...", mw)
         mw.export_action.triggered.connect(mw.handle_export_plot)
         mw.export_action.setShortcut("Ctrl+E")
         
         mw.import_action = QAction("Import DLIS...", mw)
         mw.import_action.triggered.connect(mw.handle_import_dlis)
+        mw.export_dlis_action = QAction("Export DLIS...", mw)
+        mw.export_dlis_action.triggered.connect(mw.handle_export_dlis)
 
         # --- File Menu ---
         file_menu = menu.addMenu("File")
         file_menu.addAction(mw.import_action)
+        file_menu.addAction(mw.export_dlis_action)
         file_menu.addSeparator()
         file_menu.addAction(mw.export_action)
         file_menu.addSeparator()

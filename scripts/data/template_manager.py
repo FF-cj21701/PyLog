@@ -33,6 +33,61 @@ class SafeJSONEncoder(json.JSONEncoder):
 
 class TemplateManager:
     """Handles serialization and deserialization of plot templates."""
+
+    @staticmethod
+    def _find_curve_by_identity(db, curve_cfg, well_id=None):
+        """Resolve a curve using stable identifiers first, then fall back to path/name matching."""
+        if not db:
+            return None
+
+        stored_well_id = curve_cfg.get("well_id")
+        stored_curve_id = curve_cfg.get("curve_id")
+        folder = curve_cfg.get("folder")
+        original_name = curve_cfg.get("name")
+        display_title = curve_cfg.get("title")
+
+        candidate_well_ids = []
+        if well_id is not None:
+            candidate_well_ids.append(well_id)
+        elif stored_well_id is not None:
+            candidate_well_ids.append(stored_well_id)
+        else:
+            candidate_well_ids.extend([wid for wid, _wname in db.get_wells()])
+
+        seen = set()
+        ordered_well_ids = []
+        for wid in candidate_well_ids:
+            if wid not in seen:
+                seen.add(wid)
+                ordered_well_ids.append(wid)
+
+        if stored_curve_id is not None:
+            for candidate_well_id in ordered_well_ids:
+                curves = db.get_curves(candidate_well_id)
+                for row in curves:
+                    if row[0] == stored_curve_id:
+                        return candidate_well_id, stored_curve_id
+
+        lookup_names = []
+        if folder and original_name:
+            lookup_names.append(f"{folder}/{original_name}")
+        if original_name:
+            lookup_names.append(original_name)
+        if display_title and display_title != original_name:
+            if folder:
+                lookup_names.append(f"{folder}/{display_title}")
+            lookup_names.append(display_title)
+
+        for candidate_well_id in ordered_well_ids:
+            curves = db.get_curves(candidate_well_id)
+            folders = db.get_folders(candidate_well_id)
+            folder_map = {fid: fname for fid, fname, fpid in folders}
+            for lookup_name in lookup_names:
+                resolved = resolve_curve_row(lookup_name, curves, folder_map)
+                if resolved.get("ok"):
+                    return candidate_well_id, resolved["row"][0]
+
+        return None
     
     @staticmethod
     def save_template(log_widget, file_path):
@@ -97,12 +152,12 @@ class TemplateManager:
                     # Add Curves
                     for curve_cfg in track_state.get("curves", []):
                         name = curve_cfg.get("name")
-                        if not name: continue
+                        title = curve_cfg.get("title")
+                        if not name and not title:
+                            continue
                         
-                        # Find matching curve in DB
-                        # Note: This is an async operation in the original LogWidget.create_new_track
-                        # We'll use a simplified search here.
-                        matching_curve = TemplateManager.find_curve_by_name(log_widget.db, name, well_id=well_id)
+                        # Find matching curve in DB using stable identity first, then path/name fallback.
+                        matching_curve = TemplateManager._find_curve_by_identity(log_widget.db, curve_cfg, well_id=well_id)
                         if matching_curve:
                             w_id, c_id = matching_curve
                             # Fetch and apply settings after data loads?

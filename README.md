@@ -29,7 +29,7 @@
 - **MCP support** — Optional Model Context Protocol server integration for extended tool capabilities
 
 ### 📊 Data Management
-- **DLIS import** — Parse DLIS files with curve selection, well naming, and unit auto-conversion
+- **DLIS import/export** — Parse DLIS files with curve selection, well naming, unit auto-conversion, and export selected stored curves back to `.dlis`
 - **Custom curve entry** — Manual table input or Excel paste with undo support (Ctrl+Z, up to 30 steps)
 - **Multi-well database** — SQLite + HDF5 per well, with folder organization and cut/copy/paste operations
 
@@ -81,6 +81,19 @@ python main.py
 1. **File → Import DLIS...** to load a `.dlis` well log file
 2. Select curves and confirm the well name
 3. The well appears in the **Explorer** panel — drag curves into the plot area
+
+### Export DLIS
+
+1. Use **File → Export DLIS...**
+2. Select a well on the left and choose curves grouped by frame/folder on the right
+3. Optionally customize the output file name; the default is the well name
+4. Start export and monitor progress directly in the export dialog footer
+
+Current export support:
+- 1D curves: supported
+- 2D curves: supported
+- 3D+ curves: skipped with a warning
+- unsupported units: normalized when possible, otherwise exported as blank units
 
 ### Scripting Example
 
@@ -177,6 +190,7 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 - [PySide6](https://doc.qt.io/qtforpython/) — Qt for Python GUI framework
 - [pyqtgraph](https://www.pyqtgraph.org/) — Fast scientific plotting
 - [dlisio](https://github.com/equinor/dlisio) — DLIS file parser
+- [dliswriter](https://pypi.org/project/dliswriter/) — DLIS file writer used for curve export
 - [HDF5 / h5py](https://www.h5py.org/) — High-performance data storage
 - [geoscience-skills](https://github.com/SteadfastAsArt/geoscience-skills) — AI-powered geoscience assistant capabilities
 

@@ -124,6 +124,20 @@ class DBManager:
         finally:
             conn.close()
 
+    def update_folder_name(self, folder_id: int, new_name: str) -> bool:
+        """Update the name of an existing folder."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("UPDATE folders SET name=? WHERE id=?", (new_name, folder_id))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Error updating folder name: {e}")
+            return False
+        finally:
+            conn.close()
+
     def _delete_h5_dataset(self, h5_path: str, dataset_path: str) -> bool:
         """Delete a dataset from HDF5 and prune empty parent groups."""
         if not h5_path or not dataset_path:
@@ -193,10 +207,18 @@ class DBManager:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         try:
+            cursor.execute("SELECT id FROM folders WHERE parent_id=?", (folder_id,))
+            child_folder_ids = [row[0] for row in cursor.fetchall()]
             cursor.execute("SELECT id FROM curves WHERE folder_id=?", (folder_id,))
             curve_ids = [row[0] for row in cursor.fetchall()]
         finally:
             conn.close()
+
+        for child_folder_id in child_folder_ids:
+            try:
+                self.delete_folder(child_folder_id)
+            except Exception as e:
+                logger.error(f"Failed deleting child folder {child_folder_id} during folder cleanup: {e}")
 
         for cid in curve_ids:
             try:
@@ -302,14 +324,36 @@ class DBManager:
         finally:
             conn.close()
 
-    def move_folder(self, folder_id, target_parent_id):
-        """Move a folder to a new parent folder."""
+    def get_folder(self, folder_id):
+        """Return (id, well_id, name, parent_id) for a folder."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         try:
-            # Avoid moving a folder into itself
-            if folder_id == target_parent_id:
+            cursor.execute("SELECT id, well_id, name, parent_id FROM folders WHERE id=?", (folder_id,))
+            return cursor.fetchone()
+        finally:
+            conn.close()
+
+    def move_folder(self, folder_id, target_parent_id):
+        """Move a folder to a new parent folder."""
+        if folder_id == target_parent_id:
+            return
+
+        current_id = target_parent_id
+        visited = set()
+        while current_id is not None and current_id not in visited:
+            visited.add(current_id)
+            if current_id == folder_id:
+                logger.warning(f"Rejected folder move that would create a cycle: folder_id={folder_id}, target_parent_id={target_parent_id}")
                 return
+            folder_row = self.get_folder(current_id)
+            if not folder_row:
+                break
+            current_id = folder_row[3]
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
             cursor.execute("UPDATE folders SET parent_id=? WHERE id=?", (target_parent_id, folder_id))
             conn.commit()
         finally:

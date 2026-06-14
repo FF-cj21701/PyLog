@@ -3,13 +3,15 @@ TreeController - 负责 Explorer 树的 CRUD 操作和右键菜单。
 从 MainWindow 中提取，遵循单一职责原则。
 """
 import os
-from PySide6.QtWidgets import (QMenu, QMessageBox, QInputDialog, QLineEdit, 
+from PySide6.QtWidgets import (QMenu,
                                 QTreeWidgetItem, QStyle, QDialog)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from scripts.data.db_manager import DBManager
 from scripts.utils.logger import logger
+from scripts.utils.well_queries import DEPTH_MNEMONICS
 from scripts.ui.dialogs.manual_table_dialog import ManualTableDialog
+from scripts.data.table_data import DepthCurveFetchWorker
 from .base_dialog import ThemeDialog
 from ..rendering.plot_widget import LogWidget
 
@@ -20,6 +22,130 @@ class TreeController:
     def __init__(self, main_window):
         self.mw = main_window
     
+    def _add_action(self, menu, text, handler):
+        action = QAction(text, self.mw)
+        action.triggered.connect(handler)
+        menu.addAction(action)
+        return action
+
+    def _add_refresh_action(self, menu):
+        self._add_action(menu, "Refresh", lambda: self.refresh_tree())
+
+    def _can_paste_into(self, db_path):
+        clipboard = getattr(self.mw, 'explorer_clipboard', None)
+        return bool(clipboard and clipboard.get('db_path') == db_path)
+
+    def _build_blank_area_menu(self, menu):
+        self._add_action(menu, "New Well", self.handle_new_well)
+        menu.addSeparator()
+        self._add_refresh_action(menu)
+
+    def _build_well_menu(self, menu, data):
+        self._add_action(menu, "New Folder", lambda: self.handle_new_folder(data['id'], data['db_path']))
+        self._add_action(menu, "Rename", lambda: self.handle_rename_well(data['id'], data['db_path']))
+        self._add_action(menu, "Delete", lambda: self.handle_delete_well(data['db_path']))
+        menu.addSeparator()
+        self._add_action(
+            menu,
+            "New Custom Curve...",
+            lambda: self.handle_manual_entry(data['id'], data['db_path'], data.get('name', 'Well'))
+        )
+        if self._can_paste_into(data['db_path']):
+            menu.addSeparator()
+            self._add_action(menu, "Paste", lambda: self.handle_paste(data['db_path'], data['id'], None))
+
+    def _build_folder_menu(self, menu, data, valid_items_data):
+        self._add_action(
+            menu,
+            "New Sub-Folder",
+            lambda: self.handle_new_folder(data.get('well_id'), data['db_path'], parent_id=data['id'])
+        )
+        self._add_action(
+            menu,
+            "New Custom Curve...",
+            lambda: self.handle_new_manual_curve(data.get('well_id'), data['db_path'], "Well", data['id'], data.get('name'))
+        )
+        menu.addSeparator()
+        self._add_action(menu, "Cut", lambda: self.handle_cut(valid_items_data))
+        self._add_action(menu, "Copy", lambda: self.handle_copy(valid_items_data))
+        self._add_action(
+            menu,
+            "Rename",
+            lambda: self.handle_rename_folder(data['id'], data['db_path'], data.get('name', 'Folder'))
+        )
+        if self._can_paste_into(data['db_path']):
+            self._add_action(
+                menu,
+                "Paste",
+                lambda: self.handle_paste(data['db_path'], data.get('well_id'), data['id'])
+            )
+        menu.addSeparator()
+        self._add_action(menu, "Delete Folder", lambda: self.handle_delete_folder_bulk(valid_items_data))
+
+    def _build_curve_menu(self, menu, data, valid_items_data):
+        self._add_action(menu, "Quick Plot", lambda: self.mw.handle_quick_plot(valid_items_data))
+        self._add_action(menu, "Data Viewer", lambda: self.mw.handle_open_data_viewer(valid_items_data))
+        menu.addSeparator()
+        self._add_action(menu, "Cut", lambda: self.handle_cut(valid_items_data))
+        self._add_action(menu, "Copy", lambda: self.handle_copy(valid_items_data))
+        self._add_action(
+            menu,
+            "Rename",
+            lambda: self.handle_rename_curve(data['id'], data['db_path'], data.get('name', 'Curve'))
+        )
+        menu.addSeparator()
+        self._add_action(menu, "Delete Curve", lambda: self.handle_delete_curve_bulk(valid_items_data))
+
+    def _build_single_item_menu(self, menu, data, valid_items_data):
+        builders = {
+            'well': self._build_well_menu,
+            'folder': self._build_folder_menu,
+            'curve': self._build_curve_menu,
+        }
+        builder = builders.get(data.get('type'))
+        if builder:
+            if data.get('type') == 'well':
+                builder(menu, data)
+            else:
+                builder(menu, data, valid_items_data)
+
+    def _build_multi_selection_menu(self, menu, selected_items, valid_items_data, db_paths, types):
+        if len(db_paths) > 1:
+            menu.addAction("Multiple wells selected (No actions available)")
+            return
+
+        if 'well' in types:
+            menu.addAction("Bulk actions not available for wells")
+            return
+
+        if 'curve' in types:
+            curve_count = len([d for d in valid_items_data if d['type'] == 'curve'])
+            self._add_action(
+                menu,
+                f"Quick Plot ({curve_count} curves)",
+                lambda: self.mw.handle_quick_plot(valid_items_data)
+            )
+            self._add_action(
+                menu,
+                f"Data Viewer ({curve_count} curves)",
+                lambda: self.mw.handle_open_data_viewer(valid_items_data)
+            )
+            menu.addSeparator()
+
+        item_count = len(selected_items)
+        self._add_action(menu, f"Cut ({item_count} items)", lambda: self.handle_cut(valid_items_data))
+        self._add_action(menu, f"Copy ({item_count} items)", lambda: self.handle_copy(valid_items_data))
+        menu.addSeparator()
+
+        item_desc = "Items"
+        if len(types) == 1:
+            item_desc = list(types)[0].capitalize() + "s"
+        self._add_action(
+            menu,
+            f"Delete ({item_count} {item_desc})",
+            lambda: self.handle_delete_bulk(valid_items_data)
+        )
+    
     # --- Context Menu ---
     
     def show_context_menu(self, pos):
@@ -28,8 +154,6 @@ class TreeController:
         
         db_paths = set()
         types = set()
-        well_ids = set()
-        
         valid_items_data = []
         for item in selected_items:
             d = item.data(0, Qt.UserRole)
@@ -37,21 +161,11 @@ class TreeController:
                 valid_items_data.append(d)
                 types.add(d.get('type'))
                 if d.get('db_path'): db_paths.add(d['db_path'])
-                if d.get('well_id'): well_ids.add(d['well_id'])
-                elif d.get('type') == 'well': well_ids.add(d['id'])
 
         if not valid_items_data: 
             # Case 0: Clicked in blank area
             menu = QMenu(mw)
-            new_well = QAction("New Well", mw)
-            new_well.triggered.connect(self.handle_new_well)
-            menu.addAction(new_well)
-            
-            menu.addSeparator()
-            refresh_act = QAction("Refresh", mw)
-            refresh_act.triggered.connect(lambda: self.refresh_tree())
-            menu.addAction(refresh_act)
-            
+            self._build_blank_area_menu(menu)
             menu.exec(mw.tree.mapToGlobal(pos))
             return
         
@@ -59,121 +173,15 @@ class TreeController:
         
         # Case 1: Single item clicked
         if len(selected_items) == 1:
-            data = valid_items_data[0]
-            if data['type'] == 'well':
-                add_folder = QAction("New Folder", mw)
-                add_folder.triggered.connect(lambda: self.handle_new_folder(data['id'], data['db_path']))
-                menu.addAction(add_folder)
-                
-                rename_well = QAction("Rename", mw)
-                rename_well.triggered.connect(lambda: self.handle_rename_well(data['id'], data['db_path']))
-                menu.addAction(rename_well)
-
-                del_well = QAction("Delete", mw)
-                del_well.triggered.connect(lambda: self.handle_delete_well(data['db_path']))
-                menu.addAction(del_well)
-
-                menu.addSeparator()
-                new_table = QAction("New Custom Curve...", mw)
-                new_table.triggered.connect(lambda: self.handle_manual_entry(data['id'], data['db_path'], data.get('name', 'Well')))
-                menu.addAction(new_table)
-                
-                if mw.explorer_clipboard and mw.explorer_clipboard.get('db_path') == data['db_path']:
-                    menu.addSeparator()
-                    paste_act = QAction("Paste", mw)
-                    paste_act.triggered.connect(lambda: self.handle_paste(data['db_path'], data['id'], None))
-                    menu.addAction(paste_act)
-                    
-            elif data['type'] == 'folder':
-                add_sub = QAction("New Sub-Folder", mw)
-                add_sub.triggered.connect(lambda: self.handle_new_folder(data.get('well_id'), data['db_path'], parent_id=data['id']))
-                menu.addAction(add_sub)
-
-                new_curve = QAction("New Custom Curve...", mw)
-                new_curve.triggered.connect(lambda: self.handle_new_manual_curve(data.get('well_id'), data['db_path'], "Well", data['id'], data.get('name')))
-                menu.addAction(new_curve)
-                
-                menu.addSeparator()
-                cut_act = QAction("Cut", mw)
-                cut_act.triggered.connect(lambda: self.handle_cut(valid_items_data))
-                menu.addAction(cut_act)
-                
-                copy_act = QAction("Copy", mw)
-                copy_act.triggered.connect(lambda: self.handle_copy(valid_items_data))
-                menu.addAction(copy_act)
-                
-                if mw.explorer_clipboard and mw.explorer_clipboard.get('db_path') == data['db_path']:
-                    paste_act = QAction("Paste", mw)
-                    paste_act.triggered.connect(lambda: self.handle_paste(data['db_path'], data.get('well_id'), data['id']))
-                    menu.addAction(paste_act)
-                
-                menu.addSeparator()
-                del_folder = QAction("Delete Folder", mw)
-                del_folder.triggered.connect(lambda: self.handle_delete_folder_bulk(valid_items_data))
-                menu.addAction(del_folder)
-                
-            elif data['type'] == 'curve':
-                quick_plot = QAction("Quick Plot", mw)
-                quick_plot.triggered.connect(lambda: mw.handle_quick_plot(valid_items_data))
-                menu.addAction(quick_plot)
-                menu.addSeparator()
-
-                cut_act = QAction("Cut", mw)
-                cut_act.triggered.connect(lambda: self.handle_cut(valid_items_data))
-                menu.addAction(cut_act)
-                
-                copy_act = QAction("Copy", mw)
-                copy_act.triggered.connect(lambda: self.handle_copy(valid_items_data))
-                menu.addAction(copy_act)
-                
-                rename_curve = QAction("Rename", mw)
-                rename_curve.triggered.connect(lambda: self.handle_rename_curve(data['id'], data['db_path'], data.get('name', 'Curve')))
-                menu.addAction(rename_curve)
-                
-                menu.addSeparator()
-                del_curve = QAction("Delete Curve", mw)
-                del_curve.triggered.connect(lambda: self.handle_delete_curve_bulk(valid_items_data))
-                menu.addAction(del_curve)
+            self._build_single_item_menu(menu, valid_items_data[0], valid_items_data)
         
         # Case 2: Multi-selection
         else:
-            if len(db_paths) > 1:
-                menu.addAction("Multiple wells selected (No actions available)")
-            else:
-                db_path = list(db_paths)[0] if db_paths else None
-                
-                if 'well' not in types:
-                    if 'curve' in types:
-                        quick_plot = QAction(f"Quick Plot ({len([d for d in valid_items_data if d['type']=='curve'])} curves)", mw)
-                        quick_plot.triggered.connect(lambda: mw.handle_quick_plot(valid_items_data))
-                        menu.addAction(quick_plot)
-                        menu.addSeparator()
-
-                    cut_act = QAction(f"Cut ({len(selected_items)} items)", mw)
-                    cut_act.triggered.connect(lambda: self.handle_cut(valid_items_data))
-                    menu.addAction(cut_act)
-                    
-                    copy_act = QAction(f"Copy ({len(selected_items)} items)", mw)
-                    copy_act.triggered.connect(lambda: self.handle_copy(valid_items_data))
-                    menu.addAction(copy_act)
-                    
-                    menu.addSeparator()
-                    
-                    item_desc = "Items"
-                    if len(types) == 1:
-                        item_desc = list(types)[0].capitalize() + "s"
-                    
-                    del_bulk = QAction(f"Delete ({len(selected_items)} {item_desc})", mw)
-                    del_bulk.triggered.connect(lambda: self.handle_delete_bulk(valid_items_data))
-                    menu.addAction(del_bulk)
-                else:
-                     menu.addAction("Bulk actions not available for wells")
+            self._build_multi_selection_menu(menu, selected_items, valid_items_data, db_paths, types)
 
         # Global actions for items
         menu.addSeparator()
-        refresh_act = QAction("Refresh", mw)
-        refresh_act.triggered.connect(lambda: self.refresh_tree())
-        menu.addAction(refresh_act)
+        self._add_refresh_action(menu)
 
         menu.exec(mw.tree.mapToGlobal(pos))
     
@@ -199,8 +207,8 @@ class TreeController:
             self.refresh_tree()
 
     def handle_new_manual_curve(self, well_id, db_path, well_name, target_folder_id=None, folder_name="Custom_Curves"):
-        # Try to find depth data for this well
-        depth_data = None
+        # Try to find the matching depth curve id for this folder, but defer heavy data loading
+        depth_curve_id = None
         try:
             db = DBManager(db_path)
             curves = db.get_curves(well_id)
@@ -209,35 +217,49 @@ class TreeController:
                 cid, cname, fid = row[0], row[1], row[4]
                 # [FIX] Only pre-fill depth if it belongs to the SAME folder
                 if fid == target_folder_id and cname.upper() in depth_mnemonics:
-                    depth_data = db.get_curve_data(cid)
+                    depth_curve_id = cid
                     break
             
             # Fallback (within folder)
-            if depth_data is None:
+            if depth_curve_id is None:
                 for row in curves:
                     cid, cname, fid = row[0], row[1], row[4]
                     if fid == target_folder_id and "DEPT" in cname.upper():
-                        depth_data = db.get_curve_data(cid)
+                        depth_curve_id = cid
                         break
         except Exception as e:
             logger.error(f"Error fetching depth for new curve: {e}")
 
         dlg = ManualTableDialog(well_name, well_id, db_path, self.mw, 
-                                initial_depth=depth_data, folder_name=folder_name)
+                                initial_depth=None, folder_name=folder_name)
+        if depth_curve_id is not None:
+            dlg.set_loading_depth_state(True)
+            worker = DepthCurveFetchWorker(db_path, depth_curve_id)
+            worker.signals.finished.connect(dlg.set_initial_depth_async)
+            worker.signals.error.connect(lambda message: logger.error(f"Error loading depth curve async: {message}"))
+            worker.finished.connect(lambda: setattr(dlg, "_depth_worker", None))
+            dlg._depth_worker = worker
+            worker.start()
         if dlg.exec() == QDialog.Accepted:
             self.refresh_tree()
 
     def handle_delete_folder(self, folder_id, db_path):
-        ret = QMessageBox.question(self.mw, "Confirm", "Delete folder and all contents?")
-        if ret == QMessageBox.Yes:
+        if ThemeDialog.confirm(self.mw, "Confirm", "Delete folder and all contents?"):
             DBManager(db_path).delete_folder(folder_id)
             self.refresh_tree()
 
     def handle_delete_curve(self, curve_id, db_path):
-        ret = QMessageBox.question(self.mw, "Confirm", "Delete this curve?")
-        if ret == QMessageBox.Yes:
+        if ThemeDialog.confirm(self.mw, "Confirm", "Delete this curve?"):
             DBManager(db_path).delete_curve(curve_id)
             self.refresh_tree()
+
+    def handle_rename_folder(self, folder_id, db_path, current_name):
+        text, ok = ThemeDialog.get_text(self.mw, "Rename Folder", "New Folder Name:", current_name)
+        if ok and text and text != current_name:
+            if DBManager(db_path).update_folder_name(folder_id, text):
+                self.refresh_tree()
+            else:
+                ThemeDialog.message(self.mw, "Error", "Failed to rename folder.", icon_type="error")
 
     def handle_rename_curve(self, curve_id, db_path, current_name):
         text, ok = ThemeDialog.get_text(self.mw, "Rename Curve", "New Curve Name:", current_name)
@@ -245,7 +267,7 @@ class TreeController:
             if DBManager(db_path).update_curve_name(curve_id, text):
                 self.refresh_tree()
             else:
-                QMessageBox.critical(self.mw, "Error", "Failed to rename curve.")
+                ThemeDialog.message(self.mw, "Error", "Failed to rename curve.", icon_type="error")
 
     def handle_rename_well(self, well_id, db_path):
         """Rename the well in the DB and rename the file itself."""
@@ -370,6 +392,220 @@ class TreeController:
         self.mw.explorer_clipboard = {'items': items_data, 'op': 'copy', 'db_path': db_path}
         self.mw.statusBar().showMessage(f"Copied {len(items_data)} items", 3000)
 
+    def _curve_belongs_to_folder_tree(self, source_db, curve_id, root_folder_id):
+        metadata = source_db.get_curve_metadata(curve_id)
+        if not metadata:
+            return False
+
+        folder_id = metadata[3]
+        if folder_id is None:
+            return root_folder_id is None
+
+        current_id = folder_id
+        visited = set()
+        while current_id is not None and current_id not in visited:
+            visited.add(current_id)
+            if current_id == root_folder_id:
+                return True
+            folder_row = source_db.get_folder(current_id)
+            if not folder_row:
+                break
+            current_id = folder_row[3]
+        return False
+
+    def _find_curve_depth_id(self, source_db, curve_id):
+        metadata = source_db.get_curve_metadata(curve_id)
+        if not metadata:
+            return None
+
+        well_id, _name, _unit, source_folder_id = metadata
+        curves = source_db.get_curves(well_id)
+        same_folder = []
+        fallback = []
+        for row in curves:
+            candidate_id, candidate_name, _unit, _shape, candidate_folder_id = row[:5]
+            candidate_upper = str(candidate_name).upper()
+            if candidate_upper in DEPTH_MNEMONICS or "DEPT" in candidate_upper:
+                if candidate_folder_id == source_folder_id:
+                    same_folder.append(candidate_id)
+                else:
+                    fallback.append(candidate_id)
+        if same_folder:
+            return same_folder[0]
+        if fallback:
+            return fallback[0]
+        return None
+
+    def _resolve_cross_well_target_folder(self, target_db, target_well_id, requested_folder_id, group_name):
+        if requested_folder_id:
+            return requested_folder_id
+
+        existing_names = {name for _fid, name, _pid in target_db.get_folders(target_well_id)}
+        base_name = group_name or "FRAME_MOVE"
+        candidate = base_name
+        suffix = 2
+        while candidate in existing_names:
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+        return target_db.create_folder(target_well_id, candidate)
+
+    def _create_unique_folder(self, target_db, target_well_id, folder_name, parent_id=None):
+        sibling_names = {
+            name for _fid, name, pid in target_db.get_folders(target_well_id)
+            if pid == parent_id
+        }
+        candidate = folder_name or "FRAME_MOVE"
+        suffix = 2
+        while candidate in sibling_names:
+            candidate = f"{folder_name}_{suffix}"
+            suffix += 1
+        return target_db.create_folder(target_well_id, candidate, parent_id=parent_id)
+
+    def _copy_curve_between_dbs(self, source_db, target_db, curve_id, target_well_id, target_folder_id):
+        metadata = source_db.get_curve_metadata(curve_id)
+        if not metadata:
+            return False
+
+        _source_well_id, name, unit, _source_folder_id = metadata
+        data_array = source_db.get_curve_data(curve_id)
+        if data_array is None:
+            return False
+
+        target_db.save_curve(target_well_id, name, unit, data_array, target_folder_id)
+        return True
+
+    def _is_depth_curve_still_used(self, source_db, depth_id):
+        depth_metadata = source_db.get_curve_metadata(depth_id)
+        if not depth_metadata:
+            return False
+
+        source_well_id = depth_metadata[0]
+        for row in source_db.get_curves(source_well_id):
+            if row[0] == depth_id:
+                continue
+            if self._find_curve_depth_id(source_db, row[0]) == depth_id:
+                return True
+        return False
+
+    def _transfer_folder_tree_cross_well(self, source_db, target_db, source_folder_id, target_well_id, requested_parent_id, op):
+        source_folder = source_db.get_folder(source_folder_id)
+        if not source_folder:
+            return 0
+
+        _fid, source_well_id, source_folder_name, _parent_id = source_folder
+        target_root_folder_id = self._create_unique_folder(
+            target_db,
+            target_well_id,
+            source_folder_name,
+            parent_id=requested_parent_id,
+        )
+
+        source_folders = source_db.get_folders(source_well_id)
+        source_curves = source_db.get_curves(source_well_id)
+        folder_map = {source_folder_id: target_root_folder_id}
+        transferred = 0
+
+        pending = [source_folder_id]
+        while pending:
+            current_source_folder_id = pending.pop(0)
+            current_target_folder_id = folder_map[current_source_folder_id]
+
+            child_folders = [
+                row for row in source_folders
+                if row[2] == current_source_folder_id
+            ]
+            for child_source_id, child_name, _child_parent_id in child_folders:
+                child_target_id = self._create_unique_folder(
+                    target_db,
+                    target_well_id,
+                    child_name,
+                    parent_id=current_target_folder_id,
+                )
+                folder_map[child_source_id] = child_target_id
+                pending.append(child_source_id)
+
+            curves_in_folder = [
+                row for row in source_curves
+                if len(row) > 4 and row[4] == current_source_folder_id
+            ]
+            for curve_row in curves_in_folder:
+                if self._copy_curve_between_dbs(
+                    source_db,
+                    target_db,
+                    curve_row[0],
+                    target_well_id,
+                    current_target_folder_id,
+                ):
+                    transferred += 1
+
+        if op == 'cut':
+            source_db.delete_folder(source_folder_id)
+
+        return transferred
+
+    def _transfer_curve_group_cross_well(self, source_db_path, target_db_path, target_well_id, requested_folder_id, items, op):
+        source_db = DBManager(source_db_path)
+        target_db = DBManager(target_db_path)
+
+        selected_folder_ids = [data['id'] for data in items if data['type'] == 'folder']
+        transferred_count = 0
+        for source_folder_id in selected_folder_ids:
+            transferred_count += self._transfer_folder_tree_cross_well(
+                source_db,
+                target_db,
+                source_folder_id,
+                target_well_id,
+                requested_folder_id,
+                op,
+            )
+
+        selected_curve_ids = []
+        source_folder_names = []
+        for data in items:
+            if data['type'] == 'curve':
+                if any(self._curve_belongs_to_folder_tree(source_db, data['id'], folder_id) for folder_id in selected_folder_ids):
+                    continue
+                selected_curve_ids.append(data['id'])
+                folder_name = data.get('folder')
+                if folder_name:
+                    source_folder_names.append(folder_name)
+
+        ordered_curve_ids = []
+        for cid in selected_curve_ids:
+            if cid not in ordered_curve_ids:
+                ordered_curve_ids.append(cid)
+
+        related_depth_ids = []
+        for cid in ordered_curve_ids:
+            depth_id = self._find_curve_depth_id(source_db, cid)
+            if depth_id is not None and depth_id not in ordered_curve_ids and depth_id not in related_depth_ids:
+                related_depth_ids.append(depth_id)
+
+        group_curve_ids = related_depth_ids + ordered_curve_ids
+        if not group_curve_ids:
+            return transferred_count
+
+        group_name = source_folder_names[0] if source_folder_names else "FRAME_MOVE"
+        target_folder_id = self._resolve_cross_well_target_folder(target_db, target_well_id, requested_folder_id, group_name)
+
+        transferred_ids = []
+        for cid in group_curve_ids:
+            if self._copy_curve_between_dbs(source_db, target_db, cid, target_well_id, target_folder_id):
+                transferred_ids.append(cid)
+
+        if op == 'cut':
+            for cid in ordered_curve_ids:
+                source_db.delete_curve(cid)
+            for depth_id in related_depth_ids:
+                if not self._is_depth_curve_still_used(source_db, depth_id):
+                    source_db.delete_curve(depth_id)
+
+            for data in items:
+                if data['type'] == 'folder':
+                    source_db.delete_folder(data['id'])
+
+        return transferred_count + len(transferred_ids)
+
     def handle_paste(self, target_db, well_id, folder_id):
         mw = self.mw
         if not mw.explorer_clipboard:
@@ -378,24 +614,26 @@ class TreeController:
         items = mw.explorer_clipboard['items']
         op = mw.explorer_clipboard['op']
         source_db = mw.explorer_clipboard['db_path']
-        
-        if source_db != target_db:
-             QMessageBox.warning(mw, "Restriction", "Cross-well curve movement is NOT supported.")
-             return
 
         try:
             db = DBManager(target_db)
-            for data in items:
-                if data['type'] == 'curve':
-                    if op == 'cut':
-                        db.move_curve(data['id'], folder_id)
-                    else:
-                        db.copy_curve(data['id'], folder_id)
-                elif data['type'] == 'folder':
-                    if op == 'cut':
-                        db.move_folder(data['id'], folder_id)
-                    else:
-                        QMessageBox.information(mw, "Info", f"Folder copy ({data.get('name')}) not implemented. Skipping.")
+            if source_db != target_db:
+                transferred = self._transfer_curve_group_cross_well(source_db, target_db, well_id, folder_id, items, op)
+                if transferred == 0:
+                    ThemeDialog.message(mw, "Info", "No curves were transferred.", icon_type="info")
+                    return
+            else:
+                for data in items:
+                    if data['type'] == 'curve':
+                        if op == 'cut':
+                            db.move_curve(data['id'], folder_id)
+                        else:
+                            db.copy_curve(data['id'], folder_id)
+                    elif data['type'] == 'folder':
+                        if op == 'cut':
+                            db.move_folder(data['id'], folder_id)
+                        else:
+                            ThemeDialog.message(mw, "Info", f"Folder copy ({data.get('name')}) not implemented. Skipping.", icon_type="info")
             
             if op == 'cut':
                 mw.explorer_clipboard = None
@@ -404,27 +642,24 @@ class TreeController:
             mw.statusBar().showMessage("Paste complete.", 3000)
             
         except Exception as e:
-            QMessageBox.critical(mw, "Error", f"Paste failed: {e}")
+            ThemeDialog.message(mw, "Error", f"Paste failed: {e}", icon_type="error")
     
     # --- Bulk Delete Operations ---
 
     def handle_delete_folder_bulk(self, items_data):
-        ret = QMessageBox.question(self.mw, "Confirm", "Delete folder and all contents?")
-        if ret == QMessageBox.Yes:
+        if ThemeDialog.confirm(self.mw, "Confirm", "Delete folder and all contents?"):
             for data in items_data:
                 DBManager(data['db_path']).delete_folder(data['id'])
             self.refresh_tree()
 
     def handle_delete_curve_bulk(self, items_data):
-        ret = QMessageBox.question(self.mw, "Confirm", "Delete selected curve(s)?")
-        if ret == QMessageBox.Yes:
+        if ThemeDialog.confirm(self.mw, "Confirm", "Delete selected curve(s)?"):
             for data in items_data:
                 DBManager(data['db_path']).delete_curve(data['id'])
             self.refresh_tree()
 
     def handle_delete_bulk(self, items_data):
-        ret = QMessageBox.question(self.mw, "Confirm Bulk Delete", f"Delete {len(items_data)} selected items?")
-        if ret == QMessageBox.Yes:
+        if ThemeDialog.confirm(self.mw, "Confirm Bulk Delete", f"Delete {len(items_data)} selected items?"):
             for data in items_data:
                 db = DBManager(data['db_path'])
                 if data['type'] == 'folder':

@@ -100,6 +100,8 @@ class PainterDepthTrack(QWidget):
         main_color = QColor(app_config.get_theme_color("text_main"))
         pen_maj = QPen(main_color, max(1.0, 2.0 * scale))
         pen_min = QPen(main_color, max(1.0, 1.0 * scale)) 
+        pen_maj.setCosmetic(True)
+        pen_min.setCosmetic(True)
 
         curr_major = start_tick
         while curr_major <= max_y + major_step:
@@ -206,9 +208,14 @@ class PainterDepthTrack(QWidget):
             if need_update:
                 self._update_tick_cache(min_y, max_y, exact_h, major_step)
             
-            # 计算缓存图层相对于当前视口的像素偏移
-            pixels_per_unit = exact_h / view_span
-            offset_y = (self._cache_min_y - min_y) * pixels_per_unit
+            # Use the cache's own pixel density when positioning the prerendered
+            # image. This avoids tiny scale mismatches versus the plot grid that
+            # can accumulate into visible depth/grid drift.
+            cache_span = self._cache_max_y - self._cache_min_y
+            if cache_span <= 0:
+                return
+            cache_pixels_per_unit = self._cache_height_px / cache_span
+            offset_y = (self._cache_min_y - min_y) * cache_pixels_per_unit
             
             painter.save()
             painter.translate(0, offset_y)

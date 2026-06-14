@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QDialogButtonBox, QMessageBox)
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QDialogButtonBox)
 from PySide6.QtCore import Qt
 from ...data.import_workers import ImportWorker
 
@@ -81,10 +81,10 @@ class DLISImportDialog(ThemeDialog):
     def validate_and_accept(self):
         selected = self.get_selected_curves()
         if not selected:
-            QMessageBox.warning(self, "Warning", "Please select at least one curve to import.")
+            ThemeDialog.message(self, "Warning", "Please select at least one curve to import.", icon_type="warning")
             return
         if not self.name_edit.text().strip():
-            QMessageBox.warning(self, "Warning", "Please enter a well name.")
+            ThemeDialog.message(self, "Warning", "Please enter a well name.", icon_type="warning")
             return
         self.accept()
 

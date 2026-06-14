@@ -32,14 +32,17 @@ from scripts.data.export_manager import LogExporter
 from scripts.utils.workers import DataFetchWorker
 from scripts.ui.floating_scrollbar import FloatingScrollbarManager
 from scripts.ui.plot_dialogs import UnitEditDialog
-from scripts.data.table_data import TableDataFetchWorker, CurveTableModel
-from scripts.data.import_workers import ImportWorker
-from scripts.ui.dialogs.data_preview_dialog import DataPreviewDialog
+from scripts.data.import_workers import ImportWorker, ExportWorker
 from scripts.ui.dialogs.import_dialogs import DLISImportDialog
+from scripts.ui.dialogs.export_dialogs import DLISExportDialog, DLISExportResultDialog
+from scripts.data.dlis_exporter import export_well_to_dlis
+from scripts.ui.widgets.data_viewer_widget import DataViewerWidget
+from scripts.utils.well_metadata import get_well_export_snapshot
 from core.app_config import app_config
 from scripts.utils.logger import logger
 from scripts.ui.custom_title_bar import ModernTitleBar
 from scripts.ui.frameless_helper import FramelessHelper
+from scripts.ui.base_dialog import ThemeDialog
 
 def global_exception_handler(exctype, value, tb):
     """
@@ -615,19 +618,10 @@ class MainWindow(QMainWindow):
         if item.parent():
             well_name = item.parent().text(0).replace("Well: ", "")
             
-        # [ASYNC LOADING] Launch Dialog and Background Worker
-        dlg = DataPreviewDialog(well_name, item.text(0), self)
-        
-        # Setup Worker
-        self._table_worker = TableDataFetchWorker(db_p, well_id, curve_id, well_name, item.text(0))
-        self._table_worker.signals.finished.connect(dlg.set_data)
-        self._table_worker.signals.error.connect(dlg.show_error)
-        self._table_worker.start()
-        
-        # Keep reference to avoid GC
-        dlg._worker_ref = self._table_worker
-        
-        dlg.show() # Use show instead of exec to keep main window interactive
+        widget = self.new_data_viewer_window()
+        if not widget:
+            return
+        widget.add_curve_request(well_id, curve_id, db_p, well_name=well_name, curve_name=item.text(0))
 
     def handle_quick_plot(self, items_data):
         """Create a new plot window and add all selected curves to it."""
@@ -654,6 +648,27 @@ class MainWindow(QMainWindow):
                      widget.create_new_track(well_id, c_data['id'], db_path=db_path)
              
              self.statusBar().showMessage(f"Quick Plot: {len(curves)} curves added.", 3000)
+
+    def handle_open_data_viewer(self, items_data):
+        """Open a data viewer page and enqueue selected curves."""
+        curves = [d for d in items_data if d.get('type') == 'curve']
+        if not curves:
+            return
+
+        widget = self.new_data_viewer_window()
+        if not widget:
+            return
+
+        for curve in curves:
+            widget.add_curve_request(
+                curve.get('well_id'),
+                curve.get('id'),
+                curve.get('db_path'),
+                well_name=curve.get('well_name'),
+                curve_name=curve.get('name'),
+            )
+
+        self.statusBar().showMessage(f"Data Viewer: queued {len(curves)} curves.", 3000)
 
     def handle_script_double_clicked(self, item, column):
         """Open a script in a new script editor window."""
@@ -747,6 +762,94 @@ class MainWindow(QMainWindow):
             # Handle result
             self.on_import_finished(well_id)
 
+    def handle_export_dlis(self):
+        wells = self.get_all_well_info()
+        if not wells:
+            ThemeDialog.message(self, "Export DLIS", "No wells found in the data/ folder. Please import data first.", icon_type="warning")
+            return
+
+        dlg = DLISExportDialog(wells, self)
+        dlg.set_export_request_handler(self._run_dlis_export_from_dialog)
+        for well in wells:
+            try:
+                db = DBManager(well["db_path"])
+                snapshot = get_well_export_snapshot(db, well["db_path"], well["id"])
+                dlg.set_well_snapshot(well["db_path"], well["id"], snapshot)
+            except Exception as exc:
+                logger.error(f"Failed to prepare DLIS export snapshot for {well.get('name')}: {exc}")
+
+        if dlg.exec() != QDialog.Accepted:
+            self.statusBar().showMessage("DLIS export cancelled.", 3000)
+            return
+
+    def _run_dlis_export_from_dialog(self, settings, dlg):
+        selected_well = settings["well"]
+        output_path = settings["output_path"]
+        selected_curves = settings["curves"]
+
+        try:
+            db = DBManager(selected_well["db_path"])
+            snapshot = get_well_export_snapshot(db, selected_well["db_path"], selected_well["id"])
+            self.export_worker = ExportWorker(
+                {
+                    "db_path": selected_well["db_path"],
+                    "well_id": selected_well["id"],
+                    "well_name": selected_well["name"],
+                    "snapshot": snapshot,
+                },
+                selected_curves,
+                output_path,
+            )
+            self.export_worker.progress.connect(lambda payload: self._handle_export_progress(payload, dlg, output_path))
+            result = asyncio.create_task(self.export_worker.run_async())
+        except Exception as exc:
+            dlg.finish_export()
+            logger.error(f"DLIS export failed: {exc}")
+            ThemeDialog.message(self, "Export DLIS", f"Failed to export DLIS file:\n{exc}", icon_type="error")
+            return
+
+        async def finalize_export():
+            export_result = await result
+            dlg.finish_export()
+            self._complete_export_dialog(export_result, dlg, output_path)
+
+        asyncio.create_task(finalize_export())
+
+    def _handle_export_progress(self, payload, dlg, output_path):
+        phase = payload.get("phase")
+        curve_name = payload.get("curve") or "Unknown"
+        dlg.update_export_progress(payload)
+        if phase == "preparing_curve":
+            total = max(int(payload.get("total") or 0), 1)
+            current = min(int(payload.get("current") or 0), total)
+            self.statusBar().showMessage(f"Preparing DLIS curve {current}/{total}: {curve_name}")
+        elif phase == "writing_file":
+            self.statusBar().showMessage(f"Exporting DLIS: writing file {os.path.basename(output_path)}...")
+        elif phase == "writing_records":
+            total = max(int(payload.get("total") or 0), 1)
+            current = min(int(payload.get("current") or 0), total)
+            self.statusBar().showMessage(f"Writing DLIS records {current}/{total}")
+        else:
+            self.statusBar().showMessage(f"Exporting DLIS: writing file {os.path.basename(output_path)}...")
+
+    def _complete_export_dialog(self, result, dlg, output_path):
+        if not result:
+            ThemeDialog.message(self, "Export DLIS", "Failed to export DLIS file.", icon_type="error")
+            return
+
+        if not result.get("ok"):
+            detail = result.get("action_hint")
+            message = result.get("error", "Failed to export DLIS file.")
+            if detail:
+                message = f"{message}\n\n{detail}"
+            ThemeDialog.message(self, "Export DLIS", message, icon_type="warning")
+            return
+
+        self.statusBar().showMessage(f"DLIS export complete: {output_path}", 5000)
+        dlg.set_export_summary(f"Export complete: {result.get('exported_curve_count', 0)} curves exported.")
+        dlg.accept()
+        DLISExportResultDialog("Export DLIS", output_path, result, self).exec()
+
     def on_curve_imported(self, curve_name):
         self.statusBar().showMessage(f"Importing: {curve_name}...")
 
@@ -816,6 +919,22 @@ class MainWindow(QMainWindow):
         sub.show()
         return plot
 
+    def new_data_viewer_window(self):
+        if not hasattr(self, '_data_viewer_count'):
+            self._data_viewer_count = 0
+        self._data_viewer_count += 1
+
+        widget = DataViewerWidget()
+        sub = QMdiSubWindow()
+        sub.setWidget(widget)
+        sub.setAttribute(Qt.WA_DeleteOnClose)
+        sub.setWindowTitle(f"Data Viewer {self._data_viewer_count}")
+        sub.resize(420, 520)
+        sub.destroyed.connect(lambda: QTimer.singleShot(0, self.check_reset_counters))
+        self.mdi_area.addSubWindow(sub)
+        sub.show()
+        return widget
+
     def new_script_window(self):
         # Counter for unique titles
         if not hasattr(self, '_script_count'):
@@ -855,6 +974,7 @@ class MainWindow(QMainWindow):
     def check_reset_counters(self):
         """Check if all windows of a type are closed, and if so, reset the counter."""
         plots = [w for w in self.mdi_area.subWindowList() if isinstance(w.widget(), LogWidget)]
+        data_viewers = [w for w in self.mdi_area.subWindowList() if isinstance(w.widget(), DataViewerWidget)]
         
         # 延迟导入WebScriptEditor以支持插件化
         try:
@@ -865,6 +985,9 @@ class MainWindow(QMainWindow):
         
         if not plots:
             self._plot_count = 0
+
+        if not data_viewers:
+            self._data_viewer_count = 0
             
         if not scripts:
             self._script_count = 0

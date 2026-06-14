@@ -93,6 +93,7 @@ scratch/
 projects/
 plugins/README.md
 scripts/ai_prompt_token_audit.py
+scripts/build_pyinstaller.py
 
 # === 打包产物 ===
 PyLog.spec

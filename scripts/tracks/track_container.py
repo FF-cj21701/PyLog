@@ -164,10 +164,13 @@ class BaseTrackContainer(QFrame):
             menu.addSeparator()
         
         add_depth_act = QAction("Add Depth Track", self)
+        add_empty_act = QAction("Add Empty Track", self)
         lw = self.find_log_widget()
         if lw:
             add_depth_act.triggered.connect(lambda: lw.add_depth_track())
+            add_empty_act.triggered.connect(lambda: lw.add_empty_track())
         menu.addAction(add_depth_act)
+        menu.addAction(add_empty_act)
         
         settings_act = QAction("Properties...", self)
         settings_act.triggered.connect(self.open_settings)
@@ -198,14 +201,6 @@ class BaseTrackContainer(QFrame):
             (v_min, v_max) = vb_main.viewRange()[1]
             if abs(v_min - min_y) > 1e-7 or abs(v_max - max_y) > 1e-7:
                 vb_main.setYRange(min_y, max_y, padding=0)
-        
-        if hasattr(pw, 'curve_viewboxes'):
-            for entry in pw.curve_viewboxes:
-                vb_sub = entry.get('viewbox')
-                if vb_sub:
-                    (s_min, s_max) = vb_sub.viewRange()[1]
-                    if abs(s_min - min_y) > 1e-7 or abs(s_max - max_y) > 1e-7:
-                        vb_sub.setYRange(min_y, max_y, padding=0)
 
     def select_curve(self, idx, append=False):
         self.interaction_handler.select_curve(idx, append)
@@ -632,8 +627,6 @@ class CurveTrackContainer(BaseTrackContainer):
         state["type"] = "data"
         for curve in self.plot_widget.curves:
             info = curve.get('info', {}).copy()
-            for key in ['well_id', 'curve_id']:
-                if key in info: del info[key]
             state["curves"].append(info)
         return state
 
@@ -821,8 +814,6 @@ class ImageTrackContainer(BaseTrackContainer):
         state["type"] = "data"
         for curve in self.plot_widget.curves:
             info = curve.get('info', {}).copy()
-            for key in ['well_id', 'curve_id']:
-                if key in info: del info[key]
             state["curves"].append(info)
         return state
 

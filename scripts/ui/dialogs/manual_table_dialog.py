@@ -4,14 +4,17 @@ import io
 import csv
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                                 QLineEdit, QPushButton, QTableWidget, 
-                                QTableWidgetItem, QDialogButtonBox, QMessageBox,
-                                QHeaderView, QApplication, QInputDialog)
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor
+                                QTableWidgetItem, QDialogButtonBox,
+                                QHeaderView, QApplication, QInputDialog, QMenu)
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QBrush, QColor, QFontMetrics
 from ...data.db_manager import DBManager
 from ...utils.logger import logger
 from core.app_config import app_config
 from ..base_dialog import ThemeDialog
+from ..curve_table_helpers import configure_curve_table_view
+from ..curve_table_helpers import install_corner_select_all
+from ..theme_manager import ThemeManager
 
 class ManualTableDialog(ThemeDialog):
     """
@@ -25,6 +28,13 @@ class ManualTableDialog(ThemeDialog):
         self.db_path = db_path
         self._initial_depth = initial_depth
         self._initial_folder = folder_name
+        self._depth_loading = False
+        self._depth_fill_batch_size = 500
+        self._depth_fill_index = 0
+        self._pending_depth_values = None
+        self._depth_fill_timer = QTimer(self)
+        self._depth_fill_timer.setSingleShot(True)
+        self._depth_fill_timer.timeout.connect(self._fill_initial_depth_batch)
         
         self.setWindowTitle(f"Custom Curve Entry - {well_name}")
         self.resize(900, 700)
@@ -35,25 +45,155 @@ class ManualTableDialog(ThemeDialog):
         self._undo_stack = []
         
         self.setup_ui()
+        ThemeManager.apply_curve_table_surface(self)
         
         if self._initial_depth is not None:
             self.populate_initial_depth()
+        else:
+            self._populate_row_index_column()
+
+    @staticmethod
+    def _index_column():
+        return 0
+
+    @staticmethod
+    def _depth_column():
+        return 1
+
+    @staticmethod
+    def _first_data_column():
+        return 2
+
+    @staticmethod
+    def _default_column_count():
+        return 7  # index + depth + 5 data columns
+
+    def _populate_row_index_column(self):
+        self.table.blockSignals(True)
+        self.table.setUpdatesEnabled(False)
+        bg_brush = QBrush(QColor(app_config.get_theme_color("bg_pure")))
+        for i in range(self.table.rowCount()):
+            item = QTableWidgetItem(str(i + 1))
+            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            item.setBackground(bg_brush)
+            self.table.setItem(i, self._index_column(), item)
+        self.table.setUpdatesEnabled(True)
+        self.table.blockSignals(False)
 
     def populate_initial_depth(self):
         """Pre-fill the first column with provided depth data."""
-        n = len(self._initial_depth)
-        self.table.setRowCount(max(20, n))
-        # Use a very light gray for professional look
-        bg_brush = QBrush(QColor(app_config.get_theme_color("window_bg")))
-        for i in range(self.table.rowCount()):
-            # Fill existing depth or empty placeholder
-            val = f"{self._initial_depth[i]:.4f}" if i < n else ""
-            item = QTableWidgetItem(val)
-            
-            # Lock the entire column
-            item.setFlags(item.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsSelectable)
-            item.setBackground(bg_brush)
-            self.table.setItem(i, 0, item)
+        if self._initial_depth is None:
+            return
+
+        self._depth_fill_timer.stop()
+        self._pending_depth_values = np.asarray(self._initial_depth, dtype=float)
+        self._depth_fill_index = 0
+        row_count = max(20, len(self._pending_depth_values))
+        self.table.blockSignals(True)
+        self.table.setUpdatesEnabled(False)
+        self.table.setRowCount(row_count)
+        self.table.setUpdatesEnabled(True)
+        self.table.blockSignals(False)
+        self._depth_status_tick()
+        self._apply_table_column_layout()
+        self._depth_fill_timer.start(0)
+
+    def _depth_status_tick(self):
+        if not self._depth_loading:
+            return
+        total = len(self._pending_depth_values) if self._pending_depth_values is not None else 0
+        done = min(self._depth_fill_index, total)
+        if hasattr(self, "depth_status_label"):
+            self.depth_status_label.setText(f"Loading depth column... {done}/{total}")
+
+    def _fill_initial_depth_batch(self):
+        if self._pending_depth_values is None:
+            return
+
+        total = len(self._pending_depth_values)
+        start = self._depth_fill_index
+        end = min(start + self._depth_fill_batch_size, self.table.rowCount())
+        index_bg_brush = QBrush(QColor(app_config.get_theme_color("bg_pure")))
+        bg_brush = QBrush(QColor(app_config.get_theme_color("bg_pure")))
+
+        self.table.blockSignals(True)
+        self.table.setUpdatesEnabled(False)
+        for i in range(start, end):
+            index_item = self.table.item(i, self._index_column())
+            if index_item is None:
+                index_item = QTableWidgetItem(str(i + 1))
+                index_item.setFlags(index_item.flags() & ~Qt.ItemIsEditable)
+                index_item.setBackground(index_bg_brush)
+                self.table.setItem(i, self._index_column(), index_item)
+            else:
+                index_item.setText(str(i + 1))
+                index_item.setFlags(index_item.flags() & ~Qt.ItemIsEditable)
+                index_item.setBackground(index_bg_brush)
+
+            depth_item = self.table.item(i, self._depth_column())
+            if depth_item is None:
+                depth_item = QTableWidgetItem()
+                self.table.setItem(i, self._depth_column(), depth_item)
+            depth_item.setFlags(depth_item.flags() & ~Qt.ItemIsEditable)
+            depth_item.setBackground(bg_brush)
+            depth_item.setText(f"{self._pending_depth_values[i]:.4f}" if i < total else "")
+
+        self.table.setUpdatesEnabled(True)
+        self.table.blockSignals(False)
+
+        self._depth_fill_index = end
+        self._depth_status_tick()
+
+        if end < self.table.rowCount():
+            self._depth_fill_timer.start(0)
+            return
+
+        self._pending_depth_values = None
+        self.set_loading_depth_state(False)
+        self._apply_table_column_layout()
+
+    def set_loading_depth_state(self, loading=True):
+        self._depth_loading = loading
+        if loading:
+            if hasattr(self, "depth_status_label"):
+                self.depth_status_label.setText("Loading depth column...")
+            self.folder_edit.setPlaceholderText("Loading depth column...")
+        else:
+            if hasattr(self, "depth_status_label"):
+                self.depth_status_label.setText("")
+            if self.folder_edit.placeholderText() == "Loading depth column...":
+                self.folder_edit.setPlaceholderText("Enter folder name (optional)")
+
+    def set_initial_depth_async(self, depth_data):
+        self._initial_depth = depth_data
+        if self._initial_depth is not None:
+            self.populate_initial_depth()
+
+    def _apply_table_column_layout(self):
+        depth_values = self._initial_depth if self._initial_depth is not None else np.array([])
+        depth_text = "Depth"
+        if len(depth_values) > 0:
+            depth_text = max((f"{value:.4f}" for value in depth_values), key=len)
+
+        cell_metrics = QFontMetrics(self.table.font())
+        header_metrics = QFontMetrics(self.table.horizontalHeader().font())
+        vertical_header_metrics = QFontMetrics(self.table.verticalHeader().font())
+
+        row_index_text = str(self.table.rowCount() or 1)
+        row_header_width = max(
+            vertical_header_metrics.horizontalAdvance(row_index_text),
+            vertical_header_metrics.horizontalAdvance(" ")
+        ) + 18
+        depth_width = max(
+            cell_metrics.horizontalAdvance(depth_text),
+            header_metrics.horizontalAdvance("Depth")
+        ) + 28
+
+        self.table.verticalHeader().setFixedWidth(max(40, row_header_width))
+        self.table.setColumnWidth(self._index_column(), max(40, row_header_width))
+        self.table.setColumnWidth(self._depth_column(), max(84, depth_width))
+        for column in range(self._first_data_column(), self.table.columnCount()):
+            self.table.setColumnWidth(column, 96)
             
     def _fetch_existing_names(self):
         """Get all curve names in the target well/folder to prevent duplicates."""
@@ -104,8 +244,15 @@ class ManualTableDialog(ThemeDialog):
         # Header Info
         top_layout = QHBoxLayout()
         top_layout.addWidget(QLabel(f"<b>Well:</b> {self.well_name}"))
-        
+
         top_layout.addStretch()
+
+        self.depth_status_label = QLabel("")
+        self.depth_status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.depth_status_label.setStyleSheet(
+            f"color: {app_config.get_theme_color('text_dim')}; font-size: 10px;"
+        )
+        top_layout.addWidget(self.depth_status_label)
         
         layout.addLayout(top_layout)
         
@@ -123,14 +270,26 @@ class ManualTableDialog(ThemeDialog):
         layout.addWidget(instr)
         
         # Table Widget
-        self.table = QTableWidget(20, 5) # Default size
-        self.table.setAlternatingRowColors(True)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table = QTableWidget(20, self._default_column_count()) # Index + Depth + 5 data columns
+        configure_curve_table_view(
+            self.table,
+            default_section_size=96,
+            minimum_section_size=24,
+            editable=True,
+            show_vertical_header=False,
+            on_context_menu=self._show_context_menu,
+        )
+        install_corner_select_all(self.table)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.table.verticalHeader().setDefaultSectionSize(26)
+        self.table.verticalHeader().setMinimumSectionSize(20)
+        self.table.verticalHeader().setDefaultAlignment(Qt.AlignCenter)
         
         # Set initial headers
-        self.table.setHorizontalHeaderItem(0, QTableWidgetItem("Depth"))
-        for j in range(1, 5):
-            name = self._get_unique_name(f"Column {j}")
+        self.table.setHorizontalHeaderItem(self._index_column(), QTableWidgetItem(""))
+        self.table.setHorizontalHeaderItem(self._depth_column(), QTableWidgetItem("Depth"))
+        for j in range(self._first_data_column(), self._default_column_count()):
+            name = self._get_unique_name(f"Column {j - 1}")
             self.table.setHorizontalHeaderItem(j, QTableWidgetItem(name))
             
         # Make headers clickable for renaming
@@ -138,20 +297,14 @@ class ManualTableDialog(ThemeDialog):
         
         # Connect auto-expansion
         self.table.itemChanged.connect(self._on_item_changed)
+        self.table.cellPressed.connect(self._handle_cell_pressed)
+        self._apply_table_column_layout()
         
         layout.addWidget(self.table)
         
         # Buttons Row
         btn_layout = QHBoxLayout()
-        
-        self.btn_del_col = QPushButton("Delete Column")
-        self.btn_del_col.clicked.connect(self.delete_column)
-        btn_layout.addWidget(self.btn_del_col)
-        
-        self.btn_clear = QPushButton("Clear Table")
-        self.btn_clear.clicked.connect(self.clear_table)
-        btn_layout.addWidget(self.btn_clear)
-        
+
         btn_layout.addStretch()
         
         self.btn_save = QPushButton("Save")
@@ -164,6 +317,21 @@ class ManualTableDialog(ThemeDialog):
         btn_layout.addWidget(self.btn_cancel)
         
         layout.addLayout(btn_layout)
+
+    def _show_context_menu(self, pos):
+        menu = QMenu(self)
+        delete_col_action = menu.addAction("Delete Column")
+        clear_table_action = menu.addAction("Clear Table")
+
+        current_col = self.table.currentColumn()
+        delete_col_action.setEnabled(current_col >= self._first_data_column())
+        clear_table_action.setEnabled(self.table.rowCount() > 0 and self.table.columnCount() > 0)
+
+        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if chosen == delete_col_action:
+            self.delete_column()
+        elif chosen == clear_table_action:
+            self.clear_table()
 
     def keyPressEvent(self, event):
         """Handle Ctrl+V for quick pasting and Ctrl+Z for undo."""
@@ -183,23 +351,30 @@ class ManualTableDialog(ThemeDialog):
         row_idx = self.table.rowCount()
         self.table.blockSignals(True)
         self.table.insertRow(row_idx)
+        index_bg_brush = QBrush(QColor(app_config.get_theme_color("bg_pure")))
+        index_item = QTableWidgetItem(str(row_idx + 1))
+        index_item.setFlags(index_item.flags() & ~Qt.ItemIsEditable)
+        index_item.setBackground(index_bg_brush)
+        self.table.setItem(row_idx, self._index_column(), index_item)
         if self._initial_depth is not None:
             # Maintain the locked style for the new row's depth column
-            bg_brush = QBrush(QColor(app_config.get_theme_color("window_bg")))
+            bg_brush = QBrush(QColor(app_config.get_theme_color("bg_pure")))
             item = QTableWidgetItem("")
-            item.setFlags(item.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsSelectable)
+            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
             item.setBackground(bg_brush)
-            self.table.setItem(row_idx, 0, item)
+            self.table.setItem(row_idx, self._depth_column(), item)
         self.table.blockSignals(False)
+        self._apply_table_column_layout()
 
     def add_column(self, save_undo=True):
         if save_undo: self._save_undo_state()
         col_idx = self.table.columnCount()
         self.table.blockSignals(True)
         self.table.insertColumn(col_idx)
-        name = self._get_unique_name(f"Column {col_idx}")
+        name = self._get_unique_name(f"Column {col_idx - 1}")
         self.table.setHorizontalHeaderItem(col_idx, QTableWidgetItem(name))
         self.table.blockSignals(False)
+        self._apply_table_column_layout()
 
     def _on_item_changed(self, item):
         """Automatically expand table when typing in last row or column."""
@@ -214,14 +389,18 @@ class ManualTableDialog(ThemeDialog):
         if col == self.table.columnCount() - 1 and item.text().strip():
             self.add_column(save_undo=False)
 
+    def _handle_cell_pressed(self, row, col):
+        if col == self._index_column():
+            self.table.selectRow(row)
+            self.table.setFocus()
+
     def delete_column(self):
         col_idx = self.table.currentColumn()
-        if col_idx <= 0:
-            QMessageBox.warning(self, "Warning", "Cannot delete the Depth column.")
+        if col_idx < self._first_data_column():
+            ThemeDialog.message(self, "Warning", "Cannot delete the index or Depth column.", icon_type="warning")
             return
             
-        ret = QMessageBox.question(self, "Confirm", f"Delete selected column '{self.table.horizontalHeaderItem(col_idx).text()}'?")
-        if ret == QMessageBox.Yes:
+        if ThemeDialog.confirm(self, "Confirm", f"Delete selected column '{self.table.horizontalHeaderItem(col_idx).text()}'?"):
             self._save_undo_state()
             self.table.removeColumn(col_idx)
 
@@ -250,7 +429,7 @@ class ManualTableDialog(ThemeDialog):
 
     def undo(self):
         if not self._undo_stack:
-            QMessageBox.information(self, "Undo", "No more actions to undo.")
+            ThemeDialog.message(self, "Undo", "No more actions to undo.", icon_type="info")
             return
             
         state = self._undo_stack.pop()
@@ -264,7 +443,7 @@ class ManualTableDialog(ThemeDialog):
             
         # Restore Data
         n_initial = len(self._initial_depth) if self._initial_depth is not None else 0
-        bg_brush = QBrush(QColor(app_config.get_theme_color("window_bg")))
+        bg_brush = QBrush(QColor(app_config.get_theme_color("bg_pure")))
         
         for i in range(state['rows']):
             for j in range(state['cols']):
@@ -272,38 +451,44 @@ class ManualTableDialog(ThemeDialog):
                 item = QTableWidgetItem(val)
                 
                 # Re-apply depth locking if needed
-                if j == 0 and self._initial_depth is not None:
-                    item.setFlags(item.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsSelectable)
+                if j == self._index_column():
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    item.setBackground(QBrush(QColor(app_config.get_theme_color("bg_pure"))))
+                elif j == self._depth_column() and self._initial_depth is not None:
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                     item.setBackground(bg_brush)
                 
                 self.table.setItem(i, j, item)
+        self._apply_table_column_layout()
 
     def clear_table(self):
-        ret = QMessageBox.question(self, "Clear Table", "Are you sure you want to clear all curves? (Depth will be preserved)")
-        if ret == QMessageBox.Yes:
+        if ThemeDialog.confirm(self, "Clear Table", "Are you sure you want to clear all curves? (Depth will be preserved)"):
             self._save_undo_state()
             if self._initial_depth is not None:
-                # Protect depth! Only clear columns 1+ and keep existing row count
+                # Protect index + depth; only clear data columns
                 for r in range(self.table.rowCount()):
-                    for c in range(1, self.table.columnCount()):
+                    for c in range(self._first_data_column(), self.table.columnCount()):
                         self.table.setItem(r, c, None)
             else:
                 # Truly blank table, clear everything
                 self.table.setRowCount(20)
-                self.table.setColumnCount(5)
+                self.table.setColumnCount(self._default_column_count())
                 self.table.clearContents()
-                self.table.setHorizontalHeaderItem(0, QTableWidgetItem("Depth"))
+                self.table.setHorizontalHeaderItem(self._index_column(), QTableWidgetItem(""))
+                self.table.setHorizontalHeaderItem(self._depth_column(), QTableWidgetItem("Depth"))
+                self._populate_row_index_column()
             
             # Reset header names for other columns
-            for j in range(1, self.table.columnCount()):
+            for j in range(self._first_data_column(), self.table.columnCount()):
                 # Regenerate default unique names
-                name = f"Column {j}"
+                name = f"Column {j - 1}"
                 self.table.setHorizontalHeaderItem(j, QTableWidgetItem(name))
+            self._apply_table_column_layout()
 
     def rename_header(self, index):
-        """Allow renaming column headers (Except Depth at index 0)."""
-        if index == 0:
-            QMessageBox.information(self, "Info", "The first column is fixed as 'Depth'.")
+        """Allow renaming column headers (except index/depth fixed columns)."""
+        if index < self._first_data_column():
+            ThemeDialog.message(self, "Info", "The index and Depth columns are fixed.", icon_type="info")
             return
             
         old_label = self.table.horizontalHeaderItem(index).text()
@@ -400,7 +585,7 @@ class ManualTableDialog(ThemeDialog):
         start_row = self.table.currentRow()
         start_col = self.table.currentColumn()
         if start_row < 0: start_row = 0
-        if start_col < 0: start_col = 0
+        if start_col < self._depth_column(): start_col = self._depth_column()
 
         # Adjust data rows to skip headers
         data_rows = rows[header_rows:]
@@ -410,10 +595,11 @@ class ManualTableDialog(ThemeDialog):
             self._save_undo_state()
             for i, name in enumerate(names):
                 target_col = start_col + i
-                if target_col == 0: continue # Skip depth header renaming by paste
+                if target_col < self._first_data_column():
+                    continue
                 
                 unit = units[i] if i < len(units) else ""
-                final_name = self._get_unique_name(name if name else f"Column {target_col}")
+                final_name = self._get_unique_name(name if name else f"Column {target_col - 1}")
                 final_label = f"{final_name} [{unit}]" if unit else final_name
                 
                 if target_col >= self.table.columnCount():
@@ -435,24 +621,31 @@ class ManualTableDialog(ThemeDialog):
                 if target_col >= self.table.columnCount():
                     self.table.insertColumn(target_col)
                 
-                # Protect Depth column if it was pre-filled (read-only flag check)
+                # Protect fixed columns if they are read-only
                 existing_item = self.table.item(target_row, target_col)
                 if existing_item and not (existing_item.flags() & Qt.ItemIsEditable):
-                    if target_col == 0: continue 
+                    if target_col <= self._depth_column():
+                        continue
 
                 self.table.setItem(target_row, target_col, QTableWidgetItem(str(val).strip()))
                 # Ensure default headers for new columns if not set
                 if not self.table.horizontalHeaderItem(target_col):
-                    base = "Depth" if target_col == 0 else f"Column {target_col}"
+                    if target_col == self._index_column():
+                        base = ""
+                    elif target_col == self._depth_column():
+                        base = "Depth"
+                    else:
+                        base = f"Column {target_col - 1}"
                     name = self._get_unique_name(base)
                     self.table.setHorizontalHeaderItem(target_col, QTableWidgetItem(name))
+        self._apply_table_column_layout()
 
     def handle_save(self):
         row_count = self.table.rowCount()
         col_count = self.table.columnCount()
         
         if row_count == 0 or col_count == 0:
-            QMessageBox.warning(self, "Warning", "No data to save.")
+            ThemeDialog.message(self, "Warning", "No data to save.", icon_type="warning")
             return
 
         # 1. Collect data into numpy arrays
@@ -471,21 +664,21 @@ class ManualTableDialog(ThemeDialog):
                     val = np.nan
                 row_data.append(val)
             
-            # Skip rows that are completely empty or have no depth (column 0)
-            if is_row_empty or np.isnan(row_data[0]):
+            # Skip rows that are completely empty or have no depth
+            if is_row_empty or np.isnan(row_data[self._depth_column()]):
                 continue
                 
             data_matrix.append(row_data)
             
         if not data_matrix:
-            QMessageBox.warning(self, "Warning", "No valid data to save.")
+            ThemeDialog.message(self, "Warning", "No valid data to save.", icon_type="warning")
             return
             
         data_np = np.array(data_matrix, dtype=np.float32)
         
         # Check if all nan (remaining data)
         if np.all(np.isnan(data_np)):
-            QMessageBox.warning(self, "Warning", "All data cells are empty or invalid.")
+            ThemeDialog.message(self, "Warning", "All data cells are empty or invalid.", icon_type="warning")
             return
 
         # 2. Get Headers
@@ -517,7 +710,10 @@ class ManualTableDialog(ThemeDialog):
         for j in range(col_count):
             label = column_names[j]
             name, _ = self._parse_label(label)
-            if j > 0 and np.all(np.isnan(data_np[:, j])): continue
+            if j < self._first_data_column():
+                continue
+            if np.all(np.isnan(data_np[:, j])):
+                continue
             
             # Check for existing curve with same name AND folder (if folder set)
             for row in existing_curves:
@@ -528,10 +724,11 @@ class ManualTableDialog(ThemeDialog):
         
         if duplicates:
             dupe_names = ", ".join([d[1] for d in duplicates])
-            ret = QMessageBox.question(self, "Overwrite Confirmation", 
-                                     f"The following curves already exist in this folder:\n\n{dupe_names}\n\nDo you want to overwrite them?",
-                                     QMessageBox.Yes | QMessageBox.No)
-            if ret == QMessageBox.No:
+            if not ThemeDialog.confirm(
+                self,
+                "Overwrite Confirmation",
+                f"The following curves already exist in this folder:\n\n{dupe_names}\n\nDo you want to overwrite them?",
+            ):
                 return
 
         saved_count = 0
@@ -540,11 +737,13 @@ class ManualTableDialog(ThemeDialog):
                 label = column_names[j]
                 name, unit = self._parse_label(label)
                 
-                if j == 0 and not unit:
+                if j == self._depth_column() and not unit:
                     unit = "m"
                 
                 curve_data = data_np[:, j]
-                if j > 0 and np.all(np.isnan(curve_data)):
+                if j == self._index_column():
+                    continue
+                if j >= self._first_data_column() and np.all(np.isnan(curve_data)):
                     continue
                 
                 # [NEW] Explicitly delete existing curve if it was a confirmed duplicate
@@ -556,9 +755,9 @@ class ManualTableDialog(ThemeDialog):
                 db.save_curve(self.well_id, name, unit, curve_data, folder_id=folder_id)
                 saved_count += 1
                 
-            QMessageBox.information(self, "Success", f"Successfully saved {saved_count} curves to '{self.well_name}'.")
+            ThemeDialog.message(self, "Success", f"Successfully saved {saved_count} curves to '{self.well_name}'.", icon_type="info")
             self.accept()
         except Exception as e:
             logger.error(f"Error saving manual data: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to save data: {e}")
+            ThemeDialog.message(self, "Error", f"Failed to save data: {e}", icon_type="error")
 

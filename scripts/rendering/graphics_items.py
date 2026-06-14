@@ -58,7 +58,8 @@ class CachedGridItem(QGraphicsItem):
     """
     Optimized background grid.
     - X Grid: Cached vertically (log/linear rules).
-    - Y Grid: Strictly driven by physical depth logic (NO pixel tile cache needed, directly drawn for 100% accuracy).
+    - Y Grid: Drawn directly from physical depth coordinates so it stays
+      pixel-aligned with the painter-based depth track.
     """
     def __init__(self, parent_vb):
         super().__init__()
@@ -70,10 +71,6 @@ class CachedGridItem(QGraphicsItem):
         self.minor_grid_pen.setCosmetic(True)
         
         self._x_pixmap = None
-        self._y_pattern_pixmap = None
-        self._y_pattern_major_step = 0
-        self._y_pattern_height_px = 0
-        
         self.show_x = True
         self.show_y = True
         self.log_x = False
@@ -117,7 +114,6 @@ class CachedGridItem(QGraphicsItem):
 
     def _invalidate_cache(self):
         self._x_pixmap = None
-        self._y_pattern_pixmap = None
         self.sync_geometry()
 
     def boundingRect(self):
@@ -167,60 +163,33 @@ class CachedGridItem(QGraphicsItem):
                 p.end()
             painter.drawPixmap(0, 0, self._x_pixmap)
 
-        # 2. 【优化】绘制 Y 轴网格 (横线，使用单周期平铺缓存)
+        # 2. Draw Y grid lines directly from the current physical depth range.
+        # This avoids the integer tile-offset quantization that can make the
+        # grid drift slightly from the painter-based depth minor ticks.
         if self.show_y:
             y_min, y_max = self.vb.viewRange()[1]
             view_span = y_max - y_min
             if view_span <= 0: return
             
-            # 1. 计算当前比例下的步长（像素级）
             major_step, minor_step = get_physical_grid_steps(view_span, h, scale=1.0)
             pixels_per_unit = h / view_span
-            pattern_h = int(round(major_step * pixels_per_unit))
-            
-            # 2. 检查缓存是否有效 (步长或像素高度改变则失效)
-            dpr = 1.0
-            try: dpr = self.vb.window().devicePixelRatioF()
-            except: pass
-            
-            if self._y_pattern_pixmap is None or \
-               abs(self._y_pattern_major_step - major_step) > 1e-6 or \
-               abs(self._y_pattern_height_px - pattern_h) > 0.5:
-                
-                self._y_pattern_major_step = major_step
-                self._y_pattern_height_px = pattern_h
-                
-                # 创建高清 Pixmap 适配 HiDPI
-                self._y_pattern_pixmap = QPixmap(int(max(1, w) * dpr), int(max(1, pattern_h) * dpr))
-                self._y_pattern_pixmap.setDevicePixelRatio(dpr)
-                self._y_pattern_pixmap.fill(Qt.transparent)
-                
-                p = QPainter(self._y_pattern_pixmap)
-                # 高清渲染设置
-                p.setRenderHint(QPainter.Antialiasing)
-                # 画主横线（顶部 0 处）
-                p.setPen(self.grid_pen)
-                p.drawLine(QPointF(0, 0), QPointF(w, 0))
-                
-                # 画副横线
-                p.setPen(self.minor_grid_pen)
-                curr_m = minor_step
-                while curr_m < major_step - (minor_step * 0.1):
-                    y_p = curr_m * pixels_per_unit
-                    p.drawLine(QPointF(0, y_p), QPointF(w, y_p))
-                    curr_m += minor_step
-                p.end()
-            
-            # 3. 绘制平铺图层
-            # 计算第一个主刻度相对于视口顶部的像素偏移量
-            # y_min 向上取整到最近的主刻度开始位置
-            start_y_val = math.floor(y_min / major_step) * major_step
-            offset_px = int(round((start_y_val - y_min) * pixels_per_unit))
-            
-            painter.save()
-            # 从计算出的像素偏移开始平铺
-            painter.drawTiledPixmap(QRectF(0, 0, w, h), self._y_pattern_pixmap, QPoint(0, -offset_px))
-            painter.restore()
+
+            curr_major = math.floor(y_min / major_step) * major_step
+            while curr_major <= y_max + major_step:
+                if y_min - 1e-5 <= curr_major <= y_max + 1e-5:
+                    y_p = (curr_major - y_min) * pixels_per_unit
+                    painter.setPen(self.grid_pen)
+                    painter.drawLine(QPointF(0, y_p), QPointF(w, y_p))
+
+                    curr_minor = curr_major + minor_step
+                    painter.setPen(self.minor_grid_pen)
+                    while curr_minor < curr_major + major_step - (minor_step * 0.1):
+                        if y_min - 1e-5 <= curr_minor <= y_max + 1e-5:
+                            y_m = (curr_minor - y_min) * pixels_per_unit
+                            painter.drawLine(QPointF(0, y_m), QPointF(w, y_m))
+                        curr_minor += minor_step
+
+                curr_major += major_step
 
 
 class VerticalLoggingCurveItem(pg.PlotCurveItem):

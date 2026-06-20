@@ -55,7 +55,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/cj21701/PyLog.git
+git clone https://github.com/FF-cj21701/PyLog.git
 cd PyLog
 
 # Create virtual environment (recommended)

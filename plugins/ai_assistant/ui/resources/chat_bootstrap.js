@@ -2,10 +2,12 @@ const chatContainer = document.getElementById('chat-container');
         const input = document.getElementById('message-input');
         const sendBtn = document.getElementById('send-btn');
         let bridge = null;
+        window.pyBridge = null;
 
         // Initialize the web channel bridge
         new QWebChannel(qt.webChannelTransport, function (channel) {
             bridge = channel.objects.pyBridge;
+            window.pyBridge = bridge;
             bridge.log("Web interface ready");
             input.disabled = false;
             input.innerHTML = ''; // Ensure input is empty on start

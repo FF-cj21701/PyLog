@@ -165,9 +165,16 @@ class CurveManager:
                 depth = np.concatenate([depth, pad])
         
         item.setData(plot_data, depth)
+        CurveManager.apply_line_style(item, merged)
         
+        return plot_data, depth, merged
+
+    @staticmethod
+    def apply_line_style(item, merged):
+        """Apply visual style to an existing PlotDataItem without reloading its data."""
+        is_log = merged.get('log', False)
+
         # Ensure line_style is stored as an integer for JSON serialization
-        # [FIX] Use .value for Qt enums as direct int() casting may fail
         ls_default = Qt.SolidLine.value if hasattr(Qt.SolidLine, 'value') else 1
         line_style_raw = merged.get('line_style', ls_default)
         if hasattr(line_style_raw, 'value'):
@@ -178,39 +185,30 @@ class CurveManager:
             except:
                 line_style = ls_default
         merged['line_style'] = line_style
-        
-        # [NEW] Cast back to Qt.PenStyle for pyqtgraph rendering
+
         pen = pg.mkPen(color=merged['color'], width=merged.get('line_width', 1.0), style=Qt.PenStyle(line_style))
         item.setPen(pen)
-        
-        # Apply Fill Settings using custom horizontal fill logic
+
         fill_mode = merged.get('fill_mode', 'None')
         if fill_mode != 'None' and hasattr(item, 'curve') and hasattr(item.curve, 'setFillOptions'):
             fill_style = normalize_fill_style(merged)
             fill_color = QColor(fill_style['fill_color'])
-            
-            # fillLevel determines where the fill goes (to min or max)
-            # For log mode, this must be in log10 space
-            # [FIX] Handle inverted axis for Left/Right fills
+
             inv = merged.get('invert_x', False)
             if fill_mode == 'Left':
                 val = merged.get('max', 100) if inv else merged.get('min', 0)
                 level = np.log10(max(1e-10, val)) if is_log else val
-            else: # Right
+            else:
                 val = merged.get('min', 0) if inv else merged.get('max', 100)
                 level = np.log10(max(1e-10, val)) if is_log else val
-                
+
             item.curve.setFillOptions(level, QBrush(fill_color))
         elif hasattr(item, 'curve') and hasattr(item.curve, 'setFillOptions'):
             item.curve.setFillOptions(None, None)
         else:
-            # Fallback (standard item) - this will still have vertical fill issues 
-            # but we've disabled it by setting brush to None
             item.setBrush(None)
-            
+
         item.setVisible(merged.get('visible', True))
-        
-        return plot_data, depth, merged
 
     @staticmethod
     def create_curve_item(data, depth, info, is_log):

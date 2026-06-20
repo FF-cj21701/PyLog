@@ -3,6 +3,7 @@ import os
 import numpy as np
 from PySide6.QtWidgets import QMessageBox
 from PySide6.QtCore import Qt
+from scripts.services.plot_spec_service import build_plot_spec_from_template
 from ..utils.curve_resolution import resolve_curve_row
 
 class SafeJSONEncoder(json.JSONEncoder):
@@ -35,10 +36,25 @@ class TemplateManager:
     """Handles serialization and deserialization of plot templates."""
 
     @staticmethod
-    def _find_curve_by_identity(db, curve_cfg, well_id=None):
+    def _get_well_curve_cache(db, candidate_well_id, cache):
+        if candidate_well_id not in cache:
+            curves = db.get_curves(candidate_well_id)
+            folders = db.get_folders(candidate_well_id)
+            folder_map = {fid: fname for fid, fname, _fpid in folders}
+            cache[candidate_well_id] = {
+                "curves": curves,
+                "folder_map": folder_map,
+                "curve_ids": {row[0] for row in curves},
+            }
+        return cache[candidate_well_id]
+
+    @staticmethod
+    def _find_curve_by_identity(db, curve_cfg, well_id=None, well_curve_cache=None):
         """Resolve a curve using stable identifiers first, then fall back to path/name matching."""
         if not db:
             return None
+        if well_curve_cache is None:
+            well_curve_cache = {}
 
         stored_well_id = curve_cfg.get("well_id")
         stored_curve_id = curve_cfg.get("curve_id")
@@ -63,10 +79,9 @@ class TemplateManager:
 
         if stored_curve_id is not None:
             for candidate_well_id in ordered_well_ids:
-                curves = db.get_curves(candidate_well_id)
-                for row in curves:
-                    if row[0] == stored_curve_id:
-                        return candidate_well_id, stored_curve_id
+                cache_entry = TemplateManager._get_well_curve_cache(db, candidate_well_id, well_curve_cache)
+                if stored_curve_id in cache_entry["curve_ids"]:
+                    return candidate_well_id, stored_curve_id
 
         lookup_names = []
         if folder and original_name:
@@ -79,9 +94,9 @@ class TemplateManager:
             lookup_names.append(display_title)
 
         for candidate_well_id in ordered_well_ids:
-            curves = db.get_curves(candidate_well_id)
-            folders = db.get_folders(candidate_well_id)
-            folder_map = {fid: fname for fid, fname, fpid in folders}
+            cache_entry = TemplateManager._get_well_curve_cache(db, candidate_well_id, well_curve_cache)
+            curves = cache_entry["curves"]
+            folder_map = cache_entry["folder_map"]
             for lookup_name in lookup_names:
                 resolved = resolve_curve_row(lookup_name, curves, folder_map)
                 if resolved.get("ok"):
@@ -103,90 +118,84 @@ class TemplateManager:
 
     @staticmethod
     def apply_template(log_widget, file_path, well_id=None):
-        """Loads a template and applies it to the current plot."""
+        """Backward-compatible thin wrapper. Prefer resolving to plot spec first."""
         try:
-            if not os.path.exists(file_path):
-                return False
-                
-            with open(file_path, 'r', encoding='utf-8') as f:
-                state = json.load(f)
-            
-            # 1. Clear existing tracks (except depth track if needed? Actually better to start fresh)
-            for track in list(log_widget.track_containers):
-                log_widget.remove_track(track)
-            
-            # 2. Apply Global Settings
-            log_widget.set_horizontal_scale(state.get("h_scale", 1.0))
-            
-            # [NEW] Restore Custom Depth Limits
-            c_min = state.get("custom_min_depth")
-            c_max = state.get("custom_max_depth")
-            if c_min is not None and c_max is not None:
-                log_widget.set_custom_depth_limits(c_min, c_max)
-            
-            # 3. Reconstruct Tracks
-            # Find the active well_id if any tracks were loaded before or from somewhere
-            # In PyLog, a plot widget might not be tied to ONE well, but usually is.
-            # We'll try to find curves matching by name in the current database.
-            
-            for track_state in state.get("tracks", []):
-                t_type = track_state.get("type", "data")
-                width = track_state.get("base_width", 200)
-                
-                if t_type == "depth":
-                    log_widget.add_depth_track()
-                    # Apply width if possible (LogTrackContainer doesn't easily expose direct width set after creation in a way that respects splitter)
-                    # _add_track_to_layout handles width
-                else:
-                    # Create Data Track
-                    from ..tracks.track_container import CurveTrackContainer, ImageTrackContainer, AccumulativeTrackContainer
-                    is_accum = track_state.get("is_accum_fill", False)
-                    has_image = any(c.get("is_image", False) for c in track_state.get("curves", []))
-                    if is_accum: container = AccumulativeTrackContainer(log_widget)
-                    elif has_image: container = ImageTrackContainer(log_widget)
-                    else: container = CurveTrackContainer(log_widget)
-
-                    container.track_name = track_state.get("name") # [NEW] Restore track name
-                    log_widget._add_track_to_layout(container, width=width)
-                    
-                    # Add Curves
-                    for curve_cfg in track_state.get("curves", []):
-                        name = curve_cfg.get("name")
-                        title = curve_cfg.get("title")
-                        if not name and not title:
-                            continue
-                        
-                        # Find matching curve in DB using stable identity first, then path/name fallback.
-                        matching_curve = TemplateManager._find_curve_by_identity(log_widget.db, curve_cfg, well_id=well_id)
-                        if matching_curve:
-                            w_id, c_id = matching_curve
-                            # Fetch and apply settings after data loads?
-                            # OR: Pass settings to async_fetch_data?
-                            # Let's modify async_fetch_data slightly or use a callback.
-                            # For simplicity, we'll store the desired settings and apply them in on_data_loaded.
-                            
-                            # Add a temporary property to the container to store template settings
-                            if not hasattr(container, '_template_curve_settings'):
-                                container._template_curve_settings = {}
-                            
-                            # [FIX] Use a list-based queue per curve name to handle duplicate mnemonics (e.g. dual CAL logs)
-                            # This prevents the second CAL from overwriting the first's template settings.
-                            container._template_curve_settings.setdefault(name, []).append(curve_cfg)
-                            
-                            
-                            # Apply track-level settings (like accumulative fill) 
-                            # We'll set this on the container so it's applied after curves are added
-                            if "is_accum_fill" in track_state:
-                                container.is_accum_fill = track_state["is_accum_fill"]
-                            
-                            log_widget.add_curve_to_track(container, w_id, c_id)
-            
-            return True
+            spec = TemplateManager.resolve_template_to_plot_spec(log_widget.db, file_path, well_id=well_id)
+            return bool(spec.get("tracks"))
         except Exception as e:
             print(f"Error applying template: {e}")
             import traceback
             traceback.print_exc()
             return False
+
+    @staticmethod
+    def load_template_spec(file_path):
+        if not file_path or not os.path.exists(file_path):
+            return {}
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
+    @staticmethod
+    def resolve_template_curve_groups(db, file_path, well_id=None):
+        """Resolve template tracks into grouped (well_id, curve_id) pairs."""
+        if not db or not os.path.exists(file_path):
+            return []
+
+        state = TemplateManager.load_template_spec(file_path)
+
+        well_curve_cache = {}
+        load_groups = []
+
+        for track_state in state.get("tracks", []):
+            if track_state.get("type", "data") == "depth":
+                continue
+
+            resolved_curves = []
+            for curve_cfg in track_state.get("curves", []):
+                name = curve_cfg.get("name")
+                title = curve_cfg.get("title")
+                if not name and not title:
+                    continue
+
+                matching_curve = TemplateManager._find_curve_by_identity(
+                    db,
+                    curve_cfg,
+                    well_id=well_id,
+                    well_curve_cache=well_curve_cache,
+                )
+                if matching_curve:
+                    resolved_curves.append(matching_curve)
+
+            if resolved_curves:
+                load_groups.append(resolved_curves)
+
+        return load_groups
+
+    @staticmethod
+    def resolve_template_curve_items(db, file_path, well_id=None):
+        """Resolve template curves into flat quick-plot style item payloads."""
+        items = []
+        for group in TemplateManager.resolve_template_curve_groups(db, file_path, well_id=well_id):
+            for resolved_well_id, curve_id in group:
+                items.append({
+                    "type": "curve",
+                    "well_id": resolved_well_id,
+                    "id": curve_id,
+                    "db_path": getattr(db, "db_path", None),
+                })
+        return items
+
+    @staticmethod
+    def resolve_template_to_plot_spec(db, file_path, well_id=None):
+        template_state = TemplateManager.load_template_spec(file_path)
+        if not template_state:
+            return {"db_path": getattr(db, "db_path", None), "well_id": well_id, "tracks": []}
+        return build_plot_spec_from_template(
+            template_state,
+            db,
+            well_id,
+            resolve_curve_fn=TemplateManager._find_curve_by_identity,
+        )
 
     @staticmethod
     def find_curve_by_name(db, name, well_id=None):

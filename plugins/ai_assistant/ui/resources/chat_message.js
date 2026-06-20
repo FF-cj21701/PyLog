@@ -48,7 +48,7 @@ function parseToolCalls(content) {
 
 
         // Append a message to the chat view
-        function appendMessage(role, content, timestamp, reasoning = null, tools = null, summary = null, processLogs = null, steps = null, isHtml = false) {
+        function appendMessage(role, content, timestamp, reasoning = null, tools = null, summary = null, processLogs = null, steps = null, isHtml = false, cards = null) {
             dehydrateOldMessages(15);
             const msgWrapper = document.createElement('div');
             msgWrapper.className = role === 'system' ? 'system-message' : `message ${role}-message`;
@@ -72,10 +72,10 @@ function parseToolCalls(content) {
                 window.__activeAiMessageEl = msgWrapper;
                 bubble.dataset.runState = 'streaming';
                 bubble.dataset.finalContent = content || '';
-                bubble._latestRenderData = { reasoning, tools, summary, processLogs, steps };
+                bubble._latestRenderData = { reasoning, tools, summary, processLogs, steps, cards };
                 const { answerBlock, contentDiv } = ensureAiBubbleStructure(bubble);
                 contentDiv.innerHTML = processMessageContent(content, isHtml);
-                renderAiDetails(bubble, reasoning, tools, summary, processLogs, steps, content || '');
+                renderAiDetails(bubble, reasoning, tools, summary, processLogs, steps, content || '', cards);
                 answerBlock.classList.remove('is-hidden');
             } else {
                 const contentDiv = document.createElement('div');
@@ -88,15 +88,15 @@ function parseToolCalls(content) {
         }
 
         // Update the active AI message
-        function updateLastMessage(content, reasoning = null, tools = null, summary = null, processLogs = null, steps = null) {
+        function updateLastMessage(content, reasoning = null, tools = null, summary = null, processLogs = null, steps = null, cards = null) {
             const lastMsg = getActiveAiMessage();
             if (!lastMsg || !lastMsg.classList.contains('ai-message')) return;
             const bubble = lastMsg.querySelector('.bubble');
             if (!bubble) return;
             bubble.dataset.finalContent = content || '';
-            bubble._latestRenderData = { reasoning, tools, summary, processLogs, steps };
+            bubble._latestRenderData = { reasoning, tools, summary, processLogs, steps, cards };
             const { answerBlock, contentDiv } = ensureAiBubbleStructure(bubble);
-            renderAiDetails(bubble, reasoning, tools, summary, processLogs, steps, content || '');
+            renderAiDetails(bubble, reasoning, tools, summary, processLogs, steps, content || '', cards);
             const runState = bubble.dataset.runState || 'streaming';
             const hasVisibleProcessContent =
                 (Array.isArray(steps) && steps.length > 0) ||

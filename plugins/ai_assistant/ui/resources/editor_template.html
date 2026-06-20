@@ -146,6 +146,7 @@
 <body>
     <div id="editor-container">
         <div id="editor"></div>
+    </div>
 
     <!-- Load Ace Editor from local resources -->
     <script src="ace.js"></script>
@@ -303,44 +304,33 @@
         window._previewMarkers = [];
         window._originalContent = "";
         window._isPreviewActive = false;
+        window._previewSession = null;
+
+        window.startPreviewSession = function(payload) {
+            if (!editor) return false;
+            payload = payload || {};
+            window._previewSession = payload;
+            window._originalContent = payload.base_code || "";
+            window._isPreviewActive = true;
+
+            window.clearPreviewMarkers();
+            window.setContent(payload.draft_code || "", true);
+            editor.selection.clearSelection();
+            return true;
+        };
 
         window.showPreview = function(draftContent, diffBlocks) {
-            if (!editor) return false;
-            
-            // Backup original content
-            if (!window._isPreviewActive) {
-                window._originalContent = editor.getValue();
-            }
-            
-            window._isPreviewActive = true;
-            
-            // Set draft content via undoable replacement
-            var session = editor.session;
-            var Range = ace.require('ace/range').Range;
-            var range = new Range(0, 0, session.getLength(), 1);
-            session.replace(range, draftContent);
-            editor.selection.clearSelection(); // Prevent select-all ghosting
-            
-            // Markers logic
-            window.clearPreviewMarkers();
-            
-            if (diffBlocks && Array.isArray(diffBlocks)) {
-                diffBlocks.forEach(function(block) {
-                    if (block.type === 'add') {
-                        var markerId = session.addMarker(new Range(block.start_line, 0, block.end_line, 1), 'diff-add', "fullLine");
-                        window._previewMarkers.push(markerId);
-                        for (var i = block.start_line; i <= block.end_line; i++) {
-                            session.addGutterDecoration(i, 'diff-add-gutter');
-                        }
-                    } else if (block.type === 'delete-point') {
-                        var markerId = session.addMarker(new Range(block.line, 0, block.line, 1), 'diff-delete-point', "fullLine");
-                        window._previewMarkers.push(markerId);
-                        session.addGutterDecoration(block.line, 'diff-delete-gutter');
-                    }
-                });
-            }
-            
-            return true;
+            return window.startPreviewSession({
+                base_code: window._isPreviewActive ? window._originalContent : (editor ? editor.getValue() : ""),
+                draft_code: draftContent || "",
+                diff_blocks: diffBlocks || [],
+                diff_text: "",
+                source: "compat"
+            });
+        };
+
+        window.showPreviewView = function(mode) {
+            return false;
         };
 
         window.clearPreviewMarkers = function() {
@@ -363,6 +353,8 @@
             window.clearPreviewMarkers();
             window._isPreviewActive = false;
             window._originalContent = "";
+            window._previewSession = null;
+            window.clearPreviewSession(false);
             
             if (window.pyBridge) {
                 window.pyBridge.onTextChanged(editor.getValue());
@@ -380,9 +372,20 @@
                 
                 window._isPreviewActive = false;
                 window._originalContent = "";
+                window._previewSession = null;
+                window.clearPreviewSession(false);
                 return true;
             }
             return false;
+        };
+
+        window.clearPreviewSession = function(clearEditorState) {
+            if (clearEditorState) {
+                window.clearPreviewMarkers();
+                window._originalContent = "";
+                window._isPreviewActive = false;
+                window._previewSession = null;
+            }
         };
 
         window.setTheme = function(theme) {

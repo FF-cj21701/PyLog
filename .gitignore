@@ -38,7 +38,7 @@ env/
 *.key
 
 # === 数据文件 (全部排除) ===
-data/
+/data/
 wellData/
 demo.db
 
@@ -46,9 +46,9 @@ demo.db
 docs/*
 !docs/CHANGELOG.md
 !docs/Fig1.png
+!docs/CODEX_DESIGN_MIGRATION_PLAN.md
 
 # === 测试与脚本 (暂不公开) ===
-tests/
 scripts_user/*
 !scripts_user/README.md
 examples/*
@@ -99,7 +99,7 @@ scripts/build_pyinstaller.py
 PyLog.spec
 
 # === 根目录临时文件 ===
-test_*.py
-test_*.txt
+/test_*.py
+/test_*.txt
 debug_*.py
 /*.png

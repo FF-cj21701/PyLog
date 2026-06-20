@@ -45,7 +45,7 @@ def list_project_wells(
     data_dir: Optional[Union[str, Path]] = None,
 ):
     if db_path:
-        db = DBManager(db_path)
+        db = DBManager(db_path, ensure_schema=False)
         return {"ok": True, "wells": [(wid, name, db_path) for (wid, name) in db.get_wells()]}
 
     all_wells = []
@@ -63,7 +63,7 @@ def list_project_wells(
     if not all_wells:
         for path in list_project_db_files(data_dir=data_dir):
             try:
-                temp_db = DBManager(path)
+                temp_db = DBManager(path, ensure_schema=False)
                 for wid, wname in temp_db.get_wells():
                     all_wells.append((wid, wname, path))
             except Exception:
@@ -87,7 +87,7 @@ def resolve_optional_db_path_for_well(
 
     if active_db_path:
         try:
-            active_db = DBManager(active_db_path)
+            active_db = DBManager(active_db_path, ensure_schema=False)
             well_id, _error_info = resolve_well_id(active_db, well)
             if well_id is not None:
                 return active_db_path, None
@@ -98,7 +98,7 @@ def resolve_optional_db_path_for_well(
     candidate_db_paths = list_project_db_files(data_dir=data_dir)
     for candidate in candidate_db_paths:
         try:
-            db = DBManager(candidate)
+            db = DBManager(candidate, ensure_schema=False)
             well_id, _error_info = resolve_well_id(db, well)
             if well_id is not None:
                 matches.append(candidate)
@@ -142,7 +142,7 @@ def resolve_well_context(
     if resolution_error:
         return None, resolution_error
 
-    db = DBManager(resolved_db_path)
+    db = DBManager(resolved_db_path, ensure_schema=False)
     resolved_well_id, error_info = resolve_well_id(db, well)
     if resolved_well_id is None:
         return None, {"ok": False, **error_info}

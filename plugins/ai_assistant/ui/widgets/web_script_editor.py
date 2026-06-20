@@ -3,6 +3,9 @@ import os
 import json
 import uuid
 import hashlib
+import difflib
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 from PySide6.QtWebChannel import QWebChannel
@@ -11,6 +14,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QToolBar, QSplitter,
                                QPlainTextEdit, QApplication, QInputDialog, QFileDialog)
 from PySide6.QtGui import QFont, QAction
 from scripts.ui.base_dialog import ThemeDialog
+from ..review_registry import open_review_page, register_review_record
 
 class LoggedPage(QWebEnginePage):
     """Custom QWebEnginePage to forward JS console messages to Python logger."""
@@ -55,6 +59,92 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QTextEdit, QLabel, QPushBut
                                QHBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QTabWidget)
 import numpy as np
 import inspect
+
+
+@dataclass
+class PreviewSession:
+    session_id: str
+    editor_id: str
+    script_path: str | None
+    base_code: str
+    draft_code: str
+    diff_blocks: list
+    source: str
+    created_at: str
+    diff_text: str = ""
+    review_mode: str = "pending"
+    saved_to_disk: bool = False
+
+    def to_frontend_payload(self):
+        return {
+            "session_id": self.session_id,
+            "editor_id": self.editor_id,
+            "script_path": self.script_path,
+            "base_code": self.base_code,
+            "draft_code": self.draft_code,
+            "diff_blocks": self.diff_blocks,
+            "diff_text": self.diff_text,
+            "source": self.source,
+            "created_at": self.created_at,
+            "review_mode": self.review_mode,
+            "saved_to_disk": self.saved_to_disk,
+        }
+
+    @property
+    def base_hash(self):
+        return hashlib.sha1(self.base_code.encode("utf-8")).hexdigest()
+
+    @property
+    def draft_hash(self):
+        return hashlib.sha1(self.draft_code.encode("utf-8")).hexdigest()
+
+
+class ScriptReviewDialog(ThemeDialog):
+    """Review an AI draft after it has been applied to the editor workspace."""
+
+    SAVE_DRAFT = 1
+    DISCARD_DRAFT = 2
+
+    def __init__(self, session: PreviewSession, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("AI Review")
+        self.resize(980, 720)
+
+        layout = QVBoxLayout()
+        self.setLayout(layout)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        title = QLabel("AI has already applied these changes to the editor workspace. You can review the original content, diff, and current draft here.")
+        title.setWordWrap(True)
+        layout.addWidget(title)
+
+        tabs = QTabWidget()
+        layout.addWidget(tabs, 1)
+        for label, content in (
+            ("Original", session.base_code),
+            ("Diff", session.diff_text or ""),
+            ("Draft", session.draft_code),
+        ):
+            editor = QTextEdit()
+            editor.setReadOnly(True)
+            editor.setFont(QFont("Consolas", 10))
+            editor.setPlainText(content or "")
+            tabs.addTab(editor, label)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        close_btn = QPushButton("关闭")
+        discard_btn = QPushButton("放弃修改")
+        save_btn = QPushButton("保存修改")
+        buttons.addWidget(close_btn)
+        buttons.addWidget(discard_btn)
+        buttons.addWidget(save_btn)
+        layout.addLayout(buttons)
+
+        close_btn.clicked.connect(self.reject)
+        discard_btn.clicked.connect(lambda: self.done(self.DISCARD_DRAFT))
+        save_btn.clicked.connect(lambda: self.done(self.SAVE_DRAFT))
 
 
 class VariableInspectorDialog(ThemeDialog):
@@ -210,8 +300,9 @@ class WebScriptEditor(QWidget):
         
         self.script_path = None # Store the path if opened from/saved to a file
         self.editor_id = str(uuid.uuid4())
-        self._preview_original_code = None
-        self._preview_source = "none"
+        self._preview_session = None
+        self._last_review_record = None
+        self._pending_review_seed = None
         
         # Theme and JS state
         self._current_theme = "light"
@@ -253,6 +344,13 @@ class WebScriptEditor(QWidget):
         format_action = QAction("Format", self)
         format_action.triggered.connect(self.format_code)
         self.toolbar.addAction(format_action)
+
+        self.toolbar.addSeparator()
+
+        self.review_action = QAction("Review", self)
+        self.review_action.setEnabled(False)
+        self.review_action.triggered.connect(self.open_review_dialog)
+        self.toolbar.addAction(self.review_action)
 
         self.toolbar.addSeparator()
 
@@ -484,7 +582,10 @@ class WebScriptEditor(QWidget):
         return self.bridge._content
 
     def is_preview_active(self):
-        return self._preview_original_code is not None or self.preview_bar.isVisible()
+        return self._preview_session is not None
+
+    def has_review_record(self):
+        return self._last_review_record is not None
 
     def has_unsaved_changes(self):
         current_code = self.get_code()
@@ -498,7 +599,9 @@ class WebScriptEditor(QWidget):
 
     def get_script_state(self):
         current_code = self.get_code()
-        base_code = self._preview_original_code
+        session = self._preview_session
+        base_code = session.base_code if session else None
+        draft_code = session.draft_code if session else current_code
         if base_code is None and self.script_path and os.path.exists(self.script_path):
             try:
                 base_code = open(self.script_path, "r", encoding="utf-8").read()
@@ -509,80 +612,194 @@ class WebScriptEditor(QWidget):
 
         current_hash = hashlib.sha1(current_code.encode("utf-8")).hexdigest()
         base_hash = hashlib.sha1(base_code.encode("utf-8")).hexdigest()
+        draft_hash = hashlib.sha1(draft_code.encode("utf-8")).hexdigest()
         return {
             "editor_id": self.editor_id,
             "script_path": self.script_path,
             "is_preview_active": self.is_preview_active(),
+            "has_review_record": self.has_review_record(),
             "has_unsaved_changes": self.has_unsaved_changes(),
-            "preview_source": self._preview_source if self.is_preview_active() else "none",
+            "preview_source": session.source if session else "none",
+            "preview_session_id": session.session_id if session else None,
             "base_hash": base_hash,
+            "draft_hash": draft_hash,
             "working_hash": current_hash,
             "should_run_from": "editor",
             "should_save_to": self.script_path,
+            "last_review_session_id": self._last_review_record.session_id if self._last_review_record else None,
+            "last_review_source": self._last_review_record.source if self._last_review_record else "none",
+            "last_review_created_at": self._last_review_record.created_at if self._last_review_record else None,
+            "last_review_saved_to_disk": bool(self._last_review_record.saved_to_disk) if self._last_review_record else False,
+            "last_review_mode": self._last_review_record.review_mode if self._last_review_record else "none",
+            "last_review_diff_stats": self._compute_diff_stats(
+                self._last_review_record.base_code,
+                self._last_review_record.draft_code,
+            ) if self._last_review_record else None,
         }
 
     def _on_js_preview_accepted(self):
         """Triggered from JS when preview is successfully accepted by user or API."""
-        self._preview_original_code = None
-        self._preview_source = "none"
-        self.preview_bar.hide()
-        # Optionally auto-save after accepting preview if file exists
-        if hasattr(self, 'script_path') and self.script_path:
-            # Add a small delay so textChanged signal properly finishes
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(100, lambda: self.save_code(self.script_path))
+        self._clear_preview_session(save=True)
 
     def accept_preview(self):
-        """Accept preview manually via UI."""
-        self._preview_original_code = None
-        self._preview_source = "none"
-        if self.web_view.page():
-            self.web_view.page().runJavaScript("window.acceptPreview()")
-        self.preview_bar.hide()
+        """Save the AI draft and clear the pending review session."""
+        if self._preview_session:
+            self.bridge._content = self._preview_session.draft_code
+            if self.web_view.page():
+                escaped = json.dumps(self._preview_session.draft_code)
+                self.web_view.page().runJavaScript(f"if(window.setContent) window.setContent({escaped}, true);")
+        self._clear_preview_session(save=True)
         
     def reject_preview(self):
-        """Reject preview manually via UI."""
-        self._preview_original_code = None
-        self._preview_source = "none"
-        if self.web_view.page():
-            self.web_view.page().runJavaScript("window.rejectPreview()")
-        self.preview_bar.hide()
+        """Discard the AI draft, restore the original content, and clear review state."""
+        base_code = self._preview_session.base_code if self._preview_session else None
+        if base_code is not None:
+            self.bridge._content = base_code
+            if self.web_view.page():
+                escaped = json.dumps(base_code)
+                self.web_view.page().runJavaScript(f"if(window.setContent) window.setContent({escaped}, true); else if(window.rejectPreview) window.rejectPreview();")
+        self._clear_preview_session(save=False)
+
+    def open_review_dialog(self):
+        """Open the most recent persisted AI change review."""
+        if not self._last_review_record:
+            self.output.setPlainText("No recent AI changes to review.")
+            return False
+
+        payload = self._last_review_record.to_frontend_payload()
+        register_review_record(payload)
+        page = open_review_page(self._last_review_record.script_path, parent=self, payload=payload)
+        return page
+
+    def _handle_review_page_action(self, page, action, payload):
+        if getattr(page, "page_subwindow", None):
+            page.page_subwindow.close()
 
     def set_preview_code(self, new_code):
-        """Compute diff and send preview command to Ace editor"""
-        current_code = self.get_code()
-        # Maintain the original baseline state across multiple preview edits
-        if getattr(self, '_preview_original_code', None) is None:
-            self._preview_original_code = current_code
-        self._preview_source = "ai_preview"
-            
-        import difflib
-        sm = difflib.SequenceMatcher(None, self._preview_original_code.splitlines(), new_code.splitlines())
-        
-        diff_blocks = []
-        for tag, i1, i2, j1, j2 in sm.get_opcodes():
-            # In a unified-style single-pane view where we set the NEW code, 
-            # we should only highlight what's NEWly present (j1:j2).
-            # 'remove' (i1:i2) means code that is GONE, so highlighting it on the NEW code 
-            # at indices j1:j2 (which are the same for replacements) causes muddy overlap.
-            if tag in ('replace', 'insert'):
-                diff_blocks.append({"type": "add", "start_line": j1, "end_line": j2 - 1})
-            elif tag == 'delete':
-                # For deletions, we mark the 'insertion point' where code used to be
-                # We'll use a special type 'delete-point' for JS to handle specially (e.g. underline)
-                # j1 and j2 are the same for deletions. We mark the line ABOVE j1.
-                diff_blocks.append({"type": "delete-point", "line": j1})
-                
-        # Handle empty case
-        if not new_code and current_code:
-            diff_blocks = [{"type": "add", "start_line": 0, "end_line": 0}] # Mark something or handle empty
-                
-        # Send to JS wrapper
-        js_cmd = f"window.showPreview({json.dumps(new_code)}, {json.dumps(diff_blocks)})"
+        """Start or update an explicit preview session."""
+        return self.start_preview_session(new_code, source="ai_preview")
+
+    def start_preview_session(self, draft_code, source="ai_preview"):
+        base_code = self._preview_session.base_code if self._preview_session else self.get_code()
+        diff_blocks = self._build_preview_diff_blocks(base_code, draft_code)
+        diff_text = self._build_preview_diff_text(base_code, draft_code)
+        self._preview_session = PreviewSession(
+            session_id=str(uuid.uuid4()),
+            editor_id=self.editor_id,
+            script_path=self.script_path,
+            base_code=base_code,
+            draft_code=draft_code or "",
+            diff_blocks=diff_blocks,
+            diff_text=diff_text,
+            source=source,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        self.bridge._content = self._preview_session.draft_code
+        payload = self._preview_session.to_frontend_payload()
+        js_cmd = f"window.startPreviewSession({json.dumps(payload)})"
         if self.web_view.page():
             self.web_view.page().runJavaScript(js_cmd)
-        
-        self.preview_bar.show()
+        self.preview_bar.hide()
+        if hasattr(self, "review_action"):
+            self.review_action.setEnabled(False)
+        return payload
+
+    def _clear_preview_session(self, *, save):
+        if save and self._preview_session:
+            self._pending_review_seed = self._preview_session
+        self._preview_session = None
+        self.preview_bar.hide()
+        if self.web_view.page():
+            self.web_view.page().runJavaScript("if(window.clearPreviewSession) window.clearPreviewSession(true);")
+        if save and hasattr(self, 'script_path') and self.script_path:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(100, lambda: self.save_code(self.script_path))
+        elif hasattr(self, "review_action"):
+            self.review_action.setEnabled(bool(self._last_review_record))
+
+    def _persist_review_record(self, session, script_path=None):
+        if not session:
+            return None
+        record = PreviewSession(
+            session_id=session.session_id,
+            editor_id=self.editor_id,
+            script_path=script_path or session.script_path or self.script_path,
+            base_code=session.base_code,
+            draft_code=session.draft_code,
+            diff_blocks=list(session.diff_blocks or []),
+            diff_text=session.diff_text or "",
+            source=session.source,
+            created_at=session.created_at,
+            review_mode="saved",
+            saved_to_disk=True,
+        )
+        self._last_review_record = record
+        register_review_record(record.to_frontend_payload())
+        if hasattr(self, "review_action"):
+            self.review_action.setEnabled(True)
+        return record
+
+    @staticmethod
+    def _build_preview_diff_text(base_code, draft_code):
+        return "\n".join(
+            difflib.unified_diff(
+                (base_code or "").splitlines(),
+                (draft_code or "").splitlines(),
+                fromfile="Original",
+                tofile="Draft",
+                lineterm="",
+            )
+        )
+
+    @staticmethod
+    def _build_preview_diff_blocks(base_code, draft_code):
+        sm = difflib.SequenceMatcher(None, (base_code or "").splitlines(), (draft_code or "").splitlines())
+        diff_blocks = []
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag == "equal":
+                continue
+            block = {
+                "type": tag,
+                "base_start": i1,
+                "base_end": i2 - 1,
+                "draft_start": j1,
+                "draft_end": j2 - 1,
+                "base_lines": (base_code or "").splitlines()[i1:i2],
+                "draft_lines": (draft_code or "").splitlines()[j1:j2],
+            }
+            if tag in ("replace", "insert") and j1 < j2:
+                block["marker_type"] = "add"
+                block["start_line"] = j1
+                block["end_line"] = j2 - 1
+            elif tag == "delete":
+                block["marker_type"] = "delete-point"
+                block["line"] = j1
+            diff_blocks.append(block)
+        if not draft_code and base_code:
+            diff_blocks.append({
+                "type": "delete",
+                "marker_type": "delete-point",
+                "line": 0,
+                "base_start": 0,
+                "base_end": len((base_code or "").splitlines()) - 1,
+                "draft_start": 0,
+                "draft_end": -1,
+                "base_lines": (base_code or "").splitlines(),
+                "draft_lines": [],
+            })
+        return diff_blocks
+
+    @staticmethod
+    def _compute_diff_stats(base_code, draft_code):
+        added = 0
+        removed = 0
+        matcher = difflib.SequenceMatcher(None, (base_code or "").splitlines(), (draft_code or "").splitlines())
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag in ("replace", "insert"):
+                added += max(0, j2 - j1)
+            if tag in ("replace", "delete"):
+                removed += max(0, i2 - i1)
+        return {"added": added, "removed": removed}
 
     def on_web_view_loaded(self, ok):
         """Handle web view load finished"""
@@ -869,17 +1086,24 @@ class WebScriptEditor(QWidget):
     def _perform_save(self, path, code):
         """Internal helper to write code to disk."""
         try:
+            review_seed = self._preview_session or self._pending_review_seed
             with open(path, "w", encoding="utf-8") as f:
                 f.write(code)
             self.script_path = path
             self.output.setPlainText(f"Saved to {path}")
-            
-            # If we saved while in preview mode, the disk now matches the preview
-            self._preview_original_code = None
-            self._preview_source = "none"
+
+            # Preserve a persistent review record for the latest AI-authored change.
+            if review_seed:
+                self._persist_review_record(review_seed, script_path=path)
+            self._pending_review_seed = None
+
+            # If we saved while in preview mode, the disk now matches the preview.
+            self._preview_session = None
             self.preview_bar.hide()
+            if hasattr(self, "review_action"):
+                self.review_action.setEnabled(bool(self._last_review_record))
             if self.web_view.page():
-                self.web_view.page().runJavaScript("if(window.clearPreviewMarkers) window.clearPreviewMarkers(); window._isPreviewActive = false;")
+                self.web_view.page().runJavaScript("if(window.clearPreviewSession) window.clearPreviewSession(true); else if(window.clearPreviewMarkers) window.clearPreviewMarkers();")
             
             # Update window title
             main_window = self.window()

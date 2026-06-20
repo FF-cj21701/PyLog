@@ -113,6 +113,7 @@ class MultiCurveDataFetchWorker(QThread):
                 return
 
             data_arr = np.asarray(c_data)
+            curve_meta = local_db.get_curve_metadata(self.curve_id)
 
             curves = local_db.get_curves(self.well_id)
             source_folder_id = None
@@ -170,6 +171,7 @@ class MultiCurveDataFetchWorker(QThread):
                 "curve_id": self.curve_id,
                 "well_name": self.well_name,
                 "curve_name": self.curve_name,
+                "unit": curve_meta[2] if curve_meta else "",
                 "folder_path": folder_path,
                 "depth": depth_arr,
                 "data": data_arr,
@@ -329,6 +331,16 @@ class MultiCurveTableModel(QAbstractTableModel):
         row = index.row()
         col = index.column()
 
+        if role == Qt.EditRole:
+            if col <= 1:
+                return None
+            column = self.columns[col - 2]
+            values = column.get("values", [])
+            val = values[row] if row < len(values) else None
+            if val is None or is_invalid_plot_value(val):
+                return ""
+            return str(val)
+
         if role == Qt.DisplayRole:
             cache_key = (row, col)
             if cache_key in self._cache:
@@ -365,6 +377,46 @@ class MultiCurveTableModel(QAbstractTableModel):
             return QBrush(QColor(app_config.get_theme_color("text_main")))
 
         return None
+
+    def flags(self, index):
+        if not index.isValid():
+            return Qt.NoItemFlags
+        flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+        if index.column() > 1:
+            flags |= Qt.ItemIsEditable
+        return flags
+
+    def setData(self, index, value, role=Qt.EditRole):
+        if role != Qt.EditRole or not index.isValid() or index.column() <= 1:
+            return False
+
+        row = index.row()
+        col = index.column() - 2
+        if row < 0 or col < 0 or col >= len(self.columns):
+            return False
+
+        text = "" if value is None else str(value).strip()
+        if text == "":
+            normalized = None
+        else:
+            try:
+                normalized = float(text)
+            except (TypeError, ValueError):
+                return False
+
+        values = self.columns[col].setdefault("values", [])
+        while len(values) <= row:
+            values.append(None)
+        current = values[row]
+        if current is None and normalized is None:
+            return False
+        if current is not None and normalized is not None and float(current) == float(normalized):
+            return False
+
+        values[row] = normalized
+        self._cache.pop((row, index.column()), None)
+        self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
+        return True
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if orientation == Qt.Horizontal and role == Qt.ToolTipRole:

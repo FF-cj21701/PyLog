@@ -8,9 +8,10 @@ from ..utils.logger import logger
 from ..utils.plot_value_utils import sanitize_invalid_plot_values
 
 class DBManager:
-    def __init__(self, db_path=None):
+    def __init__(self, db_path=None, ensure_schema=True):
         self.db_path = db_path
-        if self.db_path:
+        self.ensure_schema = ensure_schema
+        if self.db_path and self.ensure_schema:
             self.init_db()
 
     def init_db(self):

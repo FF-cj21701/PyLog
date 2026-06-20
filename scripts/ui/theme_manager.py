@@ -495,6 +495,42 @@ class ThemeManager:
             QWidget#curveTableToolbar QPushButton {{
                 min-width: 96px;
             }}
+            QWidget#dataViewerActionPill {{
+                background-color: rgba(50, 50, 50, 160);
+                border-radius: 10px;
+                border: 1px solid rgba(255, 255, 255, 120);
+            }}
+            QWidget#dataViewerActionPill QPushButton {{
+                min-width: 56px;
+                padding: 3px 10px;
+                border-radius: 8px;
+                background: transparent;
+                border: none;
+                color: #FFFFFF;
+                font-weight: bold;
+            }}
+            QWidget#dataViewerActionPill QPushButton:hover {{
+                background-color: rgba(255, 255, 255, 28);
+                border: none;
+            }}
+            QWidget#dataViewerActionPill QPushButton:pressed {{
+                background-color: rgba(255, 255, 255, 44);
+            }}
+            QWidget#dataViewerActionPill QPushButton:disabled {{
+                color: rgba(255, 255, 255, 130);
+                background: transparent;
+            }}
+            QWidget#dataViewerActionPill QPushButton:default {{
+                background-color: {c('primary')};
+                color: #FFFFFF;
+                border: none;
+            }}
+            QWidget#dataViewerActionPill QPushButton:default:hover {{
+                background-color: {c('primary_hover')};
+            }}
+            QWidget#dataViewerActionPill QPushButton:default:pressed {{
+                background-color: {c('primary_pressed')};
+            }}
             QPushButton:hover {{
                 background-color: {c('button_hover')};
                 border-color: {c('border_dark')};
@@ -523,6 +559,16 @@ class ThemeManager:
             QAbstractScrollArea > QWidget {{
                 background-color: {c('bg_pure')};
             }}
+            QWidget#workspaceLaunchpad {{
+                background: transparent;
+            }}
+            QWidget#workspaceLaunchTile {{
+                background: transparent;
+            }}
+            QLabel#workspaceLaunchTileTitle {{
+                color: {c('text_main')};
+                background: transparent;
+            }}
             QTableWidget, QTableView {{
                 background-color: {c('bg_pure')};
                 color: {c('text_main')};
@@ -543,6 +589,7 @@ class ThemeManager:
             QTableView::item:selected, QTableWidget::item:selected {{
                 background-color: {c('accent_light')};
                 color: {c('text_main')};
+                border: {table_frame_weight} solid {c('border_dark')};
             }}
             QHeaderView::section:horizontal {{
                 background-color: {c('explorer_header_bg')};

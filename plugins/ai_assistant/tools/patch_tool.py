@@ -4,6 +4,14 @@ import importlib
 from PySide6.QtCore import QEventLoop
 
 try:
+    from ..ai_core.file_editor import FileEditor
+except ImportError:
+    try:
+        from plugins.ai_assistant.ai_core.file_editor import FileEditor
+    except ImportError:
+        FileEditor = importlib.import_module("file_editor").FileEditor
+
+try:
     from .base_tool import BaseTool
     from .registry import register_tool
 except ImportError:
@@ -35,6 +43,13 @@ def _resolve_path(filepath):
         return filepath
     root = PathResolver.get_project_root() if PathResolver else os.getcwd()
     return os.path.join(root, filepath)
+
+
+def _get_file_editor(filepath):
+    root = PathResolver.get_project_root() if PathResolver else os.getcwd()
+    # Keep the existing tool behavior compatible for now; stricter whitelist
+    # enforcement will be introduced as a separate policy migration step.
+    return FileEditor(project_root=root, allowed_roots=[])
 
 
 def _fetch_script_state(tool_executor, editor_id=None, script_path=None):
@@ -158,44 +173,15 @@ class ApplyPatchTool(BaseTool):
         if not hunks:
             return {"ok": False, "error": "hunks are required"}
 
-        resolved = _resolve_path(filepath)
-        exists = os.path.exists(resolved)
-        if not exists and not create_if_missing:
-            return {"ok": False, "error": f"File not found: {resolved}"}
-
         try:
-            if exists:
-                with open(resolved, "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read()
-            else:
-                content = ""
+            editor = _get_file_editor(filepath)
+            prepared = editor.prepare_patch(filepath, hunks, create_if_missing=create_if_missing)
+            if not prepared.ok:
+                return prepared.to_dict()
 
-            applied = 0
-            for idx, hunk in enumerate(hunks, start=1):
-                old_string = hunk.get("old_string", "")
-                new_string = hunk.get("new_string", "")
-                replace_all = bool(hunk.get("replace_all"))
-
-                if not exists and create_if_missing and len(hunks) == 1 and old_string == "":
-                    content = new_string
-                    applied += 1
-                    continue
-
-                if old_string not in content:
-                    return {
-                        "ok": False,
-                        "error": f"Hunk {idx} old_string not found in file",
-                        "filepath": resolved,
-                        "applied_hunks": applied,
-                    }
-
-                if replace_all:
-                    occurrences = content.count(old_string)
-                    content = content.replace(old_string, new_string)
-                    applied += occurrences
-                else:
-                    content = content.replace(old_string, new_string, 1)
-                    applied += 1
+            resolved = prepared.filepath
+            exists = bool(prepared.metadata.get("existed"))
+            content = prepared.metadata.get("content", "")
 
             preview_result = None
             if exists and self.tool_executor and str(resolved).lower().endswith(".py"):
@@ -204,22 +190,19 @@ class ApplyPatchTool(BaseTool):
                 return {
                     "ok": True,
                     "filepath": resolved,
-                    "applied_hunks": applied,
+                    "applied_hunks": prepared.applied_hunks,
                     "previewed": True,
                     "editor_id": preview_result.get("editor_id"),
                     "script_path": preview_result.get("script_path"),
                     "message": f"Preview mode activated for patch on {resolved}",
                 }
 
-            os.makedirs(os.path.dirname(resolved), exist_ok=True)
-            with open(resolved, "w", encoding="utf-8") as f:
-                f.write(content)
+            result = editor.apply_patch(filepath, hunks, create_if_missing=create_if_missing)
+            payload = result.to_dict()
+            if result.ok:
+                payload["message"] = result.summary or f"Applied patch to {resolved}"
 
-            return {
-                "ok": True,
-                "filepath": resolved,
-                "applied_hunks": applied,
-                "message": f"Applied patch to {resolved}",
-            }
+            return payload
         except Exception as e:
+            resolved = _resolve_path(filepath)
             return {"ok": False, "error": str(e), "filepath": resolved}

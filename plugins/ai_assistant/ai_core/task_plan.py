@@ -59,7 +59,29 @@ class TaskPlanner:
         history: Optional[Sequence[Sequence[str]]] = None,
         state=None,
     ) -> TaskPlan:
-        """Create one lightweight default plan for all task types."""
+        """Create a lightweight default plan matched to the task domain."""
+        text = str(task or "").lower()
+        if self._looks_like_geoscience_script_task(text):
+            return self._build_plan(
+                "geoscience_script",
+                [
+                    ("inspect", "Inspect PyLog context and relevant APIs"),
+                    ("script_edit", "Write or update the PyLog script"),
+                    ("run", "Run the script or preview execution"),
+                    ("verify", "Verify results and outputs"),
+                    ("complete", "Wrap up"),
+                ],
+            )
+        if self._looks_like_code_task(text):
+            return self._build_plan(
+                "code",
+                [
+                    ("inspect", "Inspect the relevant code"),
+                    ("implement", "Make the code change"),
+                    ("verify", "Verify the change"),
+                    ("complete", "Wrap up"),
+                ],
+            )
         return self._build_plan(
             "task_plan",
             [
@@ -195,6 +217,16 @@ class TaskPlanner:
             for index, (kind, title) in enumerate(step_defs)
         ]
         return TaskPlan(domain=domain, steps=steps)
+
+    @staticmethod
+    def _looks_like_geoscience_script_task(text: str) -> bool:
+        if "script" not in text and "python" not in text:
+            return False
+        return any(token in text for token in ("pylog", "well", "curve", "plot", "log"))
+
+    @staticmethod
+    def _looks_like_code_task(text: str) -> bool:
+        return any(token in text for token in ("code", "bug", "fix", "parser", "render", "refactor"))
 
 
 def find_plan_step_id_for_tool(plan_steps: Iterable[Dict[str, object]], tool_name: str, tool=None) -> Optional[str]:

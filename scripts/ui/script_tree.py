@@ -56,6 +56,7 @@ class ScriptExplorerTree(QTreeWidget):
     script_renamed = Signal(str, str)  # (old_path, new_path)
     script_deleted = Signal(str)  # (path)
     script_open_requested = Signal(str)  # (path)
+    file_preview_requested = Signal(str)  # (path)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -97,7 +98,7 @@ class ScriptExplorerTree(QTreeWidget):
             if data:
                 if data.get('type') == 'folder':
                     parent_path = data.get('path')
-                else: # script
+                else:
                     parent_path = os.path.dirname(data.get('path'))
         
         new_folder_action.triggered.connect(lambda: self.create_new_folder(parent_path))
@@ -133,11 +134,14 @@ class ScriptExplorerTree(QTreeWidget):
             copy_act = menu.addAction("Copy")
             copy_act.triggered.connect(lambda: self.handle_copy(items))
             
-            if data.get('type') == 'script':
+            if data.get('type') in {'script', 'file'}:
                 # Open in editor action
                 menu.addSeparator()
                 open_action = menu.addAction("Open in Editor")
                 open_action.triggered.connect(lambda: self.open_script_in_editor(path))
+                if path.lower().endswith((".html", ".htm")):
+                    preview_action = menu.addAction("Preview in PyLog")
+                    preview_action.triggered.connect(lambda: self.preview_file(path))
         else:
             # Bulk actions
             delete_action = menu.addAction(f"Delete ({len(items)} items)")
@@ -352,6 +356,8 @@ class ScriptExplorerTree(QTreeWidget):
         """Rename a script file or folder"""
         old_name = os.path.basename(old_path)
         is_dir = os.path.isdir(old_path)
+        data = item.data(0, Qt.UserRole) or {}
+        is_script = data.get('type') == 'script'
         
         # Get new name from user
         new_name, ok = ThemeDialog.get_text(
@@ -366,8 +372,8 @@ class ScriptExplorerTree(QTreeWidget):
         
         new_name = new_name.strip()
         
-        # Ensure .py extension for files
-        if not is_dir and not new_name.endswith(".py"):
+        # Keep script files as .py, but do not force extensions on other file types.
+        if is_script and not is_dir and not new_name.endswith(".py"):
             new_name += ".py"
         
         # Check if name is the same
@@ -407,5 +413,9 @@ class ScriptExplorerTree(QTreeWidget):
     def open_script_in_editor(self, path):
         """Open script in editor - emit signal to be handled by parent"""
         self.script_open_requested.emit(path)
+
+    def preview_file(self, path):
+        """Preview a file in a dedicated workspace viewer."""
+        self.file_preview_requested.emit(path)
 
 

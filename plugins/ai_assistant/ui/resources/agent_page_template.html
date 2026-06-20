@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Page</title>
+    <script src="qwebchannel.js"></script>
+    <style id="dynamic-theme-vars">
+    </style>
+    <style>
+        :root {
+            --bg-primary: #0f141c;
+            --bg-surface: rgba(19, 27, 38, 0.92);
+            --bg-panel: rgba(255, 255, 255, 0.04);
+            --border-color: #2f3c50;
+            --text-primary: #eef5ff;
+            --text-secondary: #a6b7cc;
+            --accent: #4db1ff;
+            --accent-soft: rgba(77, 177, 255, 0.14);
+        }
+
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            min-height: 100%;
+            background:
+                radial-gradient(circle at top right, rgba(77, 177, 255, 0.16), transparent 26%),
+                linear-gradient(180deg, #101620 0%, #0b1017 100%);
+            color: var(--text-primary);
+            font-family: "Segoe UI", "PingFang SC", sans-serif;
+        }
+
+        html.dark-mode ::-webkit-scrollbar,
+        html.sakura-mode ::-webkit-scrollbar,
+        html.manga-mode ::-webkit-scrollbar,
+        html ::-webkit-scrollbar {
+            width: 12px;
+            height: 12px;
+        }
+
+        html.dark-mode ::-webkit-scrollbar-track,
+        html.sakura-mode ::-webkit-scrollbar-track,
+        html.manga-mode ::-webkit-scrollbar-track,
+        html ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        html.dark-mode ::-webkit-scrollbar-thumb,
+        html.sakura-mode ::-webkit-scrollbar-thumb,
+        html.manga-mode ::-webkit-scrollbar-thumb,
+        html ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 999px;
+            border: 2px solid transparent;
+            background-clip: padding-box;
+        }
+
+        html.dark-mode ::-webkit-scrollbar-thumb:hover,
+        html.sakura-mode ::-webkit-scrollbar-thumb:hover,
+        html.manga-mode ::-webkit-scrollbar-thumb:hover,
+        html ::-webkit-scrollbar-thumb:hover {
+            background: color-mix(in srgb, var(--accent) 42%, var(--border-color));
+            background-clip: padding-box;
+        }
+
+        .page {
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .hero {
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 22px;
+            background: linear-gradient(180deg, rgba(25, 35, 49, 0.96), rgba(15, 21, 30, 0.96));
+            box-shadow: 0 24px 50px rgba(0, 0, 0, 0.22);
+        }
+
+        .eyebrow {
+            color: var(--accent);
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            font-size: 12px;
+        }
+
+        h1 {
+            margin: 8px 0 10px;
+            font-size: 30px;
+            line-height: 1.2;
+        }
+
+        .summary {
+            color: var(--text-secondary);
+            line-height: 1.7;
+            white-space: pre-wrap;
+        }
+
+        .meta-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 14px;
+        }
+
+        .pill {
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-secondary);
+            border-radius: 999px;
+            padding: 6px 10px;
+            font-size: 12px;
+        }
+
+        .card {
+            border: 1px solid var(--border-color);
+            border-radius: 18px;
+            background: var(--bg-surface);
+            overflow: hidden;
+        }
+
+        .card-head {
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .card-head h2 {
+            margin: 0;
+            font-size: 15px;
+        }
+
+        .card-body {
+            padding: 18px;
+        }
+
+        .content {
+            white-space: pre-wrap;
+            line-height: 1.7;
+            color: var(--text-primary);
+        }
+
+        .content.html {
+            white-space: normal;
+        }
+
+        .content code, .section-body code {
+            font-family: "Cascadia Code", "Consolas", monospace;
+        }
+
+        .section-list {
+            display: grid;
+            gap: 14px;
+        }
+
+        .section-item {
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            background: var(--bg-panel);
+            padding: 16px;
+        }
+
+        .section-item h3 {
+            margin: 0 0 8px;
+            font-size: 16px;
+        }
+
+        .section-body {
+            color: var(--text-secondary);
+            line-height: 1.7;
+            white-space: pre-wrap;
+        }
+
+        .section-body.html {
+            white-space: normal;
+        }
+    </style>
+</head>
+<body>
+    <main class="page">
+        <section class="hero">
+            <div class="eyebrow" id="eyebrow">Agent Workspace</div>
+            <h1 id="headline">Agent Page</h1>
+            <div class="summary" id="summary"></div>
+            <div class="meta-row" id="metaRow"></div>
+        </section>
+
+        <section class="card">
+            <div class="card-head">
+                <h2 id="contentTitle">Content</h2>
+            </div>
+            <div class="card-body">
+                <div class="content" id="contentBody"></div>
+            </div>
+        </section>
+
+        <section class="card" id="sectionsCard">
+            <div class="card-head">
+                <h2>Sections</h2>
+            </div>
+            <div class="card-body">
+                <div class="section-list" id="sectionsList"></div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        window.setTheme = function(theme) {
+            theme = (theme || "light").toLowerCase();
+            document.documentElement.classList.remove("dark-mode", "sakura-mode", "manga-mode");
+            if (theme === "dark" || theme === "sakura") {
+                document.documentElement.classList.add("dark-mode");
+            }
+            if (theme === "sakura") {
+                document.documentElement.classList.add("sakura-mode");
+            } else if (theme === "manga") {
+                document.documentElement.classList.add("manga-mode");
+            }
+        };
+
+        function escapeHtml(value) {
+            return String(value).replace(/[&<>"']/g, function(ch) {
+                return ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[ch];
+            });
+        }
+
+        function renderRichText(element, value, format) {
+            if (format === "html") {
+                element.classList.add("html");
+                element.innerHTML = value || "";
+            } else {
+                element.classList.remove("html");
+                element.textContent = value || "";
+            }
+        }
+
+        window.setPagePayload = function(payload) {
+            payload = payload || {};
+            document.getElementById("eyebrow").textContent = payload.eyebrow || "Agent Workspace";
+            document.getElementById("headline").textContent = payload.title || "Agent Page";
+            document.getElementById("summary").textContent = payload.summary || "";
+            document.getElementById("contentTitle").textContent = payload.content_title || "Content";
+            renderRichText(document.getElementById("contentBody"), payload.content || "", payload.format || "text");
+
+            var metaRow = document.getElementById("metaRow");
+            metaRow.innerHTML = "";
+            (payload.meta || []).forEach(function(item) {
+                var pill = document.createElement("div");
+                pill.className = "pill";
+                pill.textContent = item;
+                metaRow.appendChild(pill);
+            });
+
+            var sectionsList = document.getElementById("sectionsList");
+            var sectionsCard = document.getElementById("sectionsCard");
+            sectionsList.innerHTML = "";
+            var sections = Array.isArray(payload.sections) ? payload.sections : [];
+            sectionsCard.style.display = sections.length ? "block" : "none";
+            sections.forEach(function(section) {
+                var item = document.createElement("article");
+                item.className = "section-item";
+
+                var title = document.createElement("h3");
+                title.textContent = section.title || "Section";
+                item.appendChild(title);
+
+                var body = document.createElement("div");
+                body.className = "section-body";
+                if ((section.format || "text") === "html") {
+                    body.classList.add("html");
+                    body.innerHTML = section.content || "";
+                } else {
+                    body.textContent = section.content || "";
+                }
+                item.appendChild(body);
+                sectionsList.appendChild(item);
+            });
+        };
+
+        new QWebChannel(qt.webChannelTransport, function(channel) {
+            var bridge = channel.objects.pageBridge;
+            if (bridge && bridge.log) bridge.log("Agent page ready");
+        });
+    </script>
+</body>
+</html>

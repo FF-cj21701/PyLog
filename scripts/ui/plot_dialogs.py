@@ -858,6 +858,139 @@ class WellSelectionDialog(ThemeDialog):
         item = self.list_widget.currentItem()
         return item.data(Qt.UserRole) if item else None
 
+
+class TemplateSelectionDialog(ThemeDialog):
+    def __init__(self, template_paths, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Template")
+        self.resize(480, 520)
+
+        layout = QVBoxLayout()
+        self.setLayout(layout)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+
+        header = QLabel("Open Template")
+        header.setStyleSheet(f"font-size: 18pt; font-weight: bold; color: {app_config.get_theme_color('primary')};")
+        layout.addWidget(header)
+
+        sub_header = QLabel("Choose a plot template from the local templates folder.")
+        sub_header.setStyleSheet(f"color: {app_config.get_theme_color('text_dim')}; font-size: 10pt;")
+        sub_header.setWordWrap(True)
+        layout.addWidget(sub_header)
+
+        layout.addWidget(QLabel("<b>Available Templates:</b>"))
+
+        self.list_widget = QListWidget()
+        self.list_widget.setSpacing(2)
+
+        import os
+        for path in template_paths:
+            item = QListWidgetItem()
+            item.setText(os.path.basename(path))
+            item.setIcon(self.style().standardIcon(QStyle.SP_FileIcon))
+            item.setData(Qt.UserRole, path)
+            item.setToolTip(path)
+            self.list_widget.addItem(item)
+
+        if self.list_widget.count() > 0:
+            self.list_widget.setCurrentRow(0)
+
+        layout.addWidget(self.list_widget)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.list_widget.itemDoubleClicked.connect(self.accept)
+
+    def get_selected_template_path(self):
+        item = self.list_widget.currentItem()
+        return item.data(Qt.UserRole) if item else None
+
+
+class TemplateApplyDialog(ThemeDialog):
+    def __init__(self, template_paths, wells, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Apply Template")
+        self.resize(900, 560)
+
+        layout = QVBoxLayout()
+        self.setLayout(layout)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+
+        header = QLabel("Apply Template")
+        header.setStyleSheet(f"font-size: 18pt; font-weight: bold; color: {app_config.get_theme_color('primary')};")
+        layout.addWidget(header)
+
+        sub_header = QLabel("Choose a plot template on the left and a target well on the right.")
+        sub_header.setStyleSheet(f"color: {app_config.get_theme_color('text_dim')}; font-size: 10pt;")
+        sub_header.setWordWrap(True)
+        layout.addWidget(sub_header)
+
+        body_layout = QGridLayout()
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setHorizontalSpacing(16)
+        body_layout.setVerticalSpacing(8)
+        layout.addLayout(body_layout, stretch=1)
+
+        body_layout.addWidget(QLabel("<b>Select Template:</b>"), 0, 0)
+        body_layout.addWidget(QLabel("<b>Select Well:</b>"), 0, 1)
+
+        self.template_list = QListWidget()
+        self.template_list.setSpacing(2)
+        import os
+        for path in template_paths:
+            item = QListWidgetItem()
+            item.setText(os.path.basename(path))
+            item.setIcon(self.style().standardIcon(QStyle.SP_FileIcon))
+            item.setData(Qt.UserRole, path)
+            item.setToolTip(path)
+            self.template_list.addItem(item)
+
+        self.well_list = QListWidget()
+        self.well_list.setSpacing(2)
+        for well in wells:
+            db_name = os.path.basename(well['db_path'])
+            display_name = well['name']
+
+            item = QListWidgetItem()
+            item.setText(f"{display_name}\nDatabase: {db_name}")
+            item.setIcon(self.style().standardIcon(QStyle.SP_FileIcon))
+            item.setData(Qt.UserRole, well)
+            item.setToolTip(f"Full Path: {well['db_path']}")
+            self.well_list.addItem(item)
+
+        if self.template_list.count() > 0:
+            self.template_list.setCurrentRow(0)
+        if self.well_list.count() > 0:
+            self.well_list.setCurrentRow(0)
+
+        body_layout.addWidget(self.template_list, 1, 0)
+        body_layout.addWidget(self.well_list, 1, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.template_list.itemDoubleClicked.connect(lambda *_: self._accept_if_ready())
+        self.well_list.itemDoubleClicked.connect(lambda *_: self._accept_if_ready())
+
+    def _accept_if_ready(self):
+        if self.get_selected_template_path() and self.get_selected_well():
+            self.accept()
+
+    def get_selected_template_path(self):
+        item = self.template_list.currentItem()
+        return item.data(Qt.UserRole) if item else None
+
+    def get_selected_well(self):
+        item = self.well_list.currentItem()
+        return item.data(Qt.UserRole) if item else None
+
 class UnitEditDialog(ThemeDialog):
     def __init__(self, curve_name, current_unit, parent=None):
         super().__init__(parent)

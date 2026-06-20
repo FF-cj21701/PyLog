@@ -27,6 +27,7 @@ from scripts.data.db_manager import DBManager
 from scripts.data.dlis_importer import import_dlis, get_dlis_info
 from scripts.data.template_manager import TemplateManager
 from scripts.rendering.plot_widget import LogWidget
+from scripts.services.plot_spec_service import build_plot_spec_from_manual_items, open_plot_from_spec
 from scripts.ui.ui_explorer import UnifiedExplorer
 from scripts.data.export_manager import LogExporter
 from scripts.utils.workers import DataFetchWorker
@@ -37,12 +38,15 @@ from scripts.ui.dialogs.import_dialogs import DLISImportDialog
 from scripts.ui.dialogs.export_dialogs import DLISExportDialog, DLISExportResultDialog
 from scripts.data.dlis_exporter import export_well_to_dlis
 from scripts.ui.widgets.data_viewer_widget import DataViewerWidget
+from scripts.ui.widgets.html_preview_widget import HtmlPreviewWidget, is_html_previewable
+from scripts.ui.widgets.workspace_launchpad_widget import WorkspaceLaunchpadWidget
 from scripts.utils.well_metadata import get_well_export_snapshot
 from core.app_config import app_config
 from scripts.utils.logger import logger
 from scripts.ui.custom_title_bar import ModernTitleBar
 from scripts.ui.frameless_helper import FramelessHelper
 from scripts.ui.base_dialog import ThemeDialog
+import pylog_api
 
 def global_exception_handler(exctype, value, tb):
     """
@@ -121,6 +125,12 @@ class MainWindow(QMainWindow):
         self.mdi_area.setTabsClosable(True)
         self.mdi_area.setTabsMovable(True)
         self.setCentralWidget(self.mdi_area)
+        self.mdi_area.subWindowActivated.connect(lambda *_: self._update_workspace_launchpad_visibility())
+
+        self.workspace_launchpad = WorkspaceLaunchpadWidget(self.mdi_area.viewport())
+        self.workspace_launchpad.action_drop_requested.connect(self.handle_launchpad_action_drop)
+        self.workspace_launchpad.action_click_requested.connect(self.handle_launchpad_action_click)
+        self.workspace_launchpad.hide()
         
         # Title & Menu Container (Full Width above docks)
         self.top_container = QWidget()
@@ -173,6 +183,7 @@ class MainWindow(QMainWindow):
         
         # Native Shadow (Delayed to ensure winId is ready)
         QTimer.singleShot(100, self._enable_native_shadow)
+        QTimer.singleShot(0, self._update_workspace_launchpad_visibility)
     
     def changeEvent(self, event):
         """Handle window state changes (maximize/restore) to toggle borders and corners."""
@@ -256,7 +267,7 @@ class MainWindow(QMainWindow):
                 continue
             db_path = os.path.join(data_dir, db_file)
             try:
-                temp_db = DBManager(db_path)
+                temp_db = DBManager(db_path, ensure_schema=False)
                 for wid, wname in temp_db.get_wells():
                     wells.append({'id': wid, 'name': wname, 'db_path': db_path})
             except Exception as e:
@@ -426,62 +437,57 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Error", "Failed to save template.")
 
     def handle_apply_template(self):
-        # 1. Select Template File
-        path, _ = QFileDialog.getOpenFileName(self, "Open Plot Template", "data/templates", "PyLog Template (*.plt);;JSON (*.json)")
-        if not path:
+        template_dir = os.path.join("data", "templates")
+        template_paths = []
+        if os.path.isdir(template_dir):
+            for name in sorted(os.listdir(template_dir)):
+                if name.lower().endswith((".plt", ".json")):
+                    template_paths.append(os.path.join(template_dir, name))
+
+        if not template_paths:
+            QMessageBox.warning(self, "Templates", "No template files were found in data/templates.")
             return
 
-        # 2. Get All Wells from all DBs in data/
         wells = self._scan_all_wells()
         
         if not wells:
             QMessageBox.warning(self, "Templates", "No wells found in the data/ folder. Please import data first.")
             return
 
-        # 3. Manual Well Selection Dialog
-        from scripts.ui.plot_dialogs import WellSelectionDialog
-        dlg = WellSelectionDialog(wells, self)
+        from scripts.ui.plot_dialogs import TemplateApplyDialog
+        dlg = TemplateApplyDialog(template_paths, wells, self)
         if dlg.exec() != QDialog.Accepted:
             return
-            
+
+        path = dlg.get_selected_template_path()
         selected_well = dlg.get_selected_well()
+        if not path:
+            return
         if not selected_well:
             return
             
         well_id = selected_well['id']
         db_path = selected_well['db_path']
+        template_db = self.db if self.db and getattr(self.db, "db_path", None) == db_path else DBManager(db_path, ensure_schema=False)
+        plot_spec = TemplateManager.resolve_template_to_plot_spec(
+            template_db,
+            path,
+            well_id=well_id,
+        )
+        if not plot_spec.get("tracks"):
+            QMessageBox.warning(self, "Warning", "Template applied, but no matching curves were found in the selected well.")
+            return
 
-        # 4. Always Open a New Plot Window (per user request)
-        self.new_plot_window()
-        active_sub = self.mdi_area.activeSubWindow()
-        widget = active_sub.widget() if active_sub else None
-            
-        if widget and isinstance(widget, LogWidget):
-            # Connect the widget to the selected database
-            widget.set_db_source(db_path)
-            
-            from scripts.data.template_manager import TemplateManager
-            status_msg = f"Applying template to {selected_well['name']}..."
-            self.statusBar().showMessage(status_msg)
-            
-            # Force UI update
-            QApplication.processEvents()
-            
-            # [NEW] Connect to signal for deferred cleanup
-            def finalize_loading():
-                self.statusBar().showMessage(f"Ready: {selected_well['name']} plotted.", 5000)
-                try: widget.loadingFinished.disconnect(finalize_loading)
-                except: pass
-            
-            widget.loadingFinished.connect(finalize_loading)
-            
-            success = TemplateManager.apply_template(widget, path, well_id=well_id)
-            
-            if not success:
-                try: widget.loadingFinished.disconnect(finalize_loading)
-                except: pass
-                QMessageBox.warning(self, "Warning", "Template applied, but some curves could not be found in the selected well.")
+        if not plot_spec.get("title"):
+            template_state = TemplateManager.load_template_spec(path)
+            if isinstance(template_state, dict):
+                plot_spec["title"] = template_state.get("title")
 
+        self.statusBar().showMessage(f"Applying template to {selected_well['name']}...", 3000)
+        QTimer.singleShot(
+            50,
+            lambda: open_plot_from_spec(self, plot_spec),
+        )
 
     def toggle_antialias(self, checked):
         """Toggle antialias globally."""
@@ -505,6 +511,7 @@ class MainWindow(QMainWindow):
         # [NEW] Script Tree Logic
         self.explorer.script_tree.itemDoubleClicked.connect(self.handle_script_double_clicked)
         self.explorer.script_tree.script_open_requested.connect(self.open_script_file)
+        self.explorer.script_tree.file_preview_requested.connect(self.open_html_preview)
         
         self.explorer_dock = QDockWidget("Explorer", self)
         self.explorer_dock.setWidget(self.explorer)
@@ -623,31 +630,19 @@ class MainWindow(QMainWindow):
             return
         widget.add_curve_request(well_id, curve_id, db_p, well_name=well_name, curve_name=item.text(0))
 
-    def handle_quick_plot(self, items_data):
+    def handle_quick_plot(self, items_data, title=None):
         """Create a new plot window and add all selected curves to it."""
-        curves = [d for d in items_data if d['type'] == 'curve']
-        if not curves:
-            return
-
-        # 1. Group by Well (Simplified: use the first well found)
-        db_path = curves[0]['db_path']
-        well_id = curves[0]['well_id']
-        
-        # 2. Create new plot window
-        self.new_plot_window()
-        active_sub = self.mdi_area.activeSubWindow()
-        if not active_sub: return
-        
-        widget = active_sub.widget()
-        if isinstance(widget, LogWidget):
-             widget.set_db_source(db_path)
-             # 3. Add curves one by one
-             for c_data in curves:
-                 # Ensure same well (Quick Plot limitation)
-                 if c_data['db_path'] == db_path and c_data['well_id'] == well_id:
-                     widget.create_new_track(well_id, c_data['id'], db_path=db_path)
-             
-             self.statusBar().showMessage(f"Quick Plot: {len(curves)} curves added.", 3000)
+        plot_spec = build_plot_spec_from_manual_items(
+            items_data,
+            title=title or f"Log Plot {getattr(self, '_plot_count', 0) + 1}",
+        )
+        widget, added_count = open_plot_from_spec(self, plot_spec)
+        if widget:
+            widget._snapshot_reason = "manual"
+            widget._snapshot_logged = False
+            widget._trace_enabled = True
+            widget._trace_seq = 0
+            self.statusBar().showMessage(f"Quick Plot: {added_count} curves added.", 3000)
 
     def handle_open_data_viewer(self, items_data):
         """Open a data viewer page and enqueue selected curves."""
@@ -670,14 +665,98 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage(f"Data Viewer: queued {len(curves)} curves.", 3000)
 
+    def handle_launchpad_plot_drop(self, curves):
+        if not curves:
+            return
+        items_data = []
+        for curve in curves:
+            curve_id = curve.get("curve_id", curve.get("id"))
+            if curve_id is None:
+                continue
+            items_data.append({
+                "type": "curve",
+                "id": curve_id,
+                "well_id": curve.get("well_id"),
+                "db_path": curve.get("db_path"),
+                "name": curve.get("name"),
+            })
+
+        plot_spec = build_plot_spec_from_manual_items(
+            items_data,
+            title=f"Log Plot {getattr(self, '_plot_count', 0) + 1}",
+        )
+        widget, added_count = open_plot_from_spec(self, plot_spec)
+        if widget:
+            widget._snapshot_reason = "manual"
+            widget._snapshot_logged = False
+            widget._trace_enabled = True
+            widget._trace_seq = 0
+            self.statusBar().showMessage(f"Launchpad Plot: added {added_count} curve(s).", 3000)
+
+    def handle_launchpad_data_viewer_drop(self, curves):
+        if not curves:
+            return
+        widget = self.new_data_viewer_window()
+        if not widget:
+            return
+        for curve in curves:
+            widget.add_curve_request(curve.get("well_id"), curve.get("curve_id"), curve.get("db_path"))
+        self.statusBar().showMessage(f"Launchpad Data Viewer: queued {len(curves)} curve(s).", 3000)
+
+    def handle_launchpad_action_click(self, action_key):
+        if action_key == "plot":
+            self.new_plot_window()
+        elif action_key == "data_viewer":
+            self.new_data_viewer_window()
+
+    def handle_launchpad_action_drop(self, action_key, curves):
+        if action_key == "plot":
+            self.handle_launchpad_plot_drop(curves)
+        elif action_key == "data_viewer":
+            self.handle_launchpad_data_viewer_drop(curves)
+
     def handle_script_double_clicked(self, item, column):
         """Open a script in a new script editor window."""
         data = item.data(0, Qt.UserRole)
-        if not data or data.get('type') != 'script':
+        if not data or data.get('type') not in {'script', 'file'}:
             return
             
         path = data.get('path')
+        if is_html_previewable(path):
+            self.open_html_preview(path)
+            return
         self.open_script_file(path)
+
+    def open_html_preview(self, path):
+        """Open a local HTML file in a dedicated workspace preview."""
+        if not path or not os.path.exists(path) or not is_html_previewable(path):
+            return
+
+        abs_path = os.path.abspath(path)
+        for sub in self.mdi_area.subWindowList():
+            widget = sub.widget()
+            if getattr(widget, "html_preview_path", None) == abs_path:
+                self.mdi_area.setActiveSubWindow(sub)
+                if hasattr(widget, "load_file"):
+                    widget.load_file(abs_path)
+                sub.show()
+                return
+
+        widget = HtmlPreviewWidget(abs_path, self)
+        widget.html_preview_path = abs_path
+        widget.openSourceRequested.connect(self.open_script_file)
+
+        sub = QMdiSubWindow()
+        sub.setWidget(widget)
+        sub.setAttribute(Qt.WA_DeleteOnClose)
+        sub.setWindowTitle(f"HTML: {os.path.basename(path)}")
+        sub.setWindowIcon(self.style().standardIcon(QStyle.SP_FileIcon))
+        sub.destroyed.connect(lambda: QTimer.singleShot(0, self.check_reset_counters))
+
+        self.mdi_area.addSubWindow(sub)
+        sub.show()
+        self.mdi_area.setActiveSubWindow(sub)
+        self._update_workspace_launchpad_visibility()
     
     def open_script_file(self, path):
         """Open a script file in a new script editor window."""
@@ -917,6 +996,7 @@ class MainWindow(QMainWindow):
         
         self.mdi_area.addSubWindow(sub)
         sub.show()
+        self._update_workspace_launchpad_visibility()
         return plot
 
     def new_data_viewer_window(self):
@@ -933,6 +1013,7 @@ class MainWindow(QMainWindow):
         sub.destroyed.connect(lambda: QTimer.singleShot(0, self.check_reset_counters))
         self.mdi_area.addSubWindow(sub)
         sub.show()
+        self._update_workspace_launchpad_visibility()
         return widget
 
     def new_script_window(self):
@@ -963,7 +1044,8 @@ class MainWindow(QMainWindow):
                 
                 self.mdi_area.addSubWindow(sub)
                 sub.show()
-    
+                self._update_workspace_launchpad_visibility()
+
     def on_script_saved(self, filepath):
         """Handle script saved event - refresh script list in explorer"""
         if hasattr(self, 'explorer') and self.explorer:
@@ -991,6 +1073,25 @@ class MainWindow(QMainWindow):
             
         if not scripts:
             self._script_count = 0
+        self._update_workspace_launchpad_visibility()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "workspace_launchpad") and self.workspace_launchpad:
+            self.workspace_launchpad.setGeometry(self.mdi_area.viewport().rect())
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._update_workspace_launchpad_visibility()
+
+    def _update_workspace_launchpad_visibility(self):
+        if not hasattr(self, "workspace_launchpad") or not self.workspace_launchpad:
+            return
+        self.workspace_launchpad.setGeometry(self.mdi_area.viewport().rect())
+        has_subwindows = bool(self.mdi_area.subWindowList())
+        self.workspace_launchpad.setVisible(not has_subwindows)
+        if not has_subwindows:
+            self.workspace_launchpad.raise_()
 
     def apply_theme(self, theme_name=None):
         if theme_name is not None:

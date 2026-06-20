@@ -1,6 +1,8 @@
 
 import sys
 import os
+import json
+from urllib.parse import unquote
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QApplication
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
@@ -9,6 +11,7 @@ from datetime import datetime
 from ..ai_core.config import AIConfig
 from ..ai_core.memory import MemoryManager
 from ..services.chat_service import ChatService
+from .review_registry import get_review_record, open_review_page
 from .widgets.settings_dialog import AISettingsDialog
 from .widgets.web_chat_view import WebChatView
 from PySide6.QtCore import QObject, Signal
@@ -102,6 +105,7 @@ class AIAssistantWidget(QWidget):
         self.bridge.settingsRequested.connect(self.open_settings)
         self.bridge.chatCleared.connect(self.clear_chat_memory)
         self.bridge.updateChatContexts.connect(self.set_chat_contexts)
+        self.bridge.messageCardActionRequested.connect(self.handle_message_card_action)
         
         # Connect Chat Service signals
         self.chat_service.finished.connect(self.handle_chat_finished)
@@ -182,9 +186,11 @@ class AIAssistantWidget(QWidget):
             data = json.loads(text)
             full_text = data.get("actual", text)
             display_text = data.get("display", text)
+            rendered_by_client = bool(data.get("rendered", False))
         except Exception:
             full_text = text
             display_text = text
+            rendered_by_client = False
 
         if full_text in [
             "\u6267\u884c\u8ba1\u5212",
@@ -199,7 +205,8 @@ class AIAssistantWidget(QWidget):
 
         self._is_sending = True
         self.chat_view.set_sending_state(True)
-        self.chat_view.append_message("user", display_text, is_html=True)
+        if not rendered_by_client:
+            self.chat_view.append_message("user", display_text, is_html=True)
         self.chat_view.set_input_enabled(False)
         self.memory.add_user_message(full_text)
 
@@ -395,6 +402,34 @@ class AIAssistantWidget(QWidget):
         if not progress or not hasattr(self, "chat_view"):
             return
         self.chat_view.update_task_progress(progress)
+
+    def handle_message_card_action(self, payload_json):
+        try:
+            payload = json.loads(payload_json) if payload_json else {}
+        except Exception:
+            try:
+                payload = json.loads(unquote(payload_json)) if payload_json else {}
+            except Exception:
+                payload = {}
+
+        action_id = payload.get("action")
+        card_payload = payload.get("payload") or {}
+        script_path = card_payload.get("script_path") or payload.get("script_path")
+        if action_id != "review" or not script_path:
+            return
+
+        win = self.window()
+        if not win or not hasattr(win, "mdi_area"):
+            self.append_system_message("Review is unavailable because no main window was found.")
+            return
+
+        review_record = get_review_record(script_path)
+        if review_record:
+            page = open_review_page(script_path, parent=win, payload=review_record)
+            if page:
+                return
+
+        self.append_system_message(f"Review is unavailable because no saved review record was found for {script_path}.")
 
     def append_user_message(self, text):
         self.chat_view.append_message("user", text)

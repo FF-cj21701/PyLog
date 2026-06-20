@@ -5,6 +5,7 @@ import numpy as np
 from scripts.data.db_manager import DBManager
 
 from ..ai_core.api_client import AsyncAIWorker
+from ..ai_core.agent_runtime import AgentRuntime
 from ..ai_core.mcp_integration import MCPToolProvider
 from ..ai_core.config import AIConfig
 from ..ai_core.utils import extract_code
@@ -12,6 +13,7 @@ from ..ai_core.prompts import SystemPrompts
 from ..ai_core.agent_state import AgentState
 from ..ai_core.policy import ExecutionPolicy
 from ..ai_core.state_machine import TaskStateMachine
+from ..ai_core.tool_manager import ToolManager
 from ..ai_core.verification_coordinator import VerificationCoordinator
 
 class ChatService(QObject):
@@ -34,6 +36,7 @@ class ChatService(QObject):
         self.main_window = main_window
         self.ui_bridge = ui_bridge
         self.worker = None
+        self.runtime = None
         self._current_chat_task = None  # Track the current chat task for cancellation
         self.mcp_tool_provider = MCPToolProvider(config)
         self.agent_state = AgentState()
@@ -41,6 +44,7 @@ class ChatService(QObject):
         self.execution_policy = ExecutionPolicy(verification_coordinator=self.verification_coordinator)
         self.task_state_machine = TaskStateMachine(self.agent_state)
         self.tools = self._initialize_tools()
+        self.tool_manager = ToolManager(self.tools)
         
         # 初始化 SystemPrompts 以生成动态工具列表
         from ..ai_core.prompts import SystemPrompts
@@ -86,14 +90,14 @@ class ChatService(QObject):
 
     async def _start_chat_async(self, prompt, history, mode="chat"):
         """Async version of start_chat to handle MCP tool fetching."""
-        # 1. Get local tools
-        all_tools = list(self.tools)
+        # 1. Build a per-turn tool manager so external tools can refresh safely.
+        turn_tool_manager = ToolManager(self.tools)
         
         # 2. Get MCP tools
         if self.config.get_mcp_enabled():
             try:
                 mcp_tools = await self.mcp_tool_provider.get_tools()
-                all_tools.extend(mcp_tools)
+                turn_tool_manager.replace_tools_by_source("mcp", mcp_tools)
             except asyncio.CancelledError:
                 return
             except Exception as e:
@@ -103,7 +107,13 @@ class ChatService(QObject):
         # 3. Start worker with all tools, using the reactive prompt getter
         SystemPrompts.clear_cache()
         system_prompt = SystemPrompts.get_prompt()
-        self._start_worker(prompt, history, system_prompt=system_prompt, mode=mode, all_tools=all_tools)
+        self._start_worker(
+            prompt,
+            history,
+            system_prompt=system_prompt,
+            mode=mode,
+            all_tools=turn_tool_manager.tools,
+        )
 
     def stop(self):
         """停止当前的worker并取消异步任务"""
@@ -111,8 +121,16 @@ class ChatService(QObject):
             self._current_chat_task.cancel()
             self._current_chat_task = None
             
-        if self.worker:
+        if self.runtime:
+            self.runtime.stop()
+        elif self.worker:
             self.worker.stop()
+
+    def get_tool_inventory_payload(self):
+        """Return current runtime tools, falling back to initialized local tools."""
+        if self.runtime and hasattr(self.runtime, "get_tool_inventory_payload"):
+            return self.runtime.get_tool_inventory_payload()
+        return self.tool_manager.get_inventory_payload()
 
     def _start_worker(self, prompt, history, system_prompt=None, mode="chat", all_tools=None):
         api_key = self.config.get_api_key()
@@ -144,23 +162,24 @@ class ChatService(QObject):
             verification_coordinator=self.verification_coordinator,
         )
         
-        self.worker.finished.connect(self.finished)
-        self.worker.reasoning_update.connect(self.reasoning_received)
-        self.worker.content_update.connect(self.content_received)
+        self.runtime = AgentRuntime(self.worker)
+
+        self.runtime.finished.connect(self.finished)
+        self.runtime.reasoning_update.connect(self.reasoning_received)
+        self.runtime.content_update.connect(self.content_received)
         # 连接工具调用信号
-        self.worker.tool_call_started.connect(self.tool_call_started)
-        self.worker.tool_call_finished.connect(self._on_tool_call_finished)
-        self.worker.round_finished.connect(self.round_finished)
-        self.worker.task_progress.connect(self.task_progress)
+        self.runtime.tool_call_started.connect(self.tool_call_started)
+        self.runtime.tool_call_finished.connect(self._on_tool_call_finished)
+        self.runtime.round_finished.connect(self.round_finished)
+        self.runtime.task_progress.connect(self.task_progress)
             
-        self.worker.error.connect(self.error)
-        self.worker.stopped.connect(self.stopped)
+        self.runtime.error.connect(self.error)
+        self.runtime.stopped.connect(self.stopped)
         # 连接系统消息信号
-        if hasattr(self.worker, 'system_message'):
-            self.worker.system_message.connect(self.handle_system_message)
+        self.runtime.system_message.connect(self.handle_system_message)
         
         # Start the async worker and track the task
-        self._current_chat_task = asyncio.create_task(self.worker.run_async())
+        self._current_chat_task = asyncio.create_task(self.runtime.run_async())
 
     def _on_tool_call_finished(self, tool_name, status, result):
         """Handle a completed tool call."""

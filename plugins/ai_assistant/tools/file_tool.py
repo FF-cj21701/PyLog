@@ -94,10 +94,17 @@ def _attach_script_state(result, tool_executor, editor_id=None, script_path=None
         "editor_id": state.get("editor_id"),
         "script_path": state.get("script_path"),
         "is_preview_active": state.get("is_preview_active"),
+        "has_review_record": state.get("has_review_record"),
         "has_unsaved_changes": state.get("has_unsaved_changes"),
         "preview_source": state.get("preview_source"),
         "should_run_from": state.get("should_run_from"),
         "should_save_to": state.get("should_save_to"),
+        "last_review_session_id": state.get("last_review_session_id"),
+        "last_review_source": state.get("last_review_source"),
+        "last_review_created_at": state.get("last_review_created_at"),
+        "last_review_saved_to_disk": state.get("last_review_saved_to_disk"),
+        "last_review_mode": state.get("last_review_mode"),
+        "last_review_diff_stats": state.get("last_review_diff_stats"),
     }
     result.setdefault("editor_id", state.get("editor_id"))
     result.setdefault("script_path", state.get("script_path"))

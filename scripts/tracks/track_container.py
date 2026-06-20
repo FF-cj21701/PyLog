@@ -262,6 +262,46 @@ class BaseTrackContainer(QFrame):
             p = p.parent()
         return None
 
+    def cleanup(self):
+        """Explicitly detach heavy plot resources before the container is deleted."""
+        try:
+            pw = getattr(self, 'plot_widget', None)
+            if pw is not None:
+                if hasattr(pw, 'clear_overlays'):
+                    pw.clear_overlays()
+
+                if hasattr(pw, 'curves'):
+                    for curve in list(pw.curves):
+                        item = curve.get('item') or curve.get('curve')
+                        vb = curve.get('viewbox')
+                        try:
+                            if vb and item:
+                                vb.removeItem(item)
+                            elif item:
+                                pw.removeItem(item)
+                        except Exception:
+                            pass
+                    pw.curves.clear()
+
+                if hasattr(pw, 'image_data_cache') or getattr(pw, 'image_item', None):
+                    try:
+                        ImageTrackManager.cleanup_image_track(pw)
+                    except Exception:
+                        pass
+
+                if hasattr(pw, 'curve_viewboxes'):
+                    pw.curve_viewboxes.clear()
+
+                try:
+                    pw.clear()
+                except Exception:
+                    pass
+
+            if hasattr(self, 'header') and hasattr(self.header, 'items'):
+                self.header.items.clear()
+        except Exception:
+            pass
+
     def open_settings(self):
         def apply_cb(s): self.apply_track_settings(s)
         log_w = self.log_widget or self.find_log_widget()
@@ -308,13 +348,15 @@ class BaseTrackContainer(QFrame):
             if abs(s["depth_start"] - current_d1) > 1e-3 or abs(s["depth_end"] - current_d2) > 1e-3:
                 self.log_widget.set_custom_depth_limits(s["depth_start"], s["depth_end"])
 
-        if hasattr(self.plot_widget, 'set_grid_style'):
-            self.plot_widget.set_grid_style(s.get('grid_x', False), s.get('grid_y', True))
-            self.plot_widget.show_grid_x = s.get('grid_x', False)
-            self.plot_widget.show_grid_y = s.get('grid_y', True)
+        if hasattr(self.plot_widget, 'set_grid_style') and ('grid_x' in s or 'grid_y' in s):
+            grid_x = s.get('grid_x', getattr(self.plot_widget, 'show_grid_x', False))
+            grid_y = s.get('grid_y', getattr(self.plot_widget, 'show_grid_y', True))
+            self.plot_widget.set_grid_style(grid_x, grid_y)
+            self.plot_widget.show_grid_x = grid_x
+            self.plot_widget.show_grid_y = grid_y
         
-        if hasattr(self.plot_widget, 'is_log_scale') and self.plot_widget.is_log_scale != s.get('log', False):
-            self.plot_widget.is_log_scale = s.get('log', False)
+        if 'log' in s and hasattr(self.plot_widget, 'is_log_scale') and self.plot_widget.is_log_scale != s['log']:
+            self.plot_widget.is_log_scale = s['log']
             pi = getattr(self.plot_widget, 'getPlotItem', lambda: None)()
             if pi: pi.setLogMode(x=s['log'], y=False)
 
@@ -372,7 +414,7 @@ class BaseTrackContainer(QFrame):
     def add_curve(self, data, depth, info, rgb_full_bg=None): pass
     def add_curve_at_index(self, data, depth, info, index, rgb_full_bg=None): pass
     def remove_curve_at(self, idx): pass
-    def apply_curve_settings(self, idx, settings, trigger_others=True): pass
+    def apply_curve_settings(self, idx, settings, trigger_others=True, reload_data=True): pass
     def _refresh_z_orders(self): pass
     def _update_grid_visibility(self): pass
 
@@ -490,7 +532,7 @@ class CurveTrackContainer(BaseTrackContainer):
         if len(self.plot_widget.curves) == 0:
             self.plot_widget.is_log_scale = is_log
             self.plot_widget.getPlotItem().setLogMode(x=False, y=False)
-            self.plot_widget.setXRange(x_min, x_max, padding=0)
+            self.plot_widget.setXRange(x_min, x_max, 0)
             self.plot_widget.getPlotItem().vb.invertX(info.get('invert_x', False))
             if hasattr(self.plot_widget, 'set_x_params'):
                 self.plot_widget.set_x_params(is_log, (d_min, d_max))
@@ -565,14 +607,26 @@ class CurveTrackContainer(BaseTrackContainer):
         self._update_grid_visibility() 
         self.header.update()
 
-    def apply_curve_settings(self, idx: int, settings: Dict[str, Any], trigger_others: bool = True) -> None:
+    def apply_curve_settings(
+        self,
+        idx: int,
+        settings: Dict[str, Any],
+        trigger_others: bool = True,
+        reload_data: bool = True,
+    ) -> None:
         if idx >= len(self.plot_widget.curves): return
         curve_entry = self.plot_widget.curves[idx]
         info, vb = curve_entry['info'], curve_entry.get('viewbox')
         if not vb: return
         
         item, data, depth = curve_entry.get('item', curve_entry.get('curve')), curve_entry.get('data'), curve_entry.get('depth')
-        plot_data, depth, merged = CurveManager.update_line_on_item(item, data, depth, info, settings)
+        if reload_data:
+            plot_data, depth, merged = CurveManager.update_line_on_item(item, data, depth, info, settings)
+        else:
+            merged = info.copy()
+            merged.update(settings)
+            plot_data = curve_entry.get('plot_data', data)
+            CurveManager.apply_line_style(item, merged)
         if 'title' in settings: merged['title'] = settings['title']
         
         curve_entry.update({'info': merged, 'plot_data': plot_data, 'depth': depth})
@@ -581,6 +635,8 @@ class CurveTrackContainer(BaseTrackContainer):
         merged['min'], merged['max'] = c_min, c_max
         vb.invertX(merged.get('invert_x', False))
         vb.setXRange(x_start, x_end, padding=0)
+        if not reload_data:
+            curve_entry.pop('_last_slice', None)
         
         lw = self.log_widget or self.find_log_widget()
         if lw and hasattr(lw, 'apply_depth_range'):
@@ -694,7 +750,7 @@ class ImageTrackContainer(BaseTrackContainer):
             if master_range: self.log_widget.apply_depth_range(master_range[0], master_range[1])
             else:
                 d_min, d_max = (depth[0], depth[-1]) if depth[0] < depth[-1] else (depth[-1], depth[0])
-                self.plot_widget.setYRange(d_min, d_min + 10, padding=0)
+                self.plot_widget.setYRange(d_min, d_min + 10, 0)
                 if hasattr(self.log_widget, 'scale_control'): QTimer.singleShot(50, self.log_widget.scale_control.update_scale)
                 else: self.log_widget.apply_depth_range(d_min, d_min + 10)
 
@@ -731,7 +787,13 @@ class ImageTrackContainer(BaseTrackContainer):
         self._refresh_z_orders()
         self.header.update()
 
-    def apply_curve_settings(self, idx: int, settings: Dict[str, Any], trigger_others: bool = True) -> None:
+    def apply_curve_settings(
+        self,
+        idx: int,
+        settings: Dict[str, Any],
+        trigger_others: bool = True,
+        reload_data: bool = True,
+    ) -> None:
         if idx >= len(self.plot_widget.curves): return
         curve_entry = self.plot_widget.curves[idx]
         old_info = curve_entry['info']

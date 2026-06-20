@@ -19,7 +19,6 @@ from ..ui.ui_components import (FloatingScaleControl, FloatingHeaderToggle, Quic
 from ..data.export_manager import LogExporter
 from ..tracks.track_container import BaseTrackContainer, DepthTrackContainer, CurveTrackContainer, ImageTrackContainer
 from ..rendering.scroll_manager import ScrollManager
-from ..utils.logger import logger
 
 # --- Main Widget ---
 
@@ -46,6 +45,8 @@ class LogWidget(QWidget):
         self._track_x_cache_dirty = True
         self.custom_min_depth = None # [NEW] Restrictive viewport min
         self.custom_max_depth = None # [NEW] Restrictive viewport max
+        self._pending_initial_scale_update = False
+        self._initial_scale_update_applied = False
         
         self.layout = QHBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
@@ -191,8 +192,9 @@ class LogWidget(QWidget):
         self.SCROLL_PRECISION = 100 # Multiplier to support fractional depth scrolling (cm precision)
         self.enable_hard_slicing = True # [RE-ENABLED] Performance Toggle - User requested revert with improvements
         
-        # [NEW] ThreadPool for DB operations to ensure SQLite thread safety
-        self.thread_pool = QThreadPool.globalInstance()
+        # Use a per-plot thread pool so one window's template/image work
+        # cannot starve unrelated plot windows via the global pool.
+        self.thread_pool = QThreadPool(self)
         self.thread_pool.setMaxThreadCount(2) # Prevent IO bottleneck
         
         # Initial theme application (Must be at the end to ensure scroll_mgr exists)
@@ -201,7 +203,7 @@ class LogWidget(QWidget):
     def set_db_source(self, db_or_path):
         """Synchronize the active DBManager and db_path for this plot window."""
         if isinstance(db_or_path, str):
-            self.db = DBManager(db_or_path)
+            self.db = DBManager(db_or_path, ensure_schema=False)
         else:
             self.db = db_or_path
         self.db_path = getattr(self.db, 'db_path', None)
@@ -405,9 +407,39 @@ class LogWidget(QWidget):
         """Cleanup when plot window is closed."""
         if hasattr(self, 'sb_anim'):
             self.sb_anim.stop()
+        if hasattr(self, 'scroll_timer'):
+            self.scroll_timer.stop()
+        if hasattr(self, 'loading_status_timer'):
+            self.loading_status_timer.stop()
+        if hasattr(self, 'scroll_mgr'):
+            try:
+                self.scroll_mgr._image_debounce_timer.stop()
+            except Exception:
+                pass
+            try:
+                self.scroll_mgr._pending_tile_requests.clear()
+            except Exception:
+                pass
+        if hasattr(self, 'active_image_workers'):
+            self.active_image_workers.clear()
+        if hasattr(self, 'thread_pool'):
+            try:
+                self.thread_pool.clear()
+            except Exception:
+                pass
+            try:
+                self.thread_pool.waitForDone(200)
+            except Exception:
+                pass
         if self.current_settings_dialog:
             self.current_settings_dialog.close()
             self.current_settings_dialog = None
+        for track in list(self.track_containers):
+            try:
+                if hasattr(track, 'cleanup'):
+                    track.cleanup()
+            except Exception:
+                pass
         self.track_containers.clear()
         super().closeEvent(event)
 
@@ -474,17 +506,91 @@ class LogWidget(QWidget):
 
     def add_empty_track(self, index=None):
         """Add an empty standard curve track with no curves."""
-        track = CurveTrackContainer(self)
-        track.track_name = None
+        self.create_track_from_state({"type": "data"}, index=index)
 
-        if hasattr(self, 'header_toggle'):
-            track.header.setVisible(not self.header_toggle.isChecked())
+    def create_track_from_state(self, track_state, index=None):
+        """Build and insert a track container from saved/basic state."""
+        t_type = track_state.get("type", "data")
+        width = track_state.get("base_width", track_state.get("width", 200))
 
-        self._add_track_to_layout(track, index=index, width=200)
+        if t_type == "depth":
+            track = DepthTrackContainer(self)
+            track.track_name = track_state.get("name") or "Depth"
+            track.header.set_title(track_state.get("name", "Depth"))
+            track.header.set_unit(track_state.get("unit", "m"))
+            track.header.set_range_visible(False)
+
+            if hasattr(self, 'header_toggle'):
+                default_visible = not self.header_toggle.isChecked()
+                track.header.setVisible(track_state.get("header_visible", default_visible))
+
+            track.resize(60, track.height())
+            track.setMinimumWidth(60)
+            self._add_track_to_layout(track, index=index, width=60)
+        else:
+            is_accum = track_state.get("is_accum_fill", False)
+            has_image = any(c.get("is_image", False) for c in track_state.get("curves", []))
+            if is_accum:
+                from ..tracks.track_container import AccumulativeTrackContainer
+                track = AccumulativeTrackContainer(self)
+            elif has_image:
+                track = ImageTrackContainer(self)
+            else:
+                track = CurveTrackContainer(self)
+
+            track.track_name = track_state.get("name")
+            if hasattr(self, 'header_toggle'):
+                default_visible = not self.header_toggle.isChecked()
+                track.header.setVisible(track_state.get("header_visible", default_visible))
+
+            self._add_track_to_layout(track, index=index, width=width)
 
         for i in range(self.splitter.count()):
             w = self.splitter.widget(i)
             self.splitter.setStretchFactor(i, 1 if isinstance(w, TrackSpacer) else 0)
+
+        return track
+
+    def apply_track_state(self, track, track_state):
+        """Apply persisted track-level settings to an existing track."""
+        if not track or not track_state:
+            return
+
+        settings = dict(track_state)
+        settings.setdefault("width", track_state.get("base_width", track.width()))
+        settings.setdefault("name", getattr(track, "track_name", None) or "")
+
+        if hasattr(track, "apply_track_settings"):
+            track.apply_track_settings(settings)
+
+        if hasattr(track, 'header') and hasattr(self, 'header_toggle'):
+            default_visible = not self.header_toggle.isChecked()
+            track.header.setVisible(track_state.get("header_visible", default_visible))
+
+    def schedule_initial_scale_update(self):
+        """Run the same default first-frame scale initialization used by manual plotting."""
+        if self._initial_scale_update_applied:
+            return
+        if self._pending_initial_scale_update:
+            return
+
+        self._pending_initial_scale_update = True
+
+        def _apply():
+            self._pending_initial_scale_update = False
+            if not hasattr(self, 'scale_control'):
+                return
+            try:
+                if hasattr(self.scale_control, 'block_auto') and hasattr(self.scale_control, 'combo'):
+                    self.scale_control.block_auto = True
+                    self.scale_control.combo.setCurrentText("1:50")
+                    self.scale_control.block_auto = False
+                self.scale_control.update_scale()
+                self._initial_scale_update_applied = True
+            except Exception:
+                pass
+
+        QTimer.singleShot(50, _apply)
         
     def get_master_viewbox(self):
         """Find the first legitimate plot widget ViewBox to act as master."""
@@ -630,8 +736,17 @@ class LogWidget(QWidget):
         """Safely remove a track and sync layout."""
         if container in self.track_containers:
             self.track_containers.remove(container)
+            if hasattr(container, 'cleanup'):
+                container.cleanup()
             container.setParent(None)
             container.deleteLater()
+            has_data_tracks = any(
+                isinstance(getattr(track, 'plot_widget', None), InteractivePlotWidget)
+                for track in self.track_containers
+            )
+            if not has_data_tracks:
+                self._pending_initial_scale_update = False
+                self._initial_scale_update_applied = False
             self.sync_track_list()
             self._sync_container_width()
             self._invalidate_track_x_cache()

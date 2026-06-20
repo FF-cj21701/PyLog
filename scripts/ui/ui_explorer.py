@@ -188,7 +188,7 @@ class UnifiedExplorer(QWidget):
         items = os.listdir(directory)
         # Filter out __pycache__ and hidden folders (starting with .)
         dirs = [d for d in items if os.path.isdir(os.path.join(directory, d)) and d != "__pycache__" and not d.startswith(".")]
-        files = [f for f in items if os.path.isfile(os.path.join(directory, f)) and f.endswith(".py")]
+        files = [f for f in items if os.path.isfile(os.path.join(directory, f)) and not f.startswith(".")]
         
         # Add folders
         for d in sorted(dirs):
@@ -212,6 +212,7 @@ class UnifiedExplorer(QWidget):
             item.setText(0, f)
             item.setText(1, size_str)
             item.setIcon(0, self.style().standardIcon(QStyle.SP_FileIcon))
-            item.setData(0, Qt.UserRole, {'type': 'script', 'path': path})
+            item_type = 'script' if f.endswith(".py") else 'file'
+            item.setData(0, Qt.UserRole, {'type': item_type, 'path': path})
 
 

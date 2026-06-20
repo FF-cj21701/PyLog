@@ -39,11 +39,11 @@ class LogExportDialog(ThemeDialog):
         self.range_mode.currentTextChanged.connect(self.on_range_mode_changed)
         
         self.start_depth_spin = QDoubleSpinBox()
-        self.start_depth_spin.setRange(-10000, 10000)
+        self.start_depth_spin.setRange(-10000, 100000)
         self.start_depth_spin.setDecimals(2)
         
         self.end_depth_spin = QDoubleSpinBox()
-        self.end_depth_spin.setRange(-10000, 10000)
+        self.end_depth_spin.setRange(-10000, 100000)
         self.end_depth_spin.setDecimals(2)
         
         range_layout.addRow("Range Mode:", self.range_mode)
@@ -59,7 +59,7 @@ class LogExportDialog(ThemeDialog):
         output_group.setLayout(output_layout)
         
         self.format_combo = QComboBox()
-        self.format_combo.addItems(["JPG", "PDF"])
+        self.format_combo.addItems(["PDF", "JPG"])
         self.format_combo.currentTextChanged.connect(self.on_format_changed)
         output_layout.addRow("Format:", self.format_combo)
         
@@ -72,7 +72,7 @@ class LogExportDialog(ThemeDialog):
             "A3 (420mm Height)",
             "A4 (297mm Height)"
         ])
-        self.page_mode.setEnabled(False) # Default JPG
+        self.page_mode.setEnabled(True) # Default PDF
         output_layout.addRow("Page Mode:", self.page_mode)
         
         self.dpi_combo = QComboBox()
@@ -431,16 +431,23 @@ class LogExporter:
                 writer = QPdfWriter(path)
                 writer.setResolution(dpi)
                 
-                # Paper Width is fixed: total_w_px
-                # Paper Height: either page_h_px or total_h_px
+                # Margin settings
+                h_margin_mm = 3.0  # Left/Right margin in mm
+                v_margin_mm = 3.0  # Top (first page) / Bottom (last page) margin in mm
+                
+                # Paper dimensions
                 pdf_page_h = page_h_px if page_h_px else total_h_px
-                writer.setPageSize(QPageSize(QSizeF(total_w_px/dpi*25.4, pdf_page_h/dpi*25.4), QPageSize.Unit.Millimeter))
+                page_w_mm = total_w_px / dpi * 25.4 + 2 * h_margin_mm
+                page_h_mm = pdf_page_h / dpi * 25.4
                 
-                # Capture default margins from Page 1
-                default_margins = writer.pageLayout().margins(QPageLayout.Unit.Millimeter)
-                
-                # [FIX] Set Bottom Margin to 0 for Page 1 to ensure seamless stitching
-                writer.setPageMargins(QMarginsF(default_margins.left(), default_margins.top(), default_margins.right(), 0), QPageLayout.Unit.Millimeter)
+                if not page_h_px and not forced_paging:
+                    # Single page: add top + bottom margins to page height
+                    writer.setPageSize(QPageSize(QSizeF(page_w_mm, page_h_mm + 2 * v_margin_mm), QPageSize.Unit.Millimeter))
+                    writer.setPageMargins(QMarginsF(h_margin_mm, v_margin_mm, h_margin_mm, v_margin_mm), QPageLayout.Unit.Millimeter)
+                else:
+                    # Multi-page: first page gets top margin only
+                    writer.setPageSize(QPageSize(QSizeF(page_w_mm, page_h_mm + v_margin_mm), QPageSize.Unit.Millimeter))
+                    writer.setPageMargins(QMarginsF(h_margin_mm, v_margin_mm, h_margin_mm, 0), QPageLayout.Unit.Millimeter)
                 
                 painter = QPainter(writer)
                 painter.setRenderHint(QPainter.Antialiasing)
@@ -453,7 +460,9 @@ class LogExporter:
                 current_scale_str = self.log_widget.scale_control.combo.currentText()
                 # Resolve separator color from current theme context
                 sep_color = app_config.get_theme_qcolor("track_divider")
-                separator_pen = QPen(sep_color, 1.2 * scale_factor)
+                pen_w = 1.2 * scale_factor
+                separator_pen = QPen(sep_color, pen_w)
+                total_w = total_w_px
 
                 if not page_h_px and not forced_paging:
                     # Single Page Mode (Existing)
@@ -513,8 +522,15 @@ class LogExporter:
                     curr_depth_start = depth_p1_end
                     
                     while remaining_h > 0:
-                        # Remove top margin for subsequent pages for seamless stitching
-                        writer.setPageMargins(QMarginsF(default_margins.left(), 0, default_margins.right(), 0), QPageLayout.Unit.Millimeter)
+                        is_last_page = remaining_h <= page_h_px
+                        if is_last_page:
+                            # Last page: add bottom margin
+                            writer.setPageSize(QPageSize(QSizeF(page_w_mm, page_h_mm + v_margin_mm), QPageSize.Unit.Millimeter))
+                            writer.setPageMargins(QMarginsF(h_margin_mm, 0, h_margin_mm, v_margin_mm), QPageLayout.Unit.Millimeter)
+                        else:
+                            # Middle pages: no top/bottom margins for seamless stitching
+                            writer.setPageSize(QPageSize(QSizeF(page_w_mm, page_h_mm), QPageSize.Unit.Millimeter))
+                            writer.setPageMargins(QMarginsF(h_margin_mm, 0, h_margin_mm, 0), QPageLayout.Unit.Millimeter)
                         writer.newPage()
                         
                         this_page_data_h = min(remaining_h, page_h_px)
@@ -539,6 +555,10 @@ class LogExporter:
                             curr_x += tw
                             if i == len(track_widths) - 1: painter.drawLine(QPointF(x2, 0), QPointF(x2, y2))
                             else: painter.drawLine(QPointF(curr_x, 0), QPointF(curr_x, y2))
+                        
+                        # Draw bottom border on the last page
+                        if is_last_page:
+                            painter.drawLine(QPointF(x1, y2), QPointF(x2, y2))
 
                         remaining_h -= page_h_px
                         curr_depth_start = curr_depth_end

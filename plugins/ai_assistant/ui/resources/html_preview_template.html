@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTML Preview</title>
+    <style id="dynamic-theme-vars">
+    </style>
+    <style>
+        :root {
+            --bg-primary: #0f141c;
+            --bg-surface: rgba(19, 27, 38, 0.92);
+            --bg-panel: rgba(255, 255, 255, 0.04);
+            --border-color: #2f3c50;
+            --text-primary: #eef5ff;
+            --text-secondary: #a6b7cc;
+            --accent: #4db1ff;
+            --accent-soft: rgba(77, 177, 255, 0.14);
+        }
+
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            min-height: 100%;
+            background:
+                radial-gradient(circle at top right, rgba(77, 177, 255, 0.16), transparent 26%),
+                linear-gradient(180deg, #101620 0%, #0b1017 100%);
+            color: var(--text-primary);
+            font-family: "Segoe UI", "PingFang SC", sans-serif;
+        }
+
+        html.dark-mode ::-webkit-scrollbar,
+        html.sakura-mode ::-webkit-scrollbar,
+        html.manga-mode ::-webkit-scrollbar,
+        html ::-webkit-scrollbar {
+            width: 12px;
+            height: 12px;
+        }
+
+        html.dark-mode ::-webkit-scrollbar-track,
+        html.sakura-mode ::-webkit-scrollbar-track,
+        html.manga-mode ::-webkit-scrollbar-track,
+        html ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        html.dark-mode ::-webkit-scrollbar-thumb,
+        html.sakura-mode ::-webkit-scrollbar-thumb,
+        html.manga-mode ::-webkit-scrollbar-thumb,
+        html ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 999px;
+            border: 2px solid transparent;
+            background-clip: padding-box;
+        }
+
+        .page {
+            padding: 0;
+            min-height: 100vh;
+        }
+
+        .shell {
+            min-height: 100vh;
+            padding: 0;
+            background:
+                radial-gradient(circle at top right, rgba(77, 177, 255, 0.08), transparent 22%),
+                linear-gradient(180deg, rgba(16, 22, 32, 0.96) 0%, rgba(11, 16, 23, 0.98) 100%);
+        }
+
+        iframe {
+            width: 100%;
+            min-height: 100vh;
+            height: 100vh;
+            border: none;
+            display: block;
+            background: transparent;
+        }
+    </style>
+</head>
+<body>
+    <main class="page">
+        <section class="shell">
+            <iframe id="previewFrame" title="HTML Preview"></iframe>
+        </section>
+    </main>
+
+    <script>
+        window.__previewPayload = { src: "", title: "HTML Preview", path: "", injectedCss: "" };
+
+        window.setTheme = function(theme) {
+            theme = (theme || "light").toLowerCase();
+            document.documentElement.classList.remove("dark-mode", "sakura-mode", "manga-mode");
+            if (theme === "dark" || theme === "sakura") {
+                document.documentElement.classList.add("dark-mode");
+            }
+            if (theme === "sakura") {
+                document.documentElement.classList.add("sakura-mode");
+            } else if (theme === "manga") {
+                document.documentElement.classList.add("manga-mode");
+            }
+        };
+
+        function applyFrameTheme() {
+            var iframe = document.getElementById("previewFrame");
+            try {
+                var doc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
+                if (!doc || !doc.head) return;
+                var styleTag = doc.getElementById("pylog-embedded-preview-theme");
+                if (!styleTag) {
+                    styleTag = doc.createElement("style");
+                    styleTag.id = "pylog-embedded-preview-theme";
+                    doc.head.appendChild(styleTag);
+                }
+                styleTag.textContent = window.__previewPayload.injectedCss || "";
+            } catch (error) {
+                console.warn("Unable to apply embedded preview theme", error);
+            }
+        }
+
+        window.setPreviewPayload = function(payload) {
+            payload = payload || {};
+            window.__previewPayload = Object.assign({}, window.__previewPayload, payload);
+            document.title = (payload.title || "HTML Preview") + " - PyLog";
+
+            var iframe = document.getElementById("previewFrame");
+            iframe.onload = applyFrameTheme;
+            if (payload.src && iframe.src !== payload.src) {
+                iframe.src = payload.src;
+            } else {
+                applyFrameTheme();
+            }
+        };
+    </script>
+</body>
+</html>

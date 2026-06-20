@@ -54,24 +54,44 @@ class DataDropController(QObject):
             child = child.parent()
         return None
 
-    def add_curve_to_track(self, container, well_id, curve_id, db_path=None):
-        self.async_fetch_data(well_id, curve_id, context=container, db_path=db_path)
+    def add_curve_to_track(self, container, well_id, curve_id, db_path=None, curve_settings=None):
+        context = {
+            'track': container,
+            'curve_settings': curve_settings,
+        }
+        self.async_fetch_data(well_id, curve_id, context=context, db_path=db_path)
 
-    def create_new_track(self, well_id, curve_id, db_path=None):
+    def create_new_track(
+        self,
+        well_id,
+        curve_id,
+        db_path=None,
+        curve_settings=None,
+        track_name=None,
+        track_width=200,
+        header_visible=None,
+    ):
         lw = self.log_widget
-        is_first_track = not lw.track_containers
-        if is_first_track:
+        interactive_tracks = [
+            t for t in lw.track_containers
+            if isinstance(getattr(t, 'plot_widget', None), InteractivePlotWidget)
+        ]
+        is_first_data_track = len(interactive_tracks) == 0
+
+        if not lw.track_containers:
             lw.add_depth_track(index=0)
-            if hasattr(lw, 'scale_control'):
-                QTimer.singleShot(50, lw.scale_control.update_scale)
-        # [PHASE 9] Default to CurveTrackContainer for placeholder
-        container = CurveTrackContainer(lw)
+
+        if is_first_data_track and hasattr(lw, 'schedule_initial_scale_update'):
+            lw.schedule_initial_scale_update()
         track_count = sum(1 for t in lw.track_containers if isinstance(t.plot_widget, InteractivePlotWidget))
-        container.track_name = f"Track {track_count + 1}"
-        if hasattr(lw, 'header_toggle'):
-            container.header.setVisible(not lw.header_toggle.isChecked())
-            
-        lw._add_track_to_layout(container, width=200)
+        container = lw.create_track_from_state({
+            "type": "data",
+            "name": track_name if track_name is not None else f"Track {track_count + 1}",
+            "base_width": track_width,
+            "header_visible": header_visible if header_visible is not None else (
+                not lw.header_toggle.isChecked() if hasattr(lw, 'header_toggle') else True
+            ),
+        })
         
         existing = next((t for t in lw.track_containers if isinstance(t.plot_widget, InteractivePlotWidget) and t != container), None)
         if existing:
@@ -83,7 +103,12 @@ class DataDropController(QObject):
             'color': app_config.get_theme_color("text_dim"), 'min': 0, 'max': 1
         }
         container.header.add_curve_info(placeholder_info)
-        self.async_fetch_data(well_id, curve_id, context=container, db_path=db_path)
+        context = {
+            'track': container,
+            'curve_settings': curve_settings,
+        }
+        self.async_fetch_data(well_id, curve_id, context=context, db_path=db_path)
+        return container
 
     def async_fetch_data(self, well_id, curve_id, context, db_path=None):
         lw = self.log_widget
@@ -105,14 +130,18 @@ class DataDropController(QObject):
     def on_data_loaded(self, data, depth, info, context, well_id, curve_id, rgb_full=None):
         lw = self.log_widget
         lw.pending_loads = max(0, lw.pending_loads - 1)
-
         if data is None: 
             self._check_loading_status()
             return
         lw.update_depth_limits(depth)
         
-        if context and isinstance(context, BaseTrackContainer):
-            track = context
+        track = context
+        curve_settings = None
+        if isinstance(context, dict):
+            track = context.get('track')
+            curve_settings = context.get('curve_settings')
+
+        if track and isinstance(track, BaseTrackContainer):
             track.header.remove_placeholder()
             
             # [PHASE 9: Track Hierarchy] Morph track if it's the wrong type for the data
@@ -131,24 +160,33 @@ class DataDropController(QObject):
                 # when receiving 1D data. This allows 1D curves to be overlaid on images.
                 pass
             
-            c_name = info.get('name')
-            if hasattr(track, '_template_curve_settings') and c_name in track._template_curve_settings:
-                # [FIX] Pop from the list-based queue to support duplicate mnemonics (dual CAL, etc)
-                queue = track._template_curve_settings[c_name]
-                if queue:
-                    template_cfg = queue.pop(0)
-                    for key, val in template_cfg.items():
-                        if key not in ['well_id', 'curve_id']:
-                            info[key] = val
-                    
-                    # Cleanup empty lists and the attribute if no more settings remain
-                    if not queue: del track._template_curve_settings[c_name]
-                    if not track._template_curve_settings: delattr(track, '_template_curve_settings')
+            if curve_settings:
+                for key, val in curve_settings.items():
+                    if key not in ['well_id', 'curve_id']:
+                        info[key] = val
 
             track.add_curve(data, depth, info, rgb_full_bg=rgb_full)
-            track.apply_curve_settings(0 if not hasattr(track.plot_widget, 'curves') else len(track.plot_widget.curves)-1, info)
+            # Template-driven loads already merge their saved style into `info`
+            # before the curve is created, so a second full settings apply is
+            # usually redundant and can trigger extra forced refresh work.
+            needs_post_add_apply = (
+                curve_settings is None
+                or bool(info.get('fill_mode'))
+            )
+            if needs_post_add_apply:
+                track.apply_curve_settings(
+                    0 if not hasattr(track.plot_widget, 'curves') else len(track.plot_widget.curves) - 1,
+                    info,
+                )
+
+            if (
+                curve_settings is not None
+                and len(getattr(track.plot_widget, 'curves', [])) == 1
+                and hasattr(lw, 'schedule_initial_scale_update')
+            ):
+                lw.schedule_initial_scale_update()
             
-            if not hasattr(track, '_template_curve_settings') and track.is_accum_fill:
+            if track.is_accum_fill:
                 track._update_accumulative_fills()
         else:
             self._create_new_track_final(data, depth, info, rgb_full)
@@ -188,5 +226,5 @@ class DataDropController(QObject):
             d_min, d_max = float(depth[0]), float(depth[-1])
             if d_min > d_max: d_min, d_max = d_max, d_min
             container.plot_widget.setYRange(d_min, d_min + 10, padding=0)
-            if hasattr(lw, 'scale_control'):
-                QTimer.singleShot(50, lw.scale_control.update_scale)
+            if hasattr(lw, 'schedule_initial_scale_update'):
+                lw.schedule_initial_scale_update()

@@ -20,6 +20,7 @@ class AgentState:
     current_plan: List[Dict[str, Any]] = field(default_factory=list)
     current_plan_step_id: Optional[str] = None
     current_plan_source: Optional[str] = None
+    current_plan_domain: Optional[str] = None
     task_plan_enabled: bool = False
     task_state: str = "idle"
     task_state_reason: Optional[str] = None
@@ -45,6 +46,7 @@ class AgentState:
         self.current_plan = []
         self.current_plan_step_id = None
         self.current_plan_source = None
+        self.current_plan_domain = None
         self.task_plan_enabled = False
         self.task_state = "idle"
         self.task_state_reason = None
@@ -78,6 +80,7 @@ class AgentState:
         self.current_plan = plan.to_dict_list()
         self.current_plan_step_id = self.current_plan[0]["id"] if self.current_plan else None
         self.current_plan_source = source
+        self.current_plan_domain = plan.domain
         self.task_plan_enabled = True
 
     def update_task_plan(self, plan: TaskPlan, preserve_progress: bool = True, source: Optional[str] = None) -> None:
@@ -86,6 +89,7 @@ class AgentState:
         current_index = self.get_current_plan_step_index()
 
         self.current_plan = plan.to_dict_list()
+        self.current_plan_domain = plan.domain
         if source:
             self.current_plan_source = source
         self.task_plan_enabled = True
@@ -232,6 +236,7 @@ class AgentState:
             "plan_enabled": self.task_plan_enabled,
             "plan_should_display": visible_plan,
             "plan_source": self.current_plan_source,
+            "plan_domain": self.current_plan_domain,
             "current_step": current,
             "steps": list(self.current_plan),
             "completed_steps": completed,

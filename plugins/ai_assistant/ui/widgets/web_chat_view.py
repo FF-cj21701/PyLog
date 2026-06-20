@@ -18,6 +18,7 @@ class WebChatBridge(QObject):
     modeToggled = Signal()
     settingsRequested = Signal()
     chatCleared = Signal()
+    messageCardActionRequested = Signal(str)
     updateChatContexts = Signal(str)  # 新增：同步JS侧的气泡上下文
     webReady = Signal() # New signal to indicate page is loaded
     
@@ -50,6 +51,10 @@ class WebChatBridge(QObject):
     def onUpdateChatContexts(self, contexts_json):
         """接收来自JS的上下文同步请求"""
         self.updateChatContexts.emit(contexts_json)
+
+    @Slot(str)
+    def onMessageCardAction(self, payload_json):
+        self.messageCardActionRequested.emit(payload_json)
 
     @Slot(result=list)
     def getProjectFiles(self):
@@ -331,6 +336,8 @@ class WebChatView(QWebEngineView):
         self._current_message_content = ""
         self._current_message_process_logs = []
         self._current_message_steps = []
+        self._current_message_cards = []
+        self._current_message_pending_cards = []
         self._current_reasoning_step_index = None
         self._current_live_text_step_index = None
         self._has_active_ai_message = False  # 标记是否有正在进行的AI消息
@@ -439,8 +446,44 @@ class WebChatView(QWebEngineView):
             normalized["content"] = content
         if summary:
             normalized["summary"] = summary
+        cards = WebChatView._extract_message_cards(normalized)
+        if cards:
+            normalized["cards"] = cards
 
         return normalized
+
+    @staticmethod
+    def _extract_message_cards(result):
+        if not isinstance(result, dict):
+            return []
+
+        explicit_cards = result.get("cards")
+        if isinstance(explicit_cards, list) and explicit_cards:
+            return explicit_cards
+
+        state = result.get("script_state") or {}
+        script_path = result.get("script_path") or result.get("filepath") or state.get("script_path")
+        review_stats = state.get("last_review_diff_stats") or {}
+        if not script_path:
+            return []
+
+        normalized_path = str(script_path).replace("\\", "/")
+        card = {
+            "type": "file_change",
+            "title": f"Edited {os.path.basename(normalized_path)}",
+            "path": normalized_path,
+            "subtitle": os.path.dirname(normalized_path) or "workspace file",
+            "added": int(review_stats.get("added") or 0),
+            "removed": int(review_stats.get("removed") or 0),
+            "review_available": True,
+            "actions": [],
+        }
+        card["actions"].append({
+            "id": "review",
+            "label": "Review",
+            "payload": {"script_path": normalized_path},
+        })
+        return [card]
 
     def _is_finish_stage_active(self):
         return any((tool or {}).get("name") == "tool_finish" for tool in self._current_message_tools)
@@ -450,8 +493,9 @@ class WebChatView(QWebEngineView):
         safe_reasoning = json.dumps(self._current_message_reasoning) if self._current_message_reasoning else "null"
         safe_tools = json.dumps(self._current_message_tools) if self._current_message_tools else "null"
         safe_steps = json.dumps(self._current_message_steps) if self._current_message_steps else "null"
+        safe_cards = json.dumps(self._current_message_cards) if self._current_message_cards else "null"
         safe_summary = json.dumps(summary) if summary else "null"
-        js = f"updateLastMessage({safe_content}, {safe_reasoning}, {safe_tools}, {safe_summary}, null, {safe_steps});"
+        js = f"updateLastMessage({safe_content}, {safe_reasoning}, {safe_tools}, {safe_summary}, null, {safe_steps}, {safe_cards});"
         self._run_js(js)
 
     def on_web_ready(self):
@@ -470,7 +514,7 @@ class WebChatView(QWebEngineView):
         else:
             self._pending_scripts.append(js)
 
-    def append_message(self, role, content, reasoning=None, tools=None, summary=None, is_html=False, callback=None):
+    def append_message(self, role, content, reasoning=None, tools=None, summary=None, is_html=False, callback=None, cards=None):
         """添加消息到聊天界面。
         
         Args:
@@ -488,10 +532,11 @@ class WebChatView(QWebEngineView):
         safe_reasoning = json.dumps(reasoning) if reasoning else "null"
         safe_tools = json.dumps(tools) if tools else "null"
         safe_steps = json.dumps(self._current_message_steps) if role == 'ai' and self._current_message_steps else "null"
+        safe_cards = json.dumps(cards) if cards else "null"
         safe_summary = json.dumps(summary) if summary else "null"
         safe_is_html = "true" if is_html else "false"
         
-        js = f"appendMessage({safe_role}, {safe_content}, {safe_ts}, {safe_reasoning}, {safe_tools}, {safe_summary}, null, {safe_steps}, {safe_is_html});"
+        js = f"appendMessage({safe_role}, {safe_content}, {safe_ts}, {safe_reasoning}, {safe_tools}, {safe_summary}, null, {safe_steps}, {safe_is_html}, {safe_cards});"
         self._run_js(js, callback=callback)
         
         # 如果是AI消息，标记为活跃状态
@@ -509,6 +554,8 @@ class WebChatView(QWebEngineView):
         self._current_message_content = ""
         self._current_message_process_logs = []
         self._current_message_steps = []
+        self._current_message_cards = []
+        self._current_message_pending_cards = []
         self._current_reasoning_step_index = None
         self._current_live_text_step_index = None
         self._has_active_ai_message = False
@@ -566,6 +613,7 @@ class WebChatView(QWebEngineView):
             tool["code"] = code
         if result:
             tool["result"] = self._normalize_tool_result_payload(result)
+            self._merge_pending_cards_from_result(tool["result"])
             
         self._current_message_tools.append(tool)
         self._current_message_steps.append({
@@ -591,6 +639,7 @@ class WebChatView(QWebEngineView):
                 tool["status"] = status
                 if result:
                     tool["result"] = self._normalize_tool_result_payload(result)
+                    self._merge_pending_cards_from_result(tool["result"])
                 break
 
         for step in reversed(self._current_message_steps):
@@ -598,8 +647,59 @@ class WebChatView(QWebEngineView):
                 step["status"] = status
                 if result:
                     step["result"] = self._normalize_tool_result_payload(result)
+                    self._merge_pending_cards_from_result(step["result"])
                 break
 
+        self._sync_current_message_to_ui()
+
+    @staticmethod
+    def _merge_card_collections(existing_cards, incoming_cards):
+        merged = {}
+        for card in existing_cards or []:
+            key = f"{card.get('type')}::{card.get('path')}::{card.get('title')}"
+            merged[key] = dict(card)
+        for card in incoming_cards or []:
+            key = f"{card.get('type')}::{card.get('path')}::{card.get('title')}"
+            incoming = dict(card)
+            existing = merged.get(key)
+            if existing:
+                existing["added"] = max(int(existing.get("added") or 0), int(incoming.get("added") or 0))
+                existing["removed"] = max(int(existing.get("removed") or 0), int(incoming.get("removed") or 0))
+                existing["review_available"] = bool(existing.get("review_available")) or bool(incoming.get("review_available"))
+                existing_actions = existing.get("actions") or []
+                incoming_actions = incoming.get("actions") or []
+                seen = {
+                    f"{action.get('id')}::{json.dumps(action.get('payload') or {}, sort_keys=True, ensure_ascii=False)}"
+                    for action in existing_actions
+                }
+                for action in incoming_actions:
+                    action_key = f"{action.get('id')}::{json.dumps(action.get('payload') or {}, sort_keys=True, ensure_ascii=False)}"
+                    if action_key not in seen:
+                        existing_actions.append(action)
+                        seen.add(action_key)
+                existing["actions"] = existing_actions
+                merged[key] = existing
+            else:
+                merged[key] = incoming
+        return list(merged.values())
+
+    def _merge_pending_cards_from_result(self, result):
+        cards = result.get("cards") if isinstance(result, dict) else None
+        if not cards:
+            return
+        self._current_message_pending_cards = self._merge_card_collections(
+            self._current_message_pending_cards,
+            cards,
+        )
+
+    def _publish_pending_cards(self):
+        if not getattr(self, "_current_message_pending_cards", None):
+            return
+        self._current_message_cards = self._merge_card_collections(
+            self._current_message_cards,
+            self._current_message_pending_cards,
+        )
+        self._current_message_pending_cards = []
         self._sync_current_message_to_ui()
 
     def add_summary(self, content, sections=None):
@@ -618,6 +718,7 @@ class WebChatView(QWebEngineView):
 
     def finalize_current_message(self):
         """完成当前消息，准备下一轮对话。"""
+        self._publish_pending_cards()
         self._run_js("setLastAiMessageState('finalized');")
         self._has_active_ai_message = False
 
@@ -628,6 +729,8 @@ class WebChatView(QWebEngineView):
         self._current_message_content = ""
         self._current_message_process_logs = []
         self._current_message_steps = []
+        self._current_message_cards = []
+        self._current_message_pending_cards = []
         self._current_reasoning_step_index = None
         self._current_live_text_step_index = None
         self._has_active_ai_message = False

@@ -417,6 +417,316 @@ class PlotTool(BaseWellTool):
 
 
 @register_tool
+class CreatePlotTool(BaseTool):
+    def __init__(self, main_window=None, tool_executor=None):
+        super().__init__(
+            "create_plot",
+            "Create a plot window from a normalized plot spec",
+            {
+                "plot_spec": {"type": "object", "description": "Normalized plot spec"},
+            },
+            metadata={
+                "required_args": ["plot_spec"],
+                "capability_tags": ["plotting", "plot_spec"],
+                "domain_tags": ["geoscience", "pylog"],
+            },
+        )
+        self.main_window = main_window
+        self.tool_executor = tool_executor
+
+    def execute(self, plot_spec=None):
+        if not plot_spec:
+            return _api_error("create_plot", "plot_spec is required")
+        try:
+            if self.tool_executor:
+                result = _run_executor_request(
+                    self.tool_executor,
+                    "execute_create_plot",
+                    json.dumps({"plot_spec": plot_spec}),
+                )
+                return _wrap_api_result("create_plot", result, "title", "data")
+            result = pylog_api.create_plot(plot_spec)
+            return _wrap_api_result("create_plot", result, "title", "data")
+        except Exception as e:
+            return _api_error("create_plot", e)
+
+
+@register_tool
+class UpdatePlotTool(BaseTool):
+    def __init__(self, main_window=None, tool_executor=None):
+        super().__init__(
+            "update_plot",
+            "Apply plot commands such as curve style or track style updates",
+            {
+                "window_id": {"type": "string", "description": "Plot window title", "nullable": True},
+                "commands": {"type": "array", "items": {"type": "object"}, "description": "Plot update commands"},
+            },
+            metadata={
+                "required_args": ["commands"],
+                "capability_tags": ["plotting", "plot_update"],
+                "domain_tags": ["geoscience", "pylog"],
+            },
+        )
+        self.main_window = main_window
+        self.tool_executor = tool_executor
+
+    def execute(self, window_id=None, commands=None):
+        if not commands:
+            return _api_error("update_plot", "commands is required")
+        try:
+            if self.tool_executor:
+                result = _run_executor_request(
+                    self.tool_executor,
+                    "execute_update_plot",
+                    json.dumps({"window_id": window_id, "commands": commands}),
+                )
+                return _wrap_api_result("update_plot", result, "applied", "data")
+            result = pylog_api.update_plot(window_id=window_id, commands=commands)
+            return _wrap_api_result("update_plot", result, "applied", "data")
+        except Exception as e:
+            return _api_error("update_plot", e)
+
+
+@register_tool
+class ApplyCurveStyleTool(BaseTool):
+    def __init__(self, main_window=None, tool_executor=None):
+        super().__init__(
+            "apply_curve_style",
+            "Apply curve style settings to a plot curve",
+            {
+                "window_id": {"type": "string", "description": "Plot window title"},
+                "track": {"type": ["string", "number"], "description": "Track name or index"},
+                "curve": {"type": ["string", "number"], "description": "Curve name/title or index"},
+                "settings": {"type": "object", "description": "Curve style settings"},
+            },
+            metadata={
+                "required_args": ["window_id", "track", "curve", "settings"],
+                "capability_tags": ["plot_style", "curve_style"],
+                "domain_tags": ["geoscience", "pylog"],
+            },
+        )
+        self.main_window = main_window
+        self.tool_executor = tool_executor
+
+    def execute(self, window_id=None, track=None, curve=None, settings=None):
+        if window_id is None or track is None or curve is None or settings is None:
+            return _api_error("apply_curve_style", "window_id, track, curve and settings are required")
+        try:
+            if self.tool_executor:
+                result = _run_executor_request(
+                    self.tool_executor,
+                    "execute_apply_curve_style",
+                    json.dumps({
+                        "window_id": window_id,
+                        "track": track,
+                        "curve": curve,
+                        "settings": settings,
+                    }),
+                )
+                return _wrap_api_result("apply_curve_style", result, "applied", "data")
+            result = pylog_api.apply_curve_style(window_id, track, curve, settings)
+            return _wrap_api_result("apply_curve_style", result, "applied", "data")
+        except Exception as e:
+            return _api_error("apply_curve_style", e)
+
+
+@register_tool
+class ApplyTrackStyleTool(BaseTool):
+    def __init__(self, main_window=None, tool_executor=None):
+        super().__init__(
+            "apply_track_style",
+            "Apply track settings to a plot track",
+            {
+                "window_id": {"type": "string", "description": "Plot window title"},
+                "track": {"type": ["string", "number"], "description": "Track name or index"},
+                "settings": {"type": "object", "description": "Track settings"},
+            },
+            metadata={
+                "required_args": ["window_id", "track", "settings"],
+                "capability_tags": ["plot_style", "track_style"],
+                "domain_tags": ["geoscience", "pylog"],
+            },
+        )
+        self.main_window = main_window
+        self.tool_executor = tool_executor
+
+    def execute(self, window_id=None, track=None, settings=None):
+        if window_id is None or track is None or settings is None:
+            return _api_error("apply_track_style", "window_id, track and settings are required")
+        try:
+            if self.tool_executor:
+                result = _run_executor_request(
+                    self.tool_executor,
+                    "execute_apply_track_style",
+                    json.dumps({
+                        "window_id": window_id,
+                        "track": track,
+                        "settings": settings,
+                    }),
+                )
+                return _wrap_api_result("apply_track_style", result, "applied", "data")
+            result = pylog_api.apply_track_style(window_id, track, settings)
+            return _wrap_api_result("apply_track_style", result, "applied", "data")
+        except Exception as e:
+            return _api_error("apply_track_style", e)
+
+
+@register_tool
+class AddCurveToPlotTool(BaseTool):
+    def __init__(self, main_window=None, tool_executor=None):
+        super().__init__(
+            "add_curve_to_plot",
+            "Add a curve to an existing plot track or create a new track in the plot",
+            {
+                "window_id": {"type": "string", "description": "Plot window title"},
+                "well_id": {"type": "number", "description": "Well ID"},
+                "curve_id": {"type": "number", "description": "Curve ID"},
+                "track": {"type": ["string", "number"], "description": "Track name or index", "nullable": True},
+                "db_path": {"type": "string", "description": "Database path", "nullable": True},
+                "curve_settings": {"type": "object", "description": "Curve style settings", "nullable": True},
+                "track_name": {"type": "string", "description": "New track name", "nullable": True},
+                "track_width": {"type": "number", "description": "New track width", "nullable": True},
+                "header_visible": {"type": "boolean", "description": "Whether header is visible", "nullable": True},
+                "track_settings": {"type": "object", "description": "Track settings", "nullable": True},
+            },
+            metadata={
+                "required_args": ["window_id", "well_id", "curve_id"],
+                "capability_tags": ["plotting", "plot_update"],
+                "domain_tags": ["geoscience", "pylog"],
+            },
+        )
+        self.main_window = main_window
+        self.tool_executor = tool_executor
+
+    def execute(self, window_id=None, well_id=None, curve_id=None, track=None, db_path=None, curve_settings=None, track_name=None, track_width=200, header_visible=True, track_settings=None):
+        if window_id is None or well_id is None or curve_id is None:
+            return _api_error("add_curve_to_plot", "window_id, well_id and curve_id are required")
+        try:
+            if self.tool_executor:
+                result = _run_executor_request(
+                    self.tool_executor,
+                    "execute_update_plot",
+                    json.dumps({
+                        "window_id": window_id,
+                        "commands": [{
+                            "action": "add_curve",
+                            "track": track,
+                            "well_id": int(well_id),
+                            "curve_id": int(curve_id),
+                            "db_path": db_path,
+                            "curve_settings": curve_settings or {},
+                            "track_name": track_name,
+                            "track_width": int(track_width or 200),
+                            "header_visible": bool(header_visible),
+                            "track_settings": track_settings or {},
+                        }],
+                    }),
+                )
+                return _wrap_api_result("add_curve_to_plot", result, "applied", "data")
+            result = pylog_api.add_curve_to_plot(
+                window_id,
+                well_id=int(well_id),
+                curve_id=int(curve_id),
+                track=track,
+                db_path=db_path,
+                curve_settings=curve_settings or {},
+                track_name=track_name,
+                track_width=int(track_width or 200),
+                header_visible=bool(header_visible),
+                track_settings=track_settings or {},
+            )
+            return _wrap_api_result("add_curve_to_plot", result, "applied", "data")
+        except Exception as e:
+            return _api_error("add_curve_to_plot", e)
+
+
+@register_tool
+class RemoveCurveFromPlotTool(BaseTool):
+    def __init__(self, main_window=None, tool_executor=None):
+        super().__init__(
+            "remove_curve_from_plot",
+            "Remove a curve from a plot track",
+            {
+                "window_id": {"type": "string", "description": "Plot window title"},
+                "track": {"type": ["string", "number"], "description": "Track name or index"},
+                "curve": {"type": ["string", "number"], "description": "Curve name/title or index"},
+            },
+            metadata={
+                "required_args": ["window_id", "track", "curve"],
+                "capability_tags": ["plotting", "plot_update"],
+                "domain_tags": ["geoscience", "pylog"],
+            },
+        )
+        self.main_window = main_window
+        self.tool_executor = tool_executor
+
+    def execute(self, window_id=None, track=None, curve=None):
+        if window_id is None or track is None or curve is None:
+            return _api_error("remove_curve_from_plot", "window_id, track and curve are required")
+        try:
+            if self.tool_executor:
+                result = _run_executor_request(
+                    self.tool_executor,
+                    "execute_update_plot",
+                    json.dumps({
+                        "window_id": window_id,
+                        "commands": [{
+                            "action": "remove_curve",
+                            "track": track,
+                            "curve": curve,
+                        }],
+                    }),
+                )
+                return _wrap_api_result("remove_curve_from_plot", result, "applied", "data")
+            result = pylog_api.remove_curve_from_plot(window_id, track, curve)
+            return _wrap_api_result("remove_curve_from_plot", result, "applied", "data")
+        except Exception as e:
+            return _api_error("remove_curve_from_plot", e)
+
+
+@register_tool
+class RemoveTrackFromPlotTool(BaseTool):
+    def __init__(self, main_window=None, tool_executor=None):
+        super().__init__(
+            "remove_track_from_plot",
+            "Remove a track from a plot",
+            {
+                "window_id": {"type": "string", "description": "Plot window title"},
+                "track": {"type": ["string", "number"], "description": "Track name or index"},
+            },
+            metadata={
+                "required_args": ["window_id", "track"],
+                "capability_tags": ["plotting", "plot_update"],
+                "domain_tags": ["geoscience", "pylog"],
+            },
+        )
+        self.main_window = main_window
+        self.tool_executor = tool_executor
+
+    def execute(self, window_id=None, track=None):
+        if window_id is None or track is None:
+            return _api_error("remove_track_from_plot", "window_id and track are required")
+        try:
+            if self.tool_executor:
+                result = _run_executor_request(
+                    self.tool_executor,
+                    "execute_update_plot",
+                    json.dumps({
+                        "window_id": window_id,
+                        "commands": [{
+                            "action": "remove_track",
+                            "track": track,
+                        }],
+                    }),
+                )
+                return _wrap_api_result("remove_track_from_plot", result, "applied", "data")
+            result = pylog_api.remove_track_from_plot(window_id, track)
+            return _wrap_api_result("remove_track_from_plot", result, "applied", "data")
+        except Exception as e:
+            return _api_error("remove_track_from_plot", e)
+
+
+@register_tool
 class GetPlotDetailsTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(

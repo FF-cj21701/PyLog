@@ -17,6 +17,15 @@ except ImportError:
     except ImportError:
         PathResolver = None
 
+try:
+    from ..ui.widgets.agent_page_host import close_agent_page, open_agent_page
+except ImportError:
+    try:
+        from plugins.ai_assistant.ui.widgets.agent_page_host import close_agent_page, open_agent_page
+    except ImportError:
+        close_agent_page = None
+        open_agent_page = None
+
 class ToolExecutor(QObject):
     """工具执行器，用于在主线程中执行UI相关的工具操作"""
     
@@ -29,11 +38,18 @@ class ToolExecutor(QObject):
     execute_run_script = Signal(object, object)  # (code, script_path)
     execute_save_script = Signal(object)
     execute_get_script_state = Signal(object)
+    execute_open_agent_page = Signal(object)
+    execute_update_agent_page = Signal(object)
+    execute_close_agent_page = Signal(object)
     execute_get_terminal = Signal()
     execute_run_terminal_command = Signal(str)
     execute_plot_from_db = Signal(str)  # 传递JSON字符串
     execute_plot_data = Signal(str)     # 传递JSON字符串
     execute_plot = Signal(str)          # 统一绘图信号
+    execute_create_plot = Signal(str)
+    execute_update_plot = Signal(str)
+    execute_apply_curve_style = Signal(str)
+    execute_apply_track_style = Signal(str)
     execute_save_curve = Signal(str)    # 曲线保存信号
     execute_get_plot_details = Signal(str) # 传递窗口标题
     
@@ -53,11 +69,18 @@ class ToolExecutor(QObject):
         self.execute_run_script.connect(self._run_script)
         self.execute_save_script.connect(self._save_script)
         self.execute_get_script_state.connect(self._get_script_state)
+        self.execute_open_agent_page.connect(self._open_agent_page)
+        self.execute_update_agent_page.connect(self._update_agent_page)
+        self.execute_close_agent_page.connect(self._close_agent_page)
         self.execute_get_terminal.connect(self._get_terminal)
         self.execute_run_terminal_command.connect(self._run_terminal_command)
         self.execute_plot_from_db.connect(self._plot_from_db)
         self.execute_plot_data.connect(self._plot_data)
         self.execute_plot.connect(self._plot)
+        self.execute_create_plot.connect(self._create_plot)
+        self.execute_update_plot.connect(self._update_plot)
+        self.execute_apply_curve_style.connect(self._apply_curve_style)
+        self.execute_apply_track_style.connect(self._apply_track_style)
         self.execute_save_curve.connect(self._save_curve)
         self.execute_get_plot_details.connect(self._get_plot_details)
         self.execution_context = {}
@@ -342,16 +365,20 @@ class ToolExecutor(QObject):
                 if found_sub:
                     self.main_window.mdi_area.setActiveSubWindow(found_sub)
                     widget = widget or found_sub.widget()
-                    if hasattr(widget, "set_preview_code"):
+                    if hasattr(widget, "start_preview_session"):
+                        widget.start_preview_session(code, source="ai_preview")
+                    elif hasattr(widget, "set_preview_code"):
                         widget.set_preview_code(code)
-                        result = {
-                            "ok": True,
-                            "message": "Preview shown in editor",
-                            "editor_id": getattr(widget, "editor_id", None),
-                            "script_path": getattr(widget, "script_path", None),
-                        }
                     else:
                         result = {"error": "Editor does not support preview"}
+                        self.tool_executed.emit(json.dumps(result))
+                        return
+                    result = {
+                        "ok": True,
+                        "message": "Draft applied to editor; review is available",
+                        "editor_id": getattr(widget, "editor_id", None),
+                        "script_path": getattr(widget, "script_path", None),
+                    }
                 else:
                     hint = script_path or editor_id or "target script editor"
                     result = {"ok": False, "error": f"{hint} is not currently open in an editor tab. Open it first to preview."}
@@ -529,6 +556,87 @@ class ToolExecutor(QObject):
             result = {"ok": False, "error": str(e)}
 
         self.tool_executed.emit(json.dumps(result))
+
+    @Slot(object)
+    def _open_agent_page(self, payload):
+        self._show_agent_page(payload, create_mode=True)
+
+    @Slot(object)
+    def _update_agent_page(self, payload):
+        self._show_agent_page(payload, create_mode=False)
+
+    def _show_agent_page(self, payload, create_mode):
+        try:
+            if not open_agent_page or not self.main_window:
+                result = {"ok": False, "error": "agent page host is unavailable"}
+            elif not isinstance(payload, dict):
+                result = {"ok": False, "error": "payload must be an object"}
+            else:
+                page_id = str(payload.get("page_id") or "").strip()
+                if not page_id:
+                    result = {"ok": False, "error": "page_id is required"}
+                else:
+                    mode = str(payload.get("mode") or "mdi").strip().lower()
+                    title = str(payload.get("title") or page_id).strip() or page_id
+                    template = str(payload.get("template") or "agent_page_template.html").strip()
+                    size = payload.get("size") or (980, 720)
+                    page_payload = payload.get("payload")
+                    if not isinstance(page_payload, dict):
+                        page_payload = {
+                            "title": payload.get("headline") or title,
+                            "summary": payload.get("summary") or "",
+                            "content_title": payload.get("content_title") or "Content",
+                            "content": payload.get("content") or "",
+                            "format": payload.get("format") or "text",
+                            "eyebrow": payload.get("eyebrow") or "Agent Workspace",
+                            "meta": payload.get("meta") or [],
+                            "sections": payload.get("sections") or [],
+                        }
+                    page = open_agent_page(
+                        page_id=page_id,
+                        title=title,
+                        template=template,
+                        payload=page_payload,
+                        mode=mode,
+                        size=tuple(size) if isinstance(size, (list, tuple)) and len(size) == 2 else (980, 720),
+                        parent=self.main_window,
+                    )
+                    result = {
+                        "ok": True,
+                        "page_id": page_id,
+                        "title": title,
+                        "mode": mode,
+                        "template": template,
+                        "message": "Agent page opened" if create_mode else "Agent page updated",
+                        "page_mode": getattr(page, "page_mode", mode),
+                    }
+        except Exception as e:
+            result = {"ok": False, "error": str(e)}
+
+        self.tool_executed.emit(json.dumps(result))
+
+    @Slot(object)
+    def _close_agent_page(self, payload):
+        try:
+            if not close_agent_page or not self.main_window:
+                result = {"ok": False, "error": "agent page host is unavailable"}
+            elif not isinstance(payload, dict):
+                result = {"ok": False, "error": "payload must be an object"}
+            else:
+                page_id = str(payload.get("page_id") or "").strip()
+                if not page_id:
+                    result = {"ok": False, "error": "page_id is required"}
+                else:
+                    closed = close_agent_page(page_id, parent=self.main_window)
+                    result = {
+                        "ok": bool(closed),
+                        "page_id": page_id,
+                        "message": "Agent page closed" if closed else "Agent page not found",
+                    }
+        except Exception as e:
+            result = {"ok": False, "error": str(e)}
+
+        self.tool_executed.emit(json.dumps(result))
     
     @Slot()
     def _get_terminal(self):
@@ -675,6 +783,62 @@ class ToolExecutor(QObject):
             clean_params['block'] = False
             
             result = plot(**clean_params)
+            self.tool_executed.emit(json.dumps(result))
+        except Exception as e:
+            self.tool_executed.emit(json.dumps({"ok": False, "error": str(e)}))
+
+    @Slot(str)
+    def _create_plot(self, payload_json):
+        try:
+            payload = json.loads(payload_json)
+            from pylog_api import create_plot
+
+            result = create_plot(payload.get("plot_spec"))
+            self.tool_executed.emit(json.dumps(result))
+        except Exception as e:
+            self.tool_executed.emit(json.dumps({"ok": False, "error": str(e)}))
+
+    @Slot(str)
+    def _update_plot(self, payload_json):
+        try:
+            payload = json.loads(payload_json)
+            from pylog_api import update_plot
+
+            result = update_plot(
+                window_id=payload.get("window_id"),
+                commands=payload.get("commands"),
+            )
+            self.tool_executed.emit(json.dumps(result))
+        except Exception as e:
+            self.tool_executed.emit(json.dumps({"ok": False, "error": str(e)}))
+
+    @Slot(str)
+    def _apply_curve_style(self, payload_json):
+        try:
+            payload = json.loads(payload_json)
+            from pylog_api import apply_curve_style
+
+            result = apply_curve_style(
+                payload.get("window_id"),
+                payload.get("track"),
+                payload.get("curve"),
+                payload.get("settings"),
+            )
+            self.tool_executed.emit(json.dumps(result))
+        except Exception as e:
+            self.tool_executed.emit(json.dumps({"ok": False, "error": str(e)}))
+
+    @Slot(str)
+    def _apply_track_style(self, payload_json):
+        try:
+            payload = json.loads(payload_json)
+            from pylog_api import apply_track_style
+
+            result = apply_track_style(
+                payload.get("window_id"),
+                payload.get("track"),
+                payload.get("settings"),
+            )
             self.tool_executed.emit(json.dumps(result))
         except Exception as e:
             self.tool_executed.emit(json.dumps({"ok": False, "error": str(e)}))

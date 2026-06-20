@@ -8,8 +8,8 @@ from PySide6.QtCore import Qt, QRectF, QTimer, QCoreApplication, QObject
 from PySide6.QtWidgets import QMessageBox
 
 from ..rendering.plot_components import InteractivePlotWidget, PainterDepthTrack
-from ..utils.workers import ImageSliceWorker
 from ..utils.logger import logger
+from ..utils.workers import ImageSliceWorker
 
 
 class ScrollManager(QObject):
@@ -26,6 +26,8 @@ class ScrollManager(QObject):
         self._image_debounce_timer = QTimer(self)
         self._image_debounce_timer.setSingleShot(True)
         self._image_debounce_timer.timeout.connect(self._process_pending_tile_requests)
+
+        # Lightweight runtime profiling for 1D curve setData frequency during scroll.
 
     # ─── Track X Cache ───────────────────────────────────────
 

@@ -12,8 +12,15 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from pylog_api.analysis import analyze_data as packaged_analyze_data
+from pylog_api import apply_curve_style as packaged_apply_curve_style
+from pylog_api import apply_track_style as packaged_apply_track_style
+from pylog_api import add_curve_to_plot as packaged_add_curve_to_plot
+from pylog_api import create_plot as packaged_create_plot
 from pylog_api.data_access import get_curve_info as packaged_get_curve_info
 from pylog_api.data_access import list_curves as packaged_list_curves
+from pylog_api import remove_curve_from_plot as packaged_remove_curve_from_plot
+from pylog_api import remove_track_from_plot as packaged_remove_track_from_plot
+from pylog_api import update_plot as packaged_update_plot
 from pylog_api.well_info import get_well_info as packaged_get_well_info
 from scripts.data.db_manager import DBManager
 from scripts.utils.curve_resolution import resolve_curve_row
@@ -34,6 +41,13 @@ API_METADATA = {
     "get_curve_samples": "Read a bounded slice of curve values; intended for MCP-safe payloads.",
     "analyze_curve": "Compute summary statistics for a curve.",
     "analyze_values": "Compute summary statistics for an input list of numeric values.",
+    "create_plot": "Create a plot window from a normalized plot spec.",
+    "update_plot": "Apply plot update commands such as curve style or track style updates.",
+    "apply_curve_style": "Apply style settings to one curve in a plot window.",
+    "apply_track_style": "Apply settings to one track in a plot window.",
+    "add_curve_to_plot": "Add one curve to an existing track or create a new track in a plot window.",
+    "remove_curve_from_plot": "Remove one curve from a plot window.",
+    "remove_track_from_plot": "Remove one track from a plot window.",
 }
 
 
@@ -255,6 +269,63 @@ def analyze_curve(well: str, curve_name: str, db_path: str | None = None, force_
 @mcp.tool()
 def analyze_values(values: list[float], force_full: bool = False) -> dict[str, Any]:
     return _analyze_array(values, force_full=force_full)
+
+
+@mcp.tool()
+def create_plot(plot_spec: dict[str, Any]) -> dict[str, Any]:
+    return packaged_create_plot(_json_safe(plot_spec))
+
+
+@mcp.tool()
+def update_plot(window_id: str | None = None, commands: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return packaged_update_plot(window_id=window_id, commands=_json_safe(commands or []))
+
+
+@mcp.tool()
+def apply_curve_style(window_id: str, track: str | int, curve: str | int, settings: dict[str, Any]) -> dict[str, Any]:
+    return packaged_apply_curve_style(window_id, track, curve, _json_safe(settings))
+
+
+@mcp.tool()
+def apply_track_style(window_id: str, track: str | int, settings: dict[str, Any]) -> dict[str, Any]:
+    return packaged_apply_track_style(window_id, track, _json_safe(settings))
+
+
+@mcp.tool()
+def add_curve_to_plot(
+    window_id: str,
+    well_id: int,
+    curve_id: int,
+    track: str | int | None = None,
+    db_path: str | None = None,
+    curve_settings: dict[str, Any] | None = None,
+    track_name: str | None = None,
+    track_width: int = 200,
+    header_visible: bool = True,
+    track_settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return packaged_add_curve_to_plot(
+        window_id,
+        well_id=well_id,
+        curve_id=curve_id,
+        track=track,
+        db_path=db_path,
+        curve_settings=_json_safe(curve_settings or {}),
+        track_name=track_name,
+        track_width=track_width,
+        header_visible=header_visible,
+        track_settings=_json_safe(track_settings or {}),
+    )
+
+
+@mcp.tool()
+def remove_curve_from_plot(window_id: str, track: str | int, curve: str | int) -> dict[str, Any]:
+    return packaged_remove_curve_from_plot(window_id, track, curve)
+
+
+@mcp.tool()
+def remove_track_from_plot(window_id: str, track: str | int) -> dict[str, Any]:
+    return packaged_remove_track_from_plot(window_id, track)
 
 
 if __name__ == "__main__":

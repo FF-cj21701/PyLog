@@ -32,6 +32,10 @@ function ensureAiBubbleStructure(bubble) {
                 historyContainer.className = 'history-container';
                 answerBlock.appendChild(historyContainer);
 
+                const cardsContainer = document.createElement('div');
+                cardsContainer.className = 'message-cards-container';
+                answerBlock.appendChild(cardsContainer);
+
                 const contentDiv = document.createElement('div');
                 contentDiv.className = 'content live-content';
                 answerBlock.appendChild(contentDiv);
@@ -40,9 +44,10 @@ function ensureAiBubbleStructure(bubble) {
             }
 
             const historyContainer = answerBlock.querySelector('.history-container');
+            const cardsContainer = answerBlock.querySelector('.message-cards-container');
             const contentDiv = answerBlock.querySelector('.live-content');
 
-            return { answerBlock, historyContainer, contentDiv, metaStrip, details };
+            return { answerBlock, historyContainer, cardsContainer, contentDiv, metaStrip, details };
         }
 
         function rebuildBubbleDetails(bubble) {
@@ -55,7 +60,8 @@ function ensureAiBubbleStructure(bubble) {
                 bubble._latestRenderData.summary,
                 bubble._latestRenderData.processLogs,
                 bubble._latestRenderData.steps,
-                bubble.dataset.finalContent || ''
+                bubble.dataset.finalContent || '',
+                bubble._latestRenderData.cards
             );
         }
 
@@ -181,9 +187,70 @@ function ensureAiBubbleStructure(bubble) {
         }
 
 
-        function renderAiDetails(bubble, reasoning, tools, summary, processLogs = null, steps = null, liveContent = '') {
+        function createMessageCard(card) {
+            if (!card || card.type !== 'file_change') return null;
+
+            const node = document.createElement('div');
+            node.className = 'message-card message-card-file-change';
+
+            const stats = [];
+            if (typeof card.added === 'number') stats.push(`<span class="message-card-delta positive">+${card.added}</span>`);
+            if (typeof card.removed === 'number') stats.push(`<span class="message-card-delta negative">-${card.removed}</span>`);
+
+            const actionsHtml = Array.isArray(card.actions)
+                ? card.actions.map((action) => {
+                    const encoded = encodeURIComponent(JSON.stringify({ action: action.id, payload: action.payload || {} }));
+                    return `<button class="message-card-action" type="button" data-card-action="${encoded}">${escapeHtml(action.label || action.id)}</button>`;
+                }).join('')
+                : '';
+
+            node.innerHTML = `
+                <div class="message-card-main">
+                    <div class="message-card-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>
+                    </div>
+                    <div class="message-card-copy">
+                        <div class="message-card-title">${escapeHtml(card.title || 'Edited file')}</div>
+                        <div class="message-card-subtitle">${escapeHtml(card.path || card.subtitle || '')}</div>
+                        <div class="message-card-stats">${stats.join(' ')}</div>
+                    </div>
+                </div>
+                <div class="message-card-actions">${actionsHtml}</div>
+            `;
+
+            node.querySelectorAll('[data-card-action]').forEach((btn) => {
+                btn.addEventListener('click', function(event) {
+                    event.stopPropagation();
+                    const activeBridge = window.pyBridge || (typeof bridge !== 'undefined' ? bridge : null);
+                    if (activeBridge && activeBridge.onMessageCardAction) {
+                        activeBridge.onMessageCardAction(decodeURIComponent(btn.dataset.cardAction || ''));
+                    }
+                });
+            });
+
+            return node;
+        }
+
+        function renderMessageCards(cardsContainer, cards) {
+            if (!cardsContainer) return;
+            cardsContainer.innerHTML = '';
+            const list = Array.isArray(cards) ? cards : [];
+            cardsContainer.style.display = list.length ? 'flex' : 'none';
+            if (list.length) {
+                const header = document.createElement('div');
+                header.className = 'message-cards-header';
+                header.textContent = list.length === 1 ? 'File changed in this reply' : `Files changed in this reply (${list.length})`;
+                cardsContainer.appendChild(header);
+            }
+            list.forEach((card) => {
+                const node = createMessageCard(card);
+                if (node) cardsContainer.appendChild(node);
+            });
+        }
+
+        function renderAiDetails(bubble, reasoning, tools, summary, processLogs = null, steps = null, liveContent = '', cards = null) {
             const runState = bubble.dataset.runState || 'idle';
-            const { details, answerBlock, historyContainer, contentDiv, metaStrip } = ensureAiBubbleStructure(bubble);
+            const { details, answerBlock, historyContainer, cardsContainer, contentDiv, metaStrip } = ensureAiBubbleStructure(bubble);
             const normalizedSteps = Array.isArray(steps) ? steps : [];
             const isFinished = runState === 'finished' || runState === 'finalized';
             const expandedToolStepKeys = getExpandedToolStepKeys(bubble);
@@ -193,15 +260,17 @@ function ensureAiBubbleStructure(bubble) {
                 reasoning: reasoning || '',
                 tools: tools || null,
                 summary: summary || null,
-                steps: normalizedSteps
+                steps: normalizedSteps,
+                cards: cards || null
             });
 
-            bubble._latestRenderData = { reasoning, tools, summary, processLogs, steps };
+            bubble._latestRenderData = { reasoning, tools, summary, processLogs, steps, cards };
             syncExpandedToolStepKeys(bubble);
 
             if (bubble._structureRenderSignature === structureSignature && !forceDetailsRebuild) {
                 answerBlock.classList.remove('is-hidden');
                 const hasVisibleStreamingContent = historyContainer.childElementCount > 0 || !!(liveContent || '').trim();
+                renderMessageCards(cardsContainer, cards);
                 contentDiv.innerHTML = hasVisibleStreamingContent
                     ? processMessageContent(liveContent, false)
                     : '<div class="ai-loading-placeholder">Working...</div>';
@@ -261,6 +330,7 @@ function ensureAiBubbleStructure(bubble) {
                     historyContainer.appendChild(createSummaryCard(summary));
                 }
 
+                renderMessageCards(cardsContainer, cards);
                 const hasVisibleStreamingContent = historyContainer.childElementCount > 0 || !!(liveContent || '').trim();
                 contentDiv.innerHTML = hasVisibleStreamingContent
                     ? processMessageContent(liveContent, false)
@@ -334,6 +404,7 @@ function ensureAiBubbleStructure(bubble) {
                     metaStrip.style.display = 'none';
                 }
 
+                renderMessageCards(cardsContainer, cards);
                 // Append Final Content
                 answerBlock.classList.remove('is-hidden');
                 if (liveContent) {
@@ -358,7 +429,8 @@ function ensureAiBubbleStructure(bubble) {
                     bubble._latestRenderData.summary,
                     bubble._latestRenderData.processLogs,
                     bubble._latestRenderData.steps,
-                    bubble.dataset.finalContent
+                    bubble.dataset.finalContent,
+                    bubble._latestRenderData.cards
                 );
             }
             if (state === 'finished' || state === 'finalized') {

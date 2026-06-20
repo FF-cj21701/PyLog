@@ -8,7 +8,7 @@ def schedule_plot_finalize(mw, log_plot, target_sub):
 
     def _finalize_ui_pulse():
         if hasattr(log_plot, "set_vertical_scale"):
-            log_plot.set_vertical_scale(10)
+            log_plot.set_vertical_scale(50)
 
         if hasattr(log_plot, "scroll_mgr"):
             v_master = log_plot.get_master_viewbox()

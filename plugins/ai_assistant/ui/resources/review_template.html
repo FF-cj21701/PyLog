@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Review</title>
+    <script src="qwebchannel.js"></script>
+    <style>
+        :root {
+            --bg-primary: #10151d;
+            --bg-secondary: #171e28;
+            --bg-tertiary: #1f2835;
+            --border-color: #2f3c4f;
+            --text-primary: #ecf3ff;
+            --text-secondary: #9fb2c8;
+            --accent-color: #3aa0ff;
+            --accent-soft: rgba(58, 160, 255, 0.14);
+            --warning-color: #f0b35a;
+        }
+
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            min-height: 100%;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: "Segoe UI", "PingFang SC", sans-serif;
+        }
+
+        html.dark-mode ::-webkit-scrollbar,
+        html.sakura-mode ::-webkit-scrollbar,
+        html.manga-mode ::-webkit-scrollbar,
+        html ::-webkit-scrollbar {
+            width: 12px;
+            height: 12px;
+        }
+
+        html.dark-mode ::-webkit-scrollbar-track,
+        html.sakura-mode ::-webkit-scrollbar-track,
+        html.manga-mode ::-webkit-scrollbar-track,
+        html ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        html.dark-mode ::-webkit-scrollbar-thumb,
+        html.sakura-mode ::-webkit-scrollbar-thumb,
+        html.manga-mode ::-webkit-scrollbar-thumb,
+        html ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 999px;
+            border: 2px solid transparent;
+            background-clip: padding-box;
+        }
+
+        html.dark-mode ::-webkit-scrollbar-thumb:hover,
+        html.sakura-mode ::-webkit-scrollbar-thumb:hover,
+        html.manga-mode ::-webkit-scrollbar-thumb:hover,
+        html ::-webkit-scrollbar-thumb:hover {
+            background: color-mix(in srgb, var(--accent-color) 42%, var(--border-color));
+            background-clip: padding-box;
+        }
+
+        .page {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            padding: 0;
+            gap: 0;
+        }
+
+        .hero {
+            padding: 10px 12px 8px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+        }
+
+        .hero p {
+            margin: 0;
+            color: var(--text-secondary);
+            line-height: 1.6;
+            font-size: 13px;
+            display: none;
+        }
+
+        .meta-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0;
+            margin-top: 0;
+        }
+
+        .pill {
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            border-radius: 0;
+            padding: 0;
+            font-size: 12px;
+            font-family: "Cascadia Code", "Consolas", monospace;
+        }
+
+        .review-shell {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .tab-strip {
+            display: flex;
+            gap: 0;
+            flex-wrap: nowrap;
+            padding: 0 12px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+        }
+
+        .tab-btn {
+            border: 1px solid transparent;
+            border-bottom: none;
+            background: transparent;
+            color: var(--text-secondary);
+            border-radius: 0;
+            padding: 8px 14px 7px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 120ms ease;
+            margin-bottom: -1px;
+        }
+
+        .tab-btn.active {
+            background: var(--bg-primary);
+            border-color: var(--border-color);
+            color: var(--text-primary);
+            border-top: 2px solid var(--accent-color);
+            border-left: 1px solid var(--border-color);
+            border-right: 1px solid var(--border-color);
+            box-shadow: none;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-primary);
+            background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+        }
+
+        .panel {
+            flex: 1;
+            min-height: 0;
+            border: none;
+            border-radius: 0;
+            background: var(--bg-primary);
+            overflow: hidden;
+        }
+
+        .panel pre {
+            margin: 0;
+            padding: 12px 14px;
+            min-height: 100%;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: var(--text-primary);
+            font: 12px/1.5 "Cascadia Code", "Consolas", monospace;
+        }
+
+        .footer {
+            display: none;
+        }
+
+        .footer-note {
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+    </style>
+    <style id="dynamic-theme-vars">
+    </style>
+</head>
+<body>
+    <div class="page">
+        <section class="hero">
+            <p id="summaryText">Inspect the original content, diff, and saved draft for the latest AI-authored change.</p>
+            <div class="meta-row">
+                <div class="pill" id="pathPill">Path: unsaved draft</div>
+            </div>
+        </section>
+
+        <section class="review-shell">
+            <div class="tab-strip">
+                <button class="tab-btn active" data-mode="diff" type="button">Diff</button>
+                <button class="tab-btn" data-mode="original" type="button">Original</button>
+                <button class="tab-btn" data-mode="draft" type="button">Draft</button>
+            </div>
+            <div class="panel">
+                <pre id="contentPanel"></pre>
+            </div>
+        </section>
+
+        <footer class="footer">
+            <div class="footer-note" id="footerNote"></div>
+        </footer>
+    </div>
+
+    <script>
+        window.setTheme = function(theme) {
+            theme = (theme || "light").toLowerCase();
+            document.documentElement.classList.remove("dark-mode", "sakura-mode", "manga-mode");
+            if (theme === "dark" || theme === "sakura") {
+                document.documentElement.classList.add("dark-mode");
+            }
+            if (theme === "sakura") {
+                document.documentElement.classList.add("sakura-mode");
+            } else if (theme === "manga") {
+                document.documentElement.classList.add("manga-mode");
+            }
+        };
+
+        var reviewState = {};
+        var activeMode = "diff";
+        var pageBridge = null;
+
+        function render() {
+            var content = "";
+            if (activeMode === "original") content = reviewState.base_code || "";
+            else if (activeMode === "draft") content = reviewState.draft_code || "";
+            else content = reviewState.diff_text || "";
+
+            document.getElementById("contentPanel").textContent = content;
+            document.getElementById("pathPill").textContent = "Path: " + (reviewState.script_path || "unsaved draft");
+            document.getElementById("summaryText").textContent = reviewState.saved_to_disk
+                ? "Inspect the original content, diff, and saved draft for the latest AI-authored change."
+                : "Inspect the original content, diff, and current draft for the latest AI-authored change.";
+            document.getElementById("footerNote").textContent = "";
+
+            document.querySelectorAll(".tab-btn").forEach(function(button) {
+                button.classList.toggle("active", button.dataset.mode === activeMode);
+            });
+        }
+
+        window.setPagePayload = function(payload) {
+            reviewState = payload || {};
+            render();
+        };
+
+        function bindUi() {
+            document.querySelectorAll(".tab-btn").forEach(function(button) {
+                button.addEventListener("click", function() {
+                    activeMode = button.dataset.mode || "diff";
+                    render();
+                });
+            });
+
+        }
+
+        bindUi();
+
+        new QWebChannel(qt.webChannelTransport, function(channel) {
+            pageBridge = channel.objects.pageBridge;
+            if (pageBridge && pageBridge.log) pageBridge.log("Agent page ready");
+        });
+    </script>
+</body>
+</html>

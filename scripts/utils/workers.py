@@ -10,6 +10,11 @@ from core.app_config import app_config
 MAX_LUT_CACHE = 3
 LUT_CACHE = OrderedDict()
 
+
+def clear_lut_cache():
+    """Clear the shared image LUT cache."""
+    LUT_CACHE.clear()
+
 def get_cached_lut(cmap_name, invert, null_color):
     # Resolve Auto/White/Black FIRST, then use in key
     res = app_config.resolve_null_color(null_color)

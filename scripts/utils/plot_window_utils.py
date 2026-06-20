@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from typing import Tuple
+from typing import Optional, Tuple
 
 from PySide6.QtWidgets import QApplication, QMdiSubWindow
 from PySide6.QtCore import Qt
@@ -10,13 +10,11 @@ from main import MainWindow
 from scripts.rendering.plot_widget import LogWidget
 
 
-def get_or_create_plot_window(
-    title: str,
+def get_or_create_main_window(
     *,
     show_ai_chat: bool = False,
     show_scripts: bool = False,
-) -> Tuple[QApplication, MainWindow, LogWidget, QMdiSubWindow]:
-    """Find or create the main window and target log-plot subwindow."""
+) -> Tuple[QApplication, MainWindow]:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setStyle("Fusion")
 
@@ -30,6 +28,10 @@ def get_or_create_plot_window(
         mw = MainWindow(show_ai_chat=show_ai_chat, show_scripts=show_scripts)
         mw.setWindowTitle("ALIVE")
 
+    return app, mw
+
+
+def find_plot_window(mw: MainWindow, title: str) -> Tuple[Optional[LogWidget], Optional[QMdiSubWindow]]:
     log_plot = None
     target_sub = None
     for sub in mw.mdi_area.subWindowList():
@@ -38,6 +40,18 @@ def get_or_create_plot_window(
             if isinstance(sub.widget(), LogWidget):
                 log_plot = sub.widget()
             break
+    return log_plot, target_sub
+
+
+def get_or_create_plot_window(
+    title: str,
+    *,
+    show_ai_chat: bool = False,
+    show_scripts: bool = False,
+) -> Tuple[QApplication, MainWindow, LogWidget, QMdiSubWindow]:
+    """Find or create the main window and target log-plot subwindow."""
+    app, mw = get_or_create_main_window(show_ai_chat=show_ai_chat, show_scripts=show_scripts)
+    log_plot, target_sub = find_plot_window(mw, title)
 
     if log_plot is None:
         log_plot = LogWidget(None)

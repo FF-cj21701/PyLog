@@ -15,6 +15,14 @@ from .well_queries import build_folder_map, get_depth_data_for_well
 MAX_DEPTH_CACHE_ITEMS = 32
 DEPTH_CACHE = OrderedDict()
 DEPTH_LOCK = threading.Lock()
+
+
+def clear_depth_cache():
+    """Clear the shared depth cache used across plot loads."""
+    with DEPTH_LOCK:
+        DEPTH_CACHE.clear()
+
+
 def _find_curve_row(curves, curve_id):
     for row in curves:
         if row[0] == curve_id:
@@ -59,7 +67,6 @@ def _resolve_depth_for_curve(local_db, well_id, curve_id, curves, target_len):
             DEPTH_CACHE.move_to_end(cache_key)
         else:
             if not isinstance(depth_data, np.ndarray):
-                # logger.info(f"Pre-loading Depth Index into RAM: {best_match[1]} (Size: {len(depth_data)})")
                 depth_data = np.array(depth_data)
             DEPTH_CACHE[cache_key] = depth_data
             while len(DEPTH_CACHE) > MAX_DEPTH_CACHE_ITEMS:
@@ -85,7 +92,7 @@ def load_curve_bundle_for_plot(
     db: Optional[DBManager] = None,
 ):
     """Load data/depth/info for plotting using the same rules as manual drag/drop."""
-    local_db = db or DBManager(db_path)
+    local_db = db or DBManager(db_path, ensure_schema=False)
     prefs = preferences or {}
 
     curves = local_db.get_curves(well_id)

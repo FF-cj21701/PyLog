@@ -5,7 +5,7 @@ import json
 import sniffio
 
 from .task_domain_router import TaskDomainRouter
-from .tool_dispatcher import ToolDispatcher
+from .tool_manager import ToolManager
 from .tool_result import (
     error_tool_result,
     normalize_tool_result,
@@ -74,7 +74,8 @@ class AsyncAIWorker(QObject):
         self.execution_policy = execution_policy
         self.task_state_machine = task_state_machine
         self.verification_coordinator = verification_coordinator
-        self.tool_dispatcher = ToolDispatcher(self.tools)
+        self.tool_manager = ToolManager(self.tools)
+        self.tool_dispatcher = self.tool_manager
         self.tool_selection = ToolSelectionStrategy()
         self.domain_router = TaskDomainRouter()
         self._in_thought_tag = False
@@ -132,20 +133,17 @@ class AsyncAIWorker(QObject):
 
     def _build_tool_configs(self):
         """Build routed and ranked tool configs for the current task context."""
-        tool_configs = []
-        ranked_specs = self.tool_dispatcher.list_ranked_specs(
+        return self.tool_manager.build_tool_configs(
             state=self.agent_state,
             strategy=self.tool_selection,
-        )
-        routed_specs = self.domain_router.route_specs(
-            ranked_specs,
+            router=self.domain_router,
             prompt=self.prompt,
             history=self.history,
-            state=self.agent_state,
         )
-        for spec in routed_specs:
-            tool_configs.append(spec.to_openai_tool())
-        return tool_configs
+
+    def get_tool_inventory_payload(self):
+        """Expose the current worker tool inventory for diagnostics and UI consumers."""
+        return self.tool_manager.get_inventory_payload()
 
     def _maybe_append_tool_selection_guidance(self, messages):
         """Append dynamic system guidance about tool choice when available."""
@@ -309,7 +307,7 @@ class AsyncAIWorker(QObject):
                         tool_calls_dict[tool_id]["function"]["arguments"] += tool_call.function.arguments
 
     def _find_tool(self, tool_name):
-        return self.tool_dispatcher.find_tool(tool_name)
+        return self.tool_manager.find_tool(tool_name)
 
     @staticmethod
     def _extract_finish_visible_output(serialized_result, *, suppress_summary, has_visible_response):
@@ -364,7 +362,7 @@ class AsyncAIWorker(QObject):
 
         try:
             self.tool_call_started.emit(tool_name, args)
-            _tool, result = await self.tool_dispatcher.execute(tool_name, args)
+            _tool, result = await self.tool_manager.execute(tool_name, args)
 
             if self.execution_policy:
                 self.execution_policy.after_tool_call(self.agent_state, tool_name, args, result, tool=tool)

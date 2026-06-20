@@ -95,6 +95,7 @@ class TaskDomainRouter:
         "lifecycle",
         "planning",
         "task_planning",
+        "agent_page",
     }
 
     def detect_domains(

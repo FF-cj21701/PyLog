@@ -3,6 +3,120 @@
 - This changelog now uses bilingual titles and English body text for long-term encoding stability.
 - Some older entries were historically affected by mojibake. Those sections were normalized into readable English summaries while preserving dates and main themes.
 
+## [2026-06-28] - Agent Review Pages & Reusable Workspace Page Host / Agent 审查页与可复用工作区页面宿主
+
+- Reworked the AI script-change review flow away from mid-stream preview popups and toward a quieter draft-review model:
+  - AI edits now apply the draft directly to the script editor workspace
+  - the editor keeps explicit review-session state for original content, current draft, and diff text
+  - users review those changes afterward instead of stepping through intrusive inline preview UI
+- Simplified the web editor preview surface in `editor_template.html`:
+  - removed the floating preview panel and its `Original / Diff / Draft` toggle UI
+  - kept compatibility preview APIs so tool entry points can still activate review sessions without changing their call shape
+  - preserved draft-aware editor execution and save semantics
+- Added a dedicated review-page template and moved review into the workspace itself:
+  - introduced `plugins/ai_assistant/ui/resources/review_template.html`
+  - changed script review to open as an MDI workspace page instead of a transient dialog
+  - accept / reject actions now resolve the review session and close the review page when appropriate
+- Added a reusable local HTML page-host layer for future agent UI surfaces:
+  - introduced `plugins/ai_assistant/ui/widgets/agent_page_host.py`
+  - added `AgentPageBridge`, shared host logic, `AgentPageDialog`, and `AgentPageWidget`
+  - added `open_agent_page(...)` with both `dialog` and `mdi` modes
+  - added page lookup / reuse behavior by stable `page_id`
+  - added helper support for closing previously opened agent-owned workspace pages
+- Added a generic agent content-page template for structured non-review surfaces:
+  - introduced `plugins/ai_assistant/ui/resources/agent_page_template.html`
+  - supports injected title, summary, content, meta pills, and optional structured sections
+  - gives future agent pages a stable default visual surface without needing custom Qt dialogs per feature
+- Added a generic agent page tool surface so the model can open, update, and close workspace pages directly:
+  - introduced `tool_open_agent_page`
+  - introduced `tool_update_agent_page`
+  - introduced `tool_close_agent_page`
+  - connected those tools through new `ToolExecutor` signals and page-host execution handlers
+- Expanded regression coverage for:
+  - silent review-session editor behavior
+  - review-template and generic-agent-page-template structure
+  - agent page host dialog / MDI support
+  - executor signal wiring for generic page operations
+  - tool-spec registration and required-argument rules for agent page tools
+- Current verification commands:
+  - `.\.venv\Scripts\python.exe -m pytest tests\test_ai_tool_specs.py tests\test_chat_ui_template_regressions.py -q`
+  - `.\.venv\Scripts\python.exe -m pytest tests\test_file_editor_boundary.py tests\test_ai_agent_core_behaviors.py tests\test_agent_runtime_boundary.py tests\test_chat_ui_template_regressions.py -q`
+- Current results:
+  - `123 passed`
+  - `80 passed`
+
+## [2026-06-27] - Native Agent Runtime Migration Foundation / 原生 Agent 运行时迁移基础
+
+- Added `docs/CODEX_DESIGN_MIGRATION_PLAN.md` to define the native PyLog agent migration plan:
+  - migrate Codex-style workflow and design patterns into PyLog
+  - avoid keeping Codex CLI as a runtime dependency, reference backend, or optional backend
+  - organize the migration into runtime, tool management, file editing, shell execution, context, skills, and verification phases
+- Completed the first runtime-boundary slice:
+  - added provider-neutral `AgentEvent` / `AgentEventType`
+  - added `AgentRuntime` as a thin boundary around the current async worker
+  - preserved existing PySide signals while also emitting structured runtime events
+  - routed `ChatService` through `AgentRuntime` without changing user-facing behavior
+- Improved task-planning foundations for the migration:
+  - added `plan_domain` to task progress payloads
+  - made fallback plans domain-aware for coding and PyLog/geoscience scripting tasks
+  - kept fallback plans hidden from the UI until a model-authored plan is accepted
+- Completed the Tool Manager hardening phase:
+  - added `ToolManager` as the stable boundary for tool inventory, registration, selection, routing, and execution
+  - moved worker tool-config generation and execution calls through `ToolManager`
+  - preserved the previous dispatcher-compatible surface for safer incremental migration
+  - added registration, duplicate replacement, removal, source-based replacement, domain filtering, and capability filtering
+  - changed per-turn tool assembly so MCP tools refresh by `source=mcp` instead of accumulating across turns
+  - exposed tool inventory payloads through worker, runtime, and chat-service layers for future UI, diagnostics, context compression, and policy work
+- Reduced perceived chat-send latency in the AI conversation UI:
+  - `chat_input.js` now optimistically renders normal user messages before the Python round trip
+  - `main_window.py` now skips duplicate Python-side rendering when the front end already rendered the user bubble
+  - plan-control messages remain excluded from optimistic rendering to avoid special-action duplication
+- Added regression coverage for:
+  - runtime event shape and signal passthrough
+  - runtime stop delegation
+  - tool manager execution, inventory, registration, source replacement, and tag filtering
+  - optimistic user-message rendering in the split chat UI resources
+- Current verification command:
+  - `.\.venv\Scripts\python.exe -m pytest tests\test_ai_agent_core_behaviors.py tests\test_agent_runtime_boundary.py tests\test_chat_ui_template_regressions.py -q`
+- Current result:
+  - `68 passed`
+
+## [2026-06-22] - Plot Spec Service & Template Open Dialog Fix / Plot Spec 服务与模板打开卡顿修复
+
+- Added `scripts/services/plot_spec_service.py` as the dedicated plot-spec service layer for standardized plot construction and plot mutation.
+- Clarified the intended role of the plot-spec layer:
+  - normalize plot creation inputs from different entry points
+  - define a shared spec structure for plot, track, and curve state
+  - provide one common plot-building path through `open_plot_from_spec(...)`
+  - provide one common runtime update path through `update_plot_from_commands(...)`
+- Moved the architecture toward a cleaner separation of responsibilities:
+  - template files are now treated primarily as serialized plot parameters/state
+  - `TemplateManager` resolves saved template identity into current database curve references
+  - the plot-spec service is responsible for turning resolved state into live plot widgets
+  - manual plotting, template plotting, and AI/API plotting now share the same lower-level plot construction service instead of each maintaining separate widget-building logic
+- Documented the real cause of the long-running "template apply becomes laggy" issue:
+  - the lag was not caused by template curve settings replay
+  - the lag was not caused by template track settings replay
+  - the lag was not caused by template depth-track restoration
+  - the lag was not caused by the shared plotting API itself
+  - the actual trigger was the native `QFileDialog.getOpenFileName(...)` path used by `Open Template...`
+- Confirmed the diagnosis through controlled comparisons:
+  - debug plotting through the shared API remained smooth
+  - direct template resolution without the native file dialog remained smooth
+  - only the normal `Open Template...` workflow showed the persistent slowdown side effect
+- Replaced the native template-open file dialog with an in-app `TemplateSelectionDialog`, so template opening now uses a lightweight internal selection surface instead of the problematic native dialog path.
+- Preserved full template restoration after the dialog fix:
+  - curve-level settings were gradually re-enabled and verified
+  - track settings were re-enabled
+  - depth-track restoration was re-enabled
+- Added a small delayed apply step when opening a template so the final `open_plot_from_spec(...)` call runs after the selection flow settles, reducing timing-related application fragility.
+- Captured the final practical resolution:
+  - keep the in-app template-selection dialog
+  - keep the unified plot-spec/open-plot architecture
+  - keep full template restoration enabled
+  - avoid returning to the native file-open dialog for template loading unless its side effects are separately resolved
+- Fixed a follow-up regression in `scripts/rendering/scroll_manager.py` where debug logging referenced `logger` without importing it.
+
 ## [2026-06-20] - Plot Scroll Chain Stabilization / 绘图滚动链路稳定性优化
 
 - Reduced redundant header repaint signal connections in `HeaderWidget`, preventing repeated range-change callbacks from accumulating as curves are added to a track.
@@ -108,6 +222,51 @@
   - `.\.venv\Scripts\python.exe -m unittest tests.test_ai_tool_specs.DataViewerModelTests tests.test_tree_controller_menus`
 - Current results:
   - `Ran 11 tests ... OK`
+
+### Data Viewer Editing, Save Refresh, and Empty-Workspace Launchpad / Data Viewer 编辑保存刷新与空白工作区入口
+
+- Expanded the unified Data Viewer from read-only viewing into an editable 1D curve workbench:
+  - table cells in data columns can now be edited directly
+  - `Reset` / `Save` actions live in a floating action pill inside the viewer
+  - save behavior remains conservative and database-backed
+- Refined Data Viewer save semantics around curve identity and depth handling:
+  - single 1D curve pages now preserve original sample order instead of collapsing repeated depth rows through depth-key deduplication
+  - save arrays are built from the source curve's own depth axis rather than from compare-style union depth rows
+  - repeated-depth single-curve saves no longer silently drop intermittent samples
+- Tightened multi-curve viewer rules to avoid ambiguous alignment:
+  - curves now share a page only when their depth arrays match exactly
+  - depth-mismatched 1D curves automatically open in a new Data Viewer page instead of being force-merged through `np.unique(...)`
+  - pages that already contain a 2D curve now auto-redirect newly dropped curves into a fresh Data Viewer page rather than interrupting the user with a modal warning
+- Improved save-result refresh behavior inside Data Viewer:
+  - after saving, the left tree still refreshes
+  - the active Data Viewer column now also refreshes its in-memory curve identity
+  - overwrite saves keep the existing identity while updating the baseline data
+  - save-as-new updates the viewer column to the newly created curve name / id so the page stays consistent with the database state
+- Simplified save constraints to match the current product rule:
+  - edited curves save back to their original well and folder
+  - extra fallback logic for cross-folder depth regeneration was removed
+  - save conflict handling remains a simple overwrite confirmation flow
+- Added a new empty-workspace launch surface in the MDI area:
+  - when no plot/data/script subwindows are open, the center workspace now shows dedicated launch tiles
+  - `Plot` tile supports both click-to-open and drag-to-open behavior
+  - `Data Viewer` tile supports both click-to-open and drag-to-open behavior
+  - the launchpad implementation was extracted into `scripts/ui/widgets/workspace_launchpad_widget.py` for future extension with more workspace-entry tiles
+- Refined the launchpad presentation and behavior:
+  - launch tiles use a lightweight translucent card treatment over the empty workspace
+  - tile text is centered and uses a directly assigned font in code for predictable sizing
+  - launchpad visibility now refreshes correctly on first application open, not only after subwindow lifecycle changes
+- Added and updated regression coverage in `tests/test_ai_tool_specs.py` for:
+  - single-curve repeated-depth preservation
+  - source-aligned save-array generation
+  - same-depth / different-depth page-routing rules
+  - 2D-to-new-page redirect behavior
+  - save-result identity refresh
+  - launchpad MIME parsing, click behavior, and empty-workspace visibility
+- Current verification commands:
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_ai_tool_specs.DataViewerModelTests tests.test_ai_tool_specs.WorkspaceLaunchpadTests tests.test_tree_controller_menus`
+  - `.\.venv\Scripts\python.exe -m py_compile main.py scripts/ui/widgets/data_viewer_widget.py scripts/ui/widgets/workspace_launchpad_widget.py scripts/ui/theme_manager.py`
+- Current results:
+  - `Ran 22 tests ... OK`
 
 ## [2026-06-06] - Plot Cache Budgeting / 绘图缓存上限控制
 

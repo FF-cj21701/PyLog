@@ -1099,11 +1099,29 @@ function updateSendButton() {
 
             fullMsg += actualMsg;
 
+            const planActions = new Set([
+                "执行计划",
+                "修改计划",
+                "取消计划",
+                "Run Plan",
+                "Edit Plan",
+                "Cancel Plan"
+            ]);
+            const shouldRenderOptimistically = !planActions.has(fullMsg.trim());
+            if (shouldRenderOptimistically && typeof appendMessage === 'function') {
+                const now = new Date();
+                const timestamp = now.toTimeString().slice(0, 8);
+                appendMessage('user', displayMsg, timestamp, null, null, null, null, null, true);
+                setSendingState(true);
+                setInputEnabled(false);
+            }
+
             // Send both versions to Python
             if (bridge) {
                 bridge.sendMessage(JSON.stringify({
                     actual: fullMsg,
-                    display: displayMsg
+                    display: displayMsg,
+                    rendered: shouldRenderOptimistically
                 }));
             }
 

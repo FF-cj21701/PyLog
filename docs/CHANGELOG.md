@@ -3,8 +3,60 @@
 - This changelog now uses bilingual titles and English body text for long-term encoding stability.
 - Some older entries were historically affected by mojibake. Those sections were normalized into readable English summaries while preserving dates and main themes.
 
+## [2026-06-29] - Review Card Flow, Registry-backed Review Pages & Theme Alignment / 审查卡片流程、注册表审查页与主题对齐
+
+- Follow-up refinement pass on top of the 2026-06-28 review-page foundation, focused on making the saved-review path the default user-facing flow.
+- Refined the post-edit review flow so chat cards now behave like end-of-reply change summaries instead of mid-tool inline status artifacts:
+  - file-change cards are accumulated during tool execution
+  - cards are only published after the assistant reply is finalized
+  - repeated edits to the same file in one reply continue to merge their diff stats and actions
+- Reworked review-card wording and structure for a cleaner workspace-style UI:
+  - card titles now use `Edited <filename>`
+  - the action button now uses `Review`
+  - the card group header now uses `File changed in this reply` / `Files changed in this reply (N)`
+- Fixed the chat-card action bridge so review-card clicks can reliably reach Python:
+  - exposed the chat `pyBridge` on `window.pyBridge`
+  - changed card-action payload transport to URL-safe JSON encoding / decoding
+  - added regression coverage for the shared bridge path
+- Removed the requirement that a script editor window must remain open before a review page can be opened from chat:
+  - introduced `plugins/ai_assistant/ui/review_registry.py`
+  - review records are now registered globally when AI-authored script changes are persisted
+  - chat-card `Review` now opens the saved review page directly from that registry
+  - the chat-side review path no longer falls back to locating an open script editor
+- Continued the review-surface English cleanup:
+  - script-editor toolbar action now uses `Review`
+  - the review workspace page uses `AI Review`
+  - review-card copy and fallback labels were normalized into English
+- Reworked the review page visual surface so it feels like an editor-adjacent workspace tab instead of a nested showcase panel:
+  - removed the extra inner review-shell "window" look
+  - simplified the top section to a path-first layout
+  - reshaped `Diff / Original / Draft` into a flatter tab-strip style
+  - tightened code spacing and flattened the content panel
+- Fixed review-page theme alignment so it now follows the shared ThemeManager-driven web theme injection path correctly:
+  - moved `dynamic-theme-vars` after the static fallback style block so injected CSS variables override defaults
+  - reduced dependence on hard-coded dark presentation choices
+  - confirmed that the review page now consumes the same web theme variable layer used by other agent/editor web surfaces
+- Removed obsolete review footer copy from the page:
+  - hid the footer section
+  - cleared the static footer default text
+  - stopped repopulating that note at render time
+- Added or updated regression coverage for:
+  - deferred file-change card publication
+  - card action bridge payload transport
+  - registry-backed review opening without an open script editor
+  - review-template structure, footer removal, and dynamic-theme override ordering
+- Current verification commands:
+  - `.\.venv\Scripts\python.exe -m pytest tests\test_ai_agent_core_behaviors.py -q`
+  - `.\.venv\Scripts\python.exe -m pytest tests\test_chat_ui_template_regressions.py -q`
+  - `.\.venv\Scripts\python.exe -m pytest tests\test_ai_tool_specs.py -q`
+- Current results:
+  - `51 passed`
+  - `25 passed`
+  - `101 passed`
+
 ## [2026-06-28] - Agent Review Pages & Reusable Workspace Page Host / Agent 审查页与可复用工作区页面宿主
 
+- Foundation pass that introduced the review-page architecture and reusable workspace HTML host before later UX tightening and registry-backed direct-open behavior.
 - Reworked the AI script-change review flow away from mid-stream preview popups and toward a quieter draft-review model:
   - AI edits now apply the draft directly to the script editor workspace
   - the editor keeps explicit review-session state for original content, current draft, and diff text

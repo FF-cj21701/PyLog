@@ -134,6 +134,9 @@ class TaskDomainRouter:
         state=None,
     ) -> List[object]:
         specs = list(specs)
+        self._last_prompt = prompt or ""
+        self._last_history = history or []
+        self._last_state = state
         detected = self.detect_domains(prompt=prompt, history=history, state=state)
         routed = []
 
@@ -199,4 +202,30 @@ class TaskDomainRouter:
         if "script" in expanded_detected and "code" in domain_tags:
             return True
 
+        if self._spec_keyword_matches(spec):
+            return True
+
         return False
+
+    def _spec_keyword_matches(self, spec) -> bool:
+        keywords = [str(keyword).strip().lower() for keyword in (getattr(spec, "keywords", []) or []) if str(keyword).strip()]
+        if not keywords:
+            return False
+
+        haystack_parts = []
+        prompt = getattr(self, "_last_prompt", "")
+        if prompt:
+            haystack_parts.append(str(prompt))
+        history = getattr(self, "_last_history", None) or []
+        for item in history[-4:]:
+            if len(item) >= 2 and item[1]:
+                haystack_parts.append(str(item[1]))
+        state = getattr(self, "_last_state", None)
+        if state and getattr(state, "current_task", None):
+            haystack_parts.append(str(state.current_task))
+
+        if not haystack_parts:
+            return False
+
+        haystack = re.sub(r"\s+", " ", "\n".join(haystack_parts).lower())
+        return any(keyword in haystack for keyword in keywords)

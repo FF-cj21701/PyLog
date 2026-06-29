@@ -40,9 +40,9 @@ class ToolDispatcher:
             return specs
         return [spec for spec in specs if getattr(spec, "source", None) == source]
 
-    def list_ranked_specs(self, state=None, strategy: Optional[ToolSelectionStrategy] = None):
+    def list_ranked_specs(self, state=None, strategy: Optional[ToolSelectionStrategy] = None, prompt: str = "", history=None):
         strategy = strategy or ToolSelectionStrategy()
-        return strategy.order_specs(self.list_specs(), state=state)
+        return strategy.order_specs(self.list_specs(), state=state, prompt=prompt, history=history)
 
     async def execute(self, tool_name: str, args: Optional[Dict[str, Any]] = None):
         tool = self.find_tool(tool_name)

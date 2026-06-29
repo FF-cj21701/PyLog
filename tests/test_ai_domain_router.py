@@ -18,13 +18,14 @@ class TaskDomainRouterTests(unittest.TestCase):
         self.router = TaskDomainRouter()
 
     @staticmethod
-    def _spec(name, domain_tags=None, capability_tags=None, is_verification_tool=False):
+    def _spec(name, domain_tags=None, capability_tags=None, is_verification_tool=False, keywords=None):
         return ToolSpec(
             name=name,
             description=name,
             args_schema={},
             domain_tags=list(domain_tags or []),
             capability_tags=list(capability_tags or []),
+            keywords=list(keywords or []),
             is_verification_tool=is_verification_tool,
         )
 
@@ -113,6 +114,18 @@ class TaskDomainRouterTests(unittest.TestCase):
         self.assertIn("tool_open_agent_page", names)
         self.assertIn("tool_update_agent_page", names)
         self.assertIn("tool_close_agent_page", names)
+
+    def test_keyword_matched_tool_is_kept_even_when_domain_tags_do_not_match(self):
+        specs = [
+            self._spec("tool_plot", domain_tags=["geoscience", "pylog"]),
+            self._spec("tool_open_html_preview", domain_tags=["agent"], keywords=["html preview", "web page"]),
+        ]
+
+        routed = self.router.route_specs(specs, prompt="open this html preview in a web page")
+        names = {spec.name for spec in routed}
+
+        self.assertIn("tool_open_html_preview", names)
+        self.assertNotIn("tool_plot", names)
 
 
 if __name__ == "__main__":

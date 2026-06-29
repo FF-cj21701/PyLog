@@ -317,6 +317,16 @@ class SearchCodeTool(BaseTool):
             "required_args": ["query"],
             "capability_tags": ["search", "navigation"],
             "domain_tags": ["code"],
+            "keywords": [
+                "search code",
+                "find code",
+                "find implementation",
+                "find function",
+                "find class",
+                "find keyword",
+                "search project",
+                "codebase search",
+            ],
             "usage_hint": "Use this when you know a symbol name, keyword, or behavior but do not yet know the file path.",
         })
         self.main_window = main_window
@@ -380,6 +390,15 @@ class FindFilesTool(BaseTool):
             "required_args": ["pattern"],
             "capability_tags": ["search", "path_discovery"],
             "domain_tags": ["code", "script"],
+            "keywords": [
+                "find file",
+                "find files",
+                "search files",
+                "locate file",
+                "locate path",
+                "glob search",
+                "filepath lookup",
+            ],
             "usage_hint": "Use this first when another tool requires filepath but the exact path is unknown.",
         })
         self.main_window = main_window
@@ -445,6 +464,13 @@ class GrepCodeTool(BaseTool):
             "required_args": ["pattern"],
             "capability_tags": ["search", "regex"],
             "domain_tags": ["code"],
+            "keywords": [
+                "grep code",
+                "regex search",
+                "regular expression search",
+                "pattern search",
+                "search by regex",
+            ],
             "usage_hint": "Use regex search when plain keyword search is too broad.",
         })
         self.main_window = main_window
@@ -514,6 +540,14 @@ class FindSymbolTool(BaseTool):
             "required_args": ["symbol"],
             "capability_tags": ["navigation", "symbol_lookup"],
             "domain_tags": ["code"],
+            "keywords": [
+                "find symbol",
+                "find definition",
+                "go to definition",
+                "locate function",
+                "locate class",
+                "symbol lookup",
+            ],
             "usage_hint": "Prefer this before editing code when you know the symbol name but not the file path.",
         })
         self.main_window = main_window
@@ -570,6 +604,14 @@ class FindReferencesTool(BaseTool):
             "required_args": ["symbol"],
             "capability_tags": ["navigation", "impact_analysis"],
             "domain_tags": ["code"],
+            "keywords": [
+                "find references",
+                "find usages",
+                "who calls this",
+                "impact analysis",
+                "call sites",
+                "where used",
+            ],
             "usage_hint": "Use after tool_find_symbol to understand call sites and impact before changing code.",
         })
         self.main_window = main_window

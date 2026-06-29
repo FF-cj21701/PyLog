@@ -35,6 +35,14 @@ except ImportError:
         except ImportError:
             PathResolver = None
 
+try:
+    from ..ai_core.shell_executor import ControlledShellExecutor
+except ImportError:
+    try:
+        from plugins.ai_assistant.ai_core.shell_executor import ControlledShellExecutor
+    except ImportError:
+        ControlledShellExecutor = importlib.import_module("shell_executor").ControlledShellExecutor
+
 
 def _project_root():
     if PathResolver:
@@ -132,37 +140,11 @@ def detect_project_commands(cwd=None):
 
 
 def _run_command(command, cwd=None):
-    try:
-        proc = subprocess.run(
-            command,
-            cwd=cwd or _project_root(),
-            capture_output=True,
-            text=True,
-            timeout=60,
-            shell=False,
-        )
-        stdout = (proc.stdout or "")[:4000]
-        stderr = (proc.stderr or "")[:4000]
-        ok = proc.returncode == 0
-        summary = "Command succeeded" if ok else f"Command failed with exit code {proc.returncode}"
-        return {
-            "ok": ok,
-            "command": " ".join(command),
-            "exit_code": proc.returncode,
-            "stdout": stdout,
-            "stderr": stderr,
-            "summary": summary,
-        }
-    except Exception as e:
-        return {
-            "ok": False,
-            "command": " ".join(command),
-            "exit_code": -1,
-            "stdout": "",
-            "stderr": str(e),
-            "summary": str(e),
-            "error": str(e),
-        }
+    return ControlledShellExecutor(project_root=_project_root(), timeout_seconds=60).run(
+        command,
+        cwd=cwd or _project_root(),
+        allow_shell=False,
+    ).to_dict()
 
 
 def _looks_like_interactive_plot_script(filepath):
@@ -469,6 +451,13 @@ class RunPythonFileTool(BaseTool):
                 "output_type": "verification",
                 "capability_tags": ["verification", "python_execution"],
                 "domain_tags": ["code", "script"],
+                "keywords": [
+                    "run python file",
+                    "execute python script",
+                    "run script file",
+                    "python execution",
+                    "verify script output",
+                ],
                 "usage_hint": "Use to execute a Python file and capture structured verification output. PyLog GUI scripts will draw within the app.",
             }
         )
@@ -574,6 +563,13 @@ class DetectProjectCommandsTool(BaseTool):
                 "output_type": "structured_data",
                 "capability_tags": ["detection", "project_introspection"],
                 "domain_tags": ["code"],
+                "keywords": [
+                    "detect test command",
+                    "detect lint command",
+                    "detect format command",
+                    "project commands",
+                    "test command discovery",
+                ],
                 "usage_hint": "Use before manual test/lint selection when project commands are unknown.",
             }
         )
@@ -613,6 +609,14 @@ class VerifyTargetTool(BaseTool):
                 "output_type": "verification",
                 "capability_tags": ["verification", "auto_strategy"],
                 "domain_tags": ["code", "script"],
+                "keywords": [
+                    "verify target",
+                    "verify file",
+                    "run verification",
+                    "test changed file",
+                    "validate script",
+                    "check changed code",
+                ],
                 "usage_hint": "Preferred first verification step after file changes.",
             }
         )
@@ -646,6 +650,13 @@ class RunTestCommandTool(BaseTool):
                 "output_type": "verification",
                 "capability_tags": ["verification", "tests"],
                 "domain_tags": ["code"],
+                "keywords": [
+                    "run tests",
+                    "pytest",
+                    "test command",
+                    "execute tests",
+                    "run unit tests",
+                ],
                 "usage_hint": "Use for controlled test execution when a test command is known or detected.",
             }
         )
@@ -698,6 +709,14 @@ class RunLintCommandTool(BaseTool):
                 "output_type": "verification",
                 "capability_tags": ["verification", "lint"],
                 "domain_tags": ["code"],
+                "keywords": [
+                    "run lint",
+                    "lint command",
+                    "ruff check",
+                    "py_compile",
+                    "syntax check",
+                    "compile check",
+                ],
                 "usage_hint": "Use for linting or compile checks, especially py_compile on a changed file.",
             }
         )
@@ -738,6 +757,13 @@ class RunFormatCommandTool(BaseTool):
                 "output_type": "verification",
                 "capability_tags": ["verification", "format_check"],
                 "domain_tags": ["code"],
+                "keywords": [
+                    "format check",
+                    "run formatter check",
+                    "ruff format",
+                    "black check",
+                    "check formatting",
+                ],
                 "usage_hint": "Use to confirm formatting compliance without mutating source files.",
             }
         )
@@ -777,6 +803,13 @@ class RunImportCheckTool(BaseTool):
                 "output_type": "verification",
                 "capability_tags": ["verification", "import_check"],
                 "domain_tags": ["code", "script"],
+                "keywords": [
+                    "import check",
+                    "compile python file",
+                    "syntax check python",
+                    "py_compile",
+                    "check imports",
+                ],
                 "usage_hint": "Use as a fast syntax/import check before running a Python file.",
             }
         )

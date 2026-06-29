@@ -109,6 +109,13 @@ class CreateTaskPlanTool(BaseTool):
                 "side_effect_level": "none",
                 "capability_tags": ["planning", "task_planning"],
                 "domain_tags": ["agent"],
+                "keywords": [
+                    "create task plan",
+                    "create plan",
+                    "make plan",
+                    "execution steps",
+                    "plan task",
+                ],
             },
         )
         self.main_window = main_window
@@ -156,6 +163,12 @@ class GetTaskPlanTool(BaseTool):
                 "side_effect_level": "read",
                 "capability_tags": ["planning", "task_planning", "inspection"],
                 "domain_tags": ["agent"],
+                "keywords": [
+                    "get task plan",
+                    "show plan",
+                    "current plan",
+                    "plan status",
+                ],
             },
         )
         self.agent_state = agent_state
@@ -230,6 +243,13 @@ class UpdateTaskPlanTool(BaseTool):
                 "side_effect_level": "none",
                 "capability_tags": ["planning", "task_planning"],
                 "domain_tags": ["agent"],
+                "keywords": [
+                    "update task plan",
+                    "update plan step",
+                    "mark step complete",
+                    "plan progress",
+                    "task status",
+                ],
             },
         )
         self.agent_state = agent_state

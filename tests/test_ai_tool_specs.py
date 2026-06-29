@@ -17,19 +17,24 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from plugins.ai_assistant.ai_core.tool_dispatcher import ToolDispatcher
+from plugins.ai_assistant.ai_core.shell_executor import ControlledShellExecutor
 import pylog_api
 from plugins.ai_assistant.tools.help_tool import HelpTool
 from plugins.ai_assistant.tools.agent_page_tool import CloseAgentPageTool, OpenAgentPageTool, UpdateAgentPageTool
 from plugins.ai_assistant.tools.edit_file_tool import InsertIntoFileTool
 from plugins.ai_assistant.tools.file_tool import RunScriptTool
+from plugins.ai_assistant.tools.file_tool import OpenScriptTool, SaveScriptTool
 from plugins.ai_assistant.tools.file_tool import SetScriptCodeTool
+from plugins.ai_assistant.tools.file_tool import OpenDocumentTool, OpenHtmlPreviewTool, OpenScriptFileTool
 from plugins.ai_assistant.tools.file_operations import ReadFileTool, SearchInFileTool
+from plugins.ai_assistant.tools.file_operations import ListDirectoryTool
 from plugins.ai_assistant.tools.os_tool import FileSearchTool, TerminalTool
 from plugins.ai_assistant.tools.patch_tool import ApplyPatchTool
 from plugins.ai_assistant.tools.pylog_api_tool import AnalyzeDataTool, ListWellsTool, PlotTool
 from plugins.ai_assistant.tools.search_code_tool import FindFilesTool, FindReferencesTool, FindSymbolTool, GrepCodeTool, SearchCodeTool
 from plugins.ai_assistant.tools.verify_tool import RunImportCheckTool, RunLintCommandTool
 from plugins.ai_assistant.tools.verify_tool import RunPythonFileTool
+from plugins.ai_assistant.tools.task_tool import CreateTaskPlanTool, GetTaskPlanTool, UpdateTaskPlanTool
 from scripts.data.db_manager import DBManager
 from scripts.ui.widgets.workspace_launchpad_widget import parse_curve_mime_payload
 
@@ -65,6 +70,8 @@ class ToolSpecConsistencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(FileSearchTool().spec.get_required_args(), ["pattern"])
         self.assertEqual(ReadFileTool().spec.get_required_args(), ["file_path"])
         self.assertEqual(SearchInFileTool().spec.get_required_args(), ["file_path", "pattern"])
+        self.assertEqual(OpenHtmlPreviewTool().spec.get_required_args(), ["filepath"])
+        self.assertEqual(OpenDocumentTool().spec.get_required_args(), ["filepath"])
         self.assertEqual(OpenAgentPageTool().spec.get_required_args(), ["page_id", "title"])
         self.assertEqual(UpdateAgentPageTool().spec.get_required_args(), ["page_id"])
         self.assertEqual(CloseAgentPageTool().spec.get_required_args(), ["page_id"])
@@ -85,6 +92,41 @@ class ToolSpecConsistencyTests(unittest.IsolatedAsyncioTestCase):
         tool = InsertIntoFileTool(main_window=None, tool_executor=object())
 
         self.assertIsNotNone(tool.tool_executor)
+
+    def test_controlled_shell_executor_runs_without_shell_and_classifies_verification(self):
+        executor = ControlledShellExecutor(project_root=PROJECT_ROOT, timeout_seconds=10)
+
+        result = executor.run([sys.executable, "-m", "pytest", "--version"])
+
+        self.assertTrue(result.ok, result.to_dict())
+        self.assertFalse(result.blocked)
+        self.assertTrue(result.verification)
+        self.assertEqual(result.cwd, PROJECT_ROOT)
+
+    def test_controlled_shell_executor_blocks_shell_control_operators(self):
+        executor = ControlledShellExecutor(project_root=PROJECT_ROOT)
+
+        result = executor.run("python --version && python --version")
+
+        self.assertFalse(result.ok)
+        self.assertTrue(result.blocked)
+        self.assertIn("Shell control operators", result.stderr)
+
+    def test_controlled_shell_executor_parses_quoted_executable_without_shell(self):
+        executor = ControlledShellExecutor(project_root=PROJECT_ROOT, timeout_seconds=10)
+
+        result = executor.run(f'"{sys.executable}" --version')
+
+        self.assertTrue(result.ok, result.to_dict())
+        self.assertEqual(result.argv[0], sys.executable)
+        self.assertFalse(result.blocked)
+
+    def test_terminal_tool_blocks_destructive_git_command(self):
+        result = TerminalTool().execute("git reset --hard")
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["blocked"])
+        self.assertIn("Destructive command", result["stderr"])
 
     def test_list_wells_tool_wraps_primary_data_into_unified_result_shape(self):
         tool = ListWellsTool()
@@ -1720,8 +1762,10 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
             executor_code = handle.read()
 
         self.assertIn("execute_open_agent_page = Signal(object)", executor_code)
+        self.assertIn("execute_open_html_preview = Signal(str)", executor_code)
         self.assertIn("execute_update_agent_page = Signal(object)", executor_code)
         self.assertIn("execute_close_agent_page = Signal(object)", executor_code)
+        self.assertIn("def _open_html_preview(self, filepath):", executor_code)
         self.assertIn("def _open_agent_page(self, payload):", executor_code)
         self.assertIn("def _update_agent_page(self, payload):", executor_code)
         self.assertIn("def _close_agent_page(self, payload):", executor_code)
@@ -1730,6 +1774,120 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         self.assertEqual(OpenAgentPageTool().name, "tool_open_agent_page")
         self.assertEqual(UpdateAgentPageTool().name, "tool_update_agent_page")
         self.assertEqual(CloseAgentPageTool().name, "tool_close_agent_page")
+
+    def test_agent_page_tools_explicitly_describe_local_html_web_pages(self):
+        open_tool = OpenAgentPageTool()
+        update_tool = UpdateAgentPageTool()
+        close_tool = CloseAgentPageTool()
+
+        self.assertIn("local HTML/web workspace page", open_tool.description)
+        self.assertIn("rendered web-style page", open_tool.args_schema["format"]["description"])
+        self.assertIn("local HTML/web workspace page", update_tool.description)
+        self.assertIn("local HTML/web workspace page", close_tool.description)
+
+    def test_tool_spec_keywords_flow_into_model_description(self):
+        from plugins.ai_assistant.ai_core.tool_spec import ToolSpec
+
+        spec = ToolSpec(
+            name="tool_demo",
+            description="Open a demo page.",
+            args_schema={},
+            keywords=["html", "web page", "preview"],
+        )
+
+        description = spec.to_model_description()
+
+        self.assertIn("Keywords: html, web page, preview.", description)
+
+    def test_document_open_tools_expose_keywords_metadata(self):
+        html_tool = OpenHtmlPreviewTool()
+        open_doc_tool = OpenDocumentTool()
+        agent_page_tool = OpenAgentPageTool()
+
+        self.assertIn("html", html_tool.spec.keywords)
+        self.assertIn("web preview", html_tool.spec.keywords)
+        self.assertIn("open document", open_doc_tool.spec.keywords)
+        self.assertIn("script editor", open_doc_tool.spec.keywords)
+        self.assertIn("html page", agent_page_tool.spec.keywords)
+        self.assertIn("review page", agent_page_tool.spec.keywords)
+
+    def test_high_frequency_tools_expose_retrieval_keywords(self):
+        from plugins.ai_assistant.tools.edit_file_tool import EditFileTool
+        from plugins.ai_assistant.tools.verify_tool import VerifyTargetTool, RunTestCommandTool
+
+        self.assertIn("find implementation", SearchCodeTool().spec.keywords)
+        self.assertIn("locate file", FindFilesTool().spec.keywords)
+        self.assertIn("find references", FindReferencesTool().spec.keywords)
+        self.assertIn("replace text", EditFileTool().spec.keywords)
+        self.assertIn("apply patch", ApplyPatchTool().spec.keywords)
+        self.assertIn("run shell command", TerminalTool().spec.keywords)
+        self.assertIn("verify target", VerifyTargetTool().spec.keywords)
+        self.assertIn("pytest", RunTestCommandTool().spec.keywords)
+        self.assertIn("plot well", PlotTool().spec.keywords)
+        self.assertIn("list wells", ListWellsTool().spec.keywords)
+
+    def test_second_tier_tools_expose_retrieval_keywords(self):
+        self.assertIn("read file", ReadFileTool().spec.keywords)
+        self.assertIn("search in file", SearchInFileTool().spec.keywords)
+        self.assertIn("list directory", ListDirectoryTool().spec.keywords)
+        self.assertIn("help", HelpTool().spec.keywords)
+        self.assertIn("create task plan", CreateTaskPlanTool().spec.keywords)
+        self.assertIn("get task plan", GetTaskPlanTool().spec.keywords)
+        self.assertIn("update task plan", UpdateTaskPlanTool().spec.keywords)
+        self.assertIn("open script editor", OpenScriptTool().spec.keywords)
+        self.assertIn("run script", RunScriptTool().spec.keywords)
+        self.assertIn("save script", SaveScriptTool().spec.keywords)
+
+    def test_document_open_tools_are_registered_with_expected_names(self):
+        self.assertEqual(OpenHtmlPreviewTool().name, "tool_open_html_preview")
+        self.assertEqual(OpenDocumentTool().name, "tool_open_document")
+
+    def test_document_open_tools_describe_html_preview_and_routing(self):
+        html_tool = OpenHtmlPreviewTool()
+        open_doc_tool = OpenDocumentTool()
+
+        self.assertIn("local HTML file", html_tool.description)
+        self.assertIn("rendered web preview", html_tool.description)
+        self.assertIn("Python scripts open in the script editor", open_doc_tool.description)
+        self.assertIn("HTML files open as rendered web previews", open_doc_tool.description)
+
+    def test_open_document_routes_python_files_to_script_editor_tool(self):
+        tool = OpenDocumentTool(main_window=object(), tool_executor=object())
+
+        with patch.object(OpenScriptFileTool, "execute", return_value={"ok": True, "view": "script_editor"}) as mock_open_script, patch.object(
+            OpenHtmlPreviewTool,
+            "execute",
+            side_effect=AssertionError("html opener should not be used for .py files"),
+        ):
+            result = tool.execute("scripts_user/demo.py")
+
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result.get("document_kind"), "script")
+        self.assertTrue(result.get("filepath", "").lower().endswith(os.path.join("scripts_user", "demo.py").lower()))
+        mock_open_script.assert_called_once()
+
+    def test_open_document_routes_html_files_to_preview_tool(self):
+        tool = OpenDocumentTool(main_window=object(), tool_executor=object())
+
+        with patch.object(OpenHtmlPreviewTool, "execute", return_value={"ok": True, "view": "html_preview"}) as mock_open_html, patch.object(
+            OpenScriptFileTool,
+            "execute",
+            side_effect=AssertionError("script opener should not be used for .html files"),
+        ):
+            result = tool.execute("scripts_user/demo.html")
+
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result.get("document_kind"), "html")
+        self.assertTrue(result.get("filepath", "").lower().endswith(os.path.join("scripts_user", "demo.html").lower()))
+        mock_open_html.assert_called_once()
+
+    def test_open_document_rejects_unsupported_file_types(self):
+        tool = OpenDocumentTool(main_window=object(), tool_executor=object())
+
+        result = tool.execute("scripts_user/demo.txt")
+
+        self.assertFalse(result.get("ok"))
+        self.assertIn("Unsupported document type", result.get("error", ""))
 
     def test_tool_executor_preview_uses_start_preview_session_result(self):
         from plugins.ai_assistant.tools.tool_executor import ToolExecutor

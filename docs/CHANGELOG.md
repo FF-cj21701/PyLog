@@ -3,6 +3,27 @@
 - This changelog now uses bilingual titles and English body text for long-term encoding stability.
 - Some older entries were historically affected by mojibake. Those sections were normalized into readable English summaries while preserving dates and main themes.
 
+## [2026-06-29] - Controlled Shell Executor Foundation / 受控 Shell 执行器基础
+
+- Started Phase 4 of the Codex-style native agent migration by introducing a policy-aware shell execution boundary.
+- Added `plugins/ai_assistant/ai_core/shell_executor.py` with:
+  - normalized command results including `stdout`, `stderr`, `exit_code`, `cwd`, timeout state, blocked state, and verification classification
+  - default project-root working directory behavior
+  - timeout handling and output truncation
+  - shell-control blocking for commands that would require `shell=True`
+  - default blocking for destructive commands such as `git reset --hard`, forced checkout/restore/clean/revert, recursive delete patterns, and package installation commands
+- Reworked `tool_run_shell_command` to use the controlled executor instead of direct `subprocess.run(..., shell=True)`.
+- Routed verification helper command execution through the same controlled executor while leaving detached background plot execution unchanged.
+- Added regression coverage for:
+  - safe command execution without shell mode
+  - verification-command classification
+  - shell-control operator blocking
+  - destructive Git command blocking through the public terminal tool
+- Current verification command:
+  - `.\.venv\Scripts\python.exe -m pytest tests\test_ai_tool_specs.py::ToolSpecConsistencyTests tests\test_ai_tool_specs.py::RunPythonFileBehaviorTests -q`
+- Current result:
+  - `16 passed`
+
 ## [2026-06-29] - Review Card Flow, Registry-backed Review Pages & Theme Alignment / 审查卡片流程、注册表审查页与主题对齐
 
 - Follow-up refinement pass on top of the 2026-06-28 review-page foundation, focused on making the saved-review path the default user-facing flow.
@@ -17,6 +38,29 @@
 - Fixed the chat-card action bridge so review-card clicks can reliably reach Python:
   - exposed the chat `pyBridge` on `window.pyBridge`
   - changed card-action payload transport to URL-safe JSON encoding / decoding
+- Added a reusable document-opening layer for local workspace files:
+  - introduced `tool_open_html_preview` to open `.html` / `.htm` files as rendered web previews inside PyLog
+  - introduced `tool_open_document` as a central router that reuses existing openers and currently dispatches `.py` files to the script editor and `.html` / `.htm` files to the HTML preview surface
+  - extended `ToolExecutor` with a dedicated HTML preview signal / slot so future document types can plug into the same routing model without duplicating window-management logic
+- Formalized tool metadata extensibility for discovery-oriented fields:
+  - added first-class `keywords` support to the `BaseTool -> ToolSpec -> ToolManager inventory` pipeline
+  - updated page/document opening tools to include retrieval-friendly keyword sets such as `html`, `web page`, `html preview`, `open document`, and `script editor`
+  - documented the metadata evolution pattern in `docs/TOOLS_METADATA_GUIDE.md` so future fields like `aliases`, `examples`, and `ui_surface` can be added consistently
+  - connected `keywords` to actual tool retrieval behavior:
+    - `TaskDomainRouter` now keeps keyword-matched tools visible even when coarse domain tags would otherwise filter them out
+    - `ToolSelectionStrategy` now uses keyword relevance as a same-bucket ranking signal so prompt-matched tools appear earlier in the model-visible tool list
+  - expanded retrieval keywords across high-frequency tool groups:
+    - code search and navigation tools such as `tool_search_code`, `tool_find_files`, `tool_find_symbol`, and `tool_find_references`
+    - file editing tools such as `tool_edit_file`, `tool_overwrite_file`, `tool_insert_into_file`, and `tool_apply_patch`
+    - verification tools such as `tool_verify_target`, `tool_run_python_file`, `tool_run_test_command`, `tool_run_lint_command`, `tool_run_format_command`, and `tool_run_import_check`
+    - command / shell entry tools such as `tool_run_shell_command`
+    - core PyLog data and plotting tools such as `list_wells`, `list_curves`, `plot`, `create_plot`, `update_plot`, and plot-style / plot-inspection operations
+  - expanded retrieval keywords across second-tier workflow tools:
+    - file reading and inspection tools such as `tool_read_file`, `tool_search_in_file`, and directory/file inspection helpers
+    - script-editor lifecycle tools such as `tool_open_script`, `tool_write_script_file`, `tool_set_script_code`, `tool_run_script`, `tool_save_script`, and `tool_get_script_state`
+    - planning tools such as `tool_create_task_plan`, `tool_get_task_plan`, and `tool_update_task_plan`
+    - documentation/help lookup via `tool_get_help`
+  - fixed chat metadata popovers for HTML-backed file pills so preview content is rendered as escaped text instead of live DOM, preventing local HTML snippets from altering the AI chat surface when metadata dialogs are opened
   - added regression coverage for the shared bridge path
 - Removed the requirement that a script editor window must remain open before a review page can be opened from chat:
   - introduced `plugins/ai_assistant/ui/review_registry.py`

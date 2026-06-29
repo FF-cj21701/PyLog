@@ -182,6 +182,14 @@ class EditFileTool(BaseTool):
             "path_argument_names": ["filepath"],
             "capability_tags": ["code_edit", "targeted_edit"],
             "domain_tags": ["code", "script"],
+            "keywords": [
+                "edit file",
+                "replace text",
+                "targeted edit",
+                "modify file",
+                "change code",
+                "replace string",
+            ],
             "usage_hint": "If the target path is unknown, call tool_find_files or tool_search_code first. Read the file before editing.",
         })
         self.main_window = main_window
@@ -282,6 +290,13 @@ class OverwriteFileTool(BaseTool):
             "path_argument_names": ["filepath"],
             "capability_tags": ["code_edit", "overwrite"],
             "domain_tags": ["code", "script"],
+            "keywords": [
+                "overwrite file",
+                "replace whole file",
+                "rewrite file",
+                "set file content",
+                "replace full content",
+            ],
             "usage_hint": "If the target path is unknown, call tool_find_files or tool_search_code first. Read the file before overwriting it.",
         })
         self.main_window = main_window
@@ -377,6 +392,14 @@ class InsertIntoFileTool(BaseTool):
             "path_argument_names": ["filepath"],
             "capability_tags": ["code_edit", "insert"],
             "domain_tags": ["code", "script"],
+            "keywords": [
+                "insert into file",
+                "insert code",
+                "add code",
+                "insert after",
+                "insert before",
+                "insert at line",
+            ],
             "usage_hint": "If the target path is unknown, call tool_find_files or tool_search_code first. Then provide exactly one insertion anchor.",
         })
         self.main_window = main_window

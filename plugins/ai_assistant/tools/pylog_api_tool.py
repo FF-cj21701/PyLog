@@ -105,6 +105,13 @@ class ListWellsTool(BaseTool):
                 "required_args": [],
                 "capability_tags": ["well_lookup"],
                 "domain_tags": ["geoscience", "pylog"],
+                "keywords": [
+                    "list wells",
+                    "show wells",
+                    "well list",
+                    "available wells",
+                    "井列表",
+                ],
             },
         )
         self.main_window = main_window
@@ -147,6 +154,7 @@ class GetWellInfoTool(BaseWellTool):
         self.metadata["required_args"] = ["well"]
         self.metadata["capability_tags"] = ["well_lookup"]
         self.metadata["domain_tags"] = ["geoscience", "pylog"]
+        self.metadata["keywords"] = ["well info", "well details", "get well information", "井信息"]
 
     def execute(self, well=None, db_path=None):
         if well is None:
@@ -178,6 +186,7 @@ class ListCurvesTool(BaseWellTool):
         self.metadata["required_args"] = ["well"]
         self.metadata["capability_tags"] = ["curve_lookup"]
         self.metadata["domain_tags"] = ["geoscience", "pylog"]
+        self.metadata["keywords"] = ["list curves", "show curves", "curve list", "well curves", "曲线列表"]
 
     def execute(self, well=None, db_path=None):
         if well is None:
@@ -210,6 +219,7 @@ class GetCurveInfoTool(BaseWellTool):
         self.metadata["required_args"] = ["well", "curve_name"]
         self.metadata["capability_tags"] = ["curve_lookup", "metadata_lookup"]
         self.metadata["domain_tags"] = ["geoscience", "pylog"]
+        self.metadata["keywords"] = ["curve info", "curve metadata", "get curve information", "曲线信息"]
 
     def execute(self, well=None, curve_name=None, db_path=None):
         if well is None or curve_name is None:
@@ -254,6 +264,7 @@ class SaveCurveTool(BaseWellTool):
         self.metadata["required_args"] = ["well", "curve_name", "values"]
         self.metadata["capability_tags"] = ["curve_write"]
         self.metadata["domain_tags"] = ["geoscience", "pylog"]
+        self.metadata["keywords"] = ["save curve", "write curve", "create curve", "store curve", "保存曲线"]
 
     def execute(self, well=None, curve_name=None, values=None, unit="", folder=None, db_path=None):
         if not well or not curve_name or values is None:
@@ -297,6 +308,13 @@ class AnalyzeDataTool(BaseTool):
                 "required_args": ["values"],
                 "capability_tags": ["numeric_analysis"],
                 "domain_tags": ["geoscience", "pylog"],
+                "keywords": [
+                    "analyze data",
+                    "statistics",
+                    "numeric analysis",
+                    "compute stats",
+                    "统计分析",
+                ],
             },
         )
         self.main_window = main_window
@@ -332,6 +350,7 @@ class AnalyzeCurveTool(BaseWellTool):
         self.metadata["required_args"] = ["well", "curve_name"]
         self.metadata["capability_tags"] = ["curve_analysis"]
         self.metadata["domain_tags"] = ["geoscience", "pylog"]
+        self.metadata["keywords"] = ["analyze curve", "curve statistics", "curve analysis", "分析曲线"]
 
     def execute(self, well=None, curve_name=None, db_path=None):
         if well is None or curve_name is None:
@@ -385,6 +404,16 @@ class PlotTool(BaseWellTool):
         ]
         self.metadata["capability_tags"] = ["plotting", "curve_visualization"]
         self.metadata["domain_tags"] = ["geoscience", "pylog"]
+        self.metadata["keywords"] = [
+            "plot",
+            "plot curves",
+            "plot well",
+            "crossplot",
+            "histogram",
+            "make plot",
+            "作图",
+            "绘图",
+        ]
         self.metadata["usage_hint"] = (
             "Provide data_list for in-memory plotting, or provide well plus curves for database-backed plotting."
         )
@@ -429,6 +458,7 @@ class CreatePlotTool(BaseTool):
                 "required_args": ["plot_spec"],
                 "capability_tags": ["plotting", "plot_spec"],
                 "domain_tags": ["geoscience", "pylog"],
+                "keywords": ["create plot", "new plot", "open plot window", "创建图窗"],
             },
         )
         self.main_window = main_window
@@ -465,6 +495,7 @@ class UpdatePlotTool(BaseTool):
                 "required_args": ["commands"],
                 "capability_tags": ["plotting", "plot_update"],
                 "domain_tags": ["geoscience", "pylog"],
+                "keywords": ["update plot", "modify plot", "plot commands", "更新图窗"],
             },
         )
         self.main_window = main_window
@@ -503,6 +534,7 @@ class ApplyCurveStyleTool(BaseTool):
                 "required_args": ["window_id", "track", "curve", "settings"],
                 "capability_tags": ["plot_style", "curve_style"],
                 "domain_tags": ["geoscience", "pylog"],
+                "keywords": ["curve style", "change curve color", "style curve", "曲线样式"],
             },
         )
         self.main_window = main_window
@@ -545,6 +577,7 @@ class ApplyTrackStyleTool(BaseTool):
                 "required_args": ["window_id", "track", "settings"],
                 "capability_tags": ["plot_style", "track_style"],
                 "domain_tags": ["geoscience", "pylog"],
+                "keywords": ["track style", "style track", "change track width", "道样式"],
             },
         )
         self.main_window = main_window
@@ -593,6 +626,7 @@ class AddCurveToPlotTool(BaseTool):
                 "required_args": ["window_id", "well_id", "curve_id"],
                 "capability_tags": ["plotting", "plot_update"],
                 "domain_tags": ["geoscience", "pylog"],
+                "keywords": ["add curve to plot", "plot another curve", "append curve", "加曲线到图"],
             },
         )
         self.main_window = main_window
@@ -655,6 +689,7 @@ class RemoveCurveFromPlotTool(BaseTool):
                 "required_args": ["window_id", "track", "curve"],
                 "capability_tags": ["plotting", "plot_update"],
                 "domain_tags": ["geoscience", "pylog"],
+                "keywords": ["remove curve from plot", "delete curve from plot", "移除曲线"],
             },
         )
         self.main_window = main_window
@@ -698,6 +733,7 @@ class RemoveTrackFromPlotTool(BaseTool):
                 "required_args": ["window_id", "track"],
                 "capability_tags": ["plotting", "plot_update"],
                 "domain_tags": ["geoscience", "pylog"],
+                "keywords": ["remove track", "delete track", "移除道"],
             },
         )
         self.main_window = main_window
@@ -742,6 +778,7 @@ class GetPlotDetailsTool(BaseTool):
                 "required_args": ["title"],
                 "capability_tags": ["plot_inspection"],
                 "domain_tags": ["geoscience", "pylog"],
+                "keywords": ["plot details", "inspect plot", "plot info", "图窗详情"],
             },
         )
         self.main_window = main_window
@@ -799,6 +836,7 @@ class InspectApiTool(BaseTool):
                 "required_args": ["function_name"],
                 "capability_tags": ["api_inspection"],
                 "domain_tags": ["geoscience", "pylog"],
+                "keywords": ["inspect api", "api signature", "api docs", "api parameters"],
             },
         )
         self.mw = main_window

@@ -56,7 +56,7 @@ class OpenAgentPageTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
             "tool_open_agent_page",
-            "Open or focus a reusable agent-owned workspace page. Use this for reviews, reports, plans, summaries, or any structured content the user should inspect in a dedicated page.",
+            "Open or focus a reusable agent-owned local HTML/web workspace page. Use this to show reviews, reports, plans, summaries, diagrams, or any structured content in a dedicated rendered page inside the workspace.",
             {
                 "page_id": {
                     "type": "string",
@@ -68,7 +68,7 @@ class OpenAgentPageTool(BaseTool):
                 },
                 "content": {
                     "type": "string",
-                    "description": "Main page content.",
+                    "description": "Main page content, rendered as text or HTML depending on format.",
                     "nullable": True,
                 },
                 "summary": {
@@ -88,7 +88,7 @@ class OpenAgentPageTool(BaseTool):
                 },
                 "format": {
                     "type": "string",
-                    "description": "Main content format: text or html.",
+                    "description": "Main content format: text or html. Use html when you want a rendered web-style page.",
                     "nullable": True,
                 },
                 "meta": {
@@ -113,7 +113,7 @@ class OpenAgentPageTool(BaseTool):
                 },
                 "mode": {
                     "type": "string",
-                    "description": "dialog or mdi. Defaults to mdi.",
+                    "description": "dialog or mdi. Defaults to an mdi workspace page.",
                     "nullable": True,
                 },
             },
@@ -122,7 +122,17 @@ class OpenAgentPageTool(BaseTool):
                 "side_effect_level": "none",
                 "capability_tags": ["ui", "agent_page", "workspace"],
                 "domain_tags": ["agent"],
-                "usage_hint": "Use a stable page_id like report:well-summary or review:editor-1 so later updates reuse the same page.",
+                "keywords": [
+                    "agent page",
+                    "html page",
+                    "web page",
+                    "workspace page",
+                    "open page",
+                    "report page",
+                    "review page",
+                    "rendered html",
+                ],
+                "usage_hint": "Use a stable page_id like report:well-summary or review:editor-1 so later updates reuse the same local HTML workspace page.",
             },
         )
         self.main_window = main_window
@@ -145,7 +155,7 @@ class UpdateAgentPageTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
             "tool_update_agent_page",
-            "Update the content of an existing agent-owned workspace page, or create it if it does not exist yet.",
+            "Update the content of an existing agent-owned local HTML/web workspace page, or create it if it does not exist yet.",
             {
                 "page_id": {
                     "type": "string",
@@ -158,7 +168,7 @@ class UpdateAgentPageTool(BaseTool):
                 },
                 "content": {
                     "type": "string",
-                    "description": "Updated main page content.",
+                    "description": "Updated main page content, rendered as text or HTML depending on format.",
                     "nullable": True,
                 },
                 "summary": {
@@ -178,7 +188,7 @@ class UpdateAgentPageTool(BaseTool):
                 },
                 "format": {
                     "type": "string",
-                    "description": "Main content format: text or html.",
+                    "description": "Main content format: text or html. Use html when you want a rendered web-style page.",
                     "nullable": True,
                 },
                 "meta": {
@@ -203,7 +213,7 @@ class UpdateAgentPageTool(BaseTool):
                 },
                 "mode": {
                     "type": "string",
-                    "description": "dialog or mdi. Defaults to mdi.",
+                    "description": "dialog or mdi. Defaults to an mdi workspace page.",
                     "nullable": True,
                 },
             },
@@ -212,7 +222,14 @@ class UpdateAgentPageTool(BaseTool):
                 "side_effect_level": "none",
                 "capability_tags": ["ui", "agent_page", "workspace"],
                 "domain_tags": ["agent"],
-                "usage_hint": "Call this repeatedly with the same page_id to keep a live report page updated as work progresses.",
+                "keywords": [
+                    "update page",
+                    "update html page",
+                    "update web page",
+                    "workspace page",
+                    "refresh page content",
+                ],
+                "usage_hint": "Call this repeatedly with the same page_id to keep a live local HTML workspace page updated as work progresses.",
             },
         )
         self.main_window = main_window
@@ -233,7 +250,7 @@ class CloseAgentPageTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
             "tool_close_agent_page",
-            "Close an existing agent-owned workspace page by page_id.",
+            "Close an existing agent-owned local HTML/web workspace page by page_id.",
             {
                 "page_id": {
                     "type": "string",
@@ -245,6 +262,12 @@ class CloseAgentPageTool(BaseTool):
                 "side_effect_level": "none",
                 "capability_tags": ["ui", "agent_page", "workspace"],
                 "domain_tags": ["agent"],
+                "keywords": [
+                    "close page",
+                    "close html page",
+                    "close web page",
+                    "close workspace page",
+                ],
             },
         )
         self.main_window = main_window

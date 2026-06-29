@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Iterable, List, Optional
+import re
+from typing import Iterable, List, Optional, Sequence
 
 
 PLAN_TOOL_NAMES = {"tool_create_task_plan", "tool_get_task_plan", "tool_update_task_plan"}
@@ -10,8 +11,8 @@ WRITE_SIDE_EFFECTS = {"write", "data_mutation", "script_write"}
 class ToolSelectionStrategy:
     """Keep tool ordering simple and step-driven instead of score-heavy."""
 
-    def order_specs(self, specs: Iterable[object], state=None) -> List[object]:
-        return sorted(list(specs), key=lambda spec: self._sort_key(spec, state))
+    def order_specs(self, specs: Iterable[object], state=None, prompt: str = "", history: Optional[Sequence[Sequence[str]]] = None) -> List[object]:
+        return sorted(list(specs), key=lambda spec: self._sort_key(spec, state, prompt=prompt, history=history))
 
     def build_guidance(self, state=None) -> Optional[str]:
         if not state:
@@ -27,10 +28,11 @@ class ToolSelectionStrategy:
 
         return None
 
-    def _sort_key(self, spec, state=None):
+    def _sort_key(self, spec, state=None, prompt: str = "", history: Optional[Sequence[Sequence[str]]] = None):
         bucket = self._bucket(spec, state)
+        relevance = self._keyword_relevance(spec, state=state, prompt=prompt, history=history)
         name = getattr(spec, "name", "")
-        return (bucket, name)
+        return (bucket, -relevance, name)
 
     def _bucket(self, spec, state=None) -> int:
         name = getattr(spec, "name", "")
@@ -139,3 +141,34 @@ class ToolSelectionStrategy:
                 return 85
 
         return bucket
+
+    def _keyword_relevance(self, spec, state=None, prompt: str = "", history: Optional[Sequence[Sequence[str]]] = None) -> int:
+        keywords = [str(keyword).strip().lower() for keyword in (getattr(spec, "keywords", []) or []) if str(keyword).strip()]
+        if not keywords:
+            return 0
+
+        haystack = self._build_text_haystack(state=state, prompt=prompt, history=history)
+        if not haystack:
+            return 0
+
+        relevance = 0
+        for keyword in keywords:
+            if keyword and keyword in haystack:
+                relevance += max(1, min(len(keyword.split()), 3))
+        return relevance
+
+    @staticmethod
+    def _build_text_haystack(state=None, prompt: str = "", history: Optional[Sequence[Sequence[str]]] = None) -> str:
+        text_parts: List[str] = []
+        if prompt:
+            text_parts.append(str(prompt))
+        if state and getattr(state, "current_task", None):
+            text_parts.append(str(state.current_task))
+        if history:
+            for item in history[-4:]:
+                if len(item) >= 2 and item[1]:
+                    text_parts.append(str(item[1]))
+        if not text_parts:
+            return ""
+        text = "\n".join(text_parts).lower()
+        return re.sub(r"\s+", " ", text)

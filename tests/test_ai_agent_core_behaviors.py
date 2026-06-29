@@ -43,6 +43,7 @@ class DummyTool:
         path_argument_names=None,
         domain_tags=None,
         capability_tags=None,
+        keywords=None,
         source: str = "local",
     ):
         self.name = name
@@ -53,6 +54,7 @@ class DummyTool:
         self.metadata = {}
         self.domain_tags = list(domain_tags or [])
         self.capability_tags = list(capability_tags or [])
+        self.keywords = list(keywords or [])
         self.source = source
 
     @property
@@ -69,6 +71,7 @@ class DummyTool:
             path_argument_names=self.path_argument_names,
             domain_tags=self.domain_tags,
             capability_tags=self.capability_tags,
+            keywords=self.keywords,
         )
 
 
@@ -366,6 +369,19 @@ class ToolManagerBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(names, ["list_curves", "tool_edit_file"])
 
+    def test_manager_builds_keyword_ranked_tool_configs(self):
+        manager = ToolManager(
+            [
+                DummyTool(name="tool_open_agent_page", keywords=["agent page"]),
+                DummyTool(name="tool_open_html_preview", keywords=["html preview", "web page"]),
+            ]
+        )
+
+        configs = manager.build_tool_configs(prompt="please open this html preview in a web page")
+        names = [item["function"]["name"] for item in configs]
+
+        self.assertEqual(names[0], "tool_open_html_preview")
+
     def test_manager_exposes_lightweight_inventory(self):
         manager = ToolManager(
             [
@@ -374,6 +390,7 @@ class ToolManagerBoundaryTests(unittest.IsolatedAsyncioTestCase):
                     side_effect_level="write",
                     domain_tags=["code"],
                     capability_tags=["file_edit"],
+                    keywords=["edit file", "patch code"],
                 )
             ]
         )
@@ -384,6 +401,7 @@ class ToolManagerBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inventory[0]["side_effect_level"], "write")
         self.assertEqual(inventory[0]["capability_tags"], ["file_edit"])
         self.assertEqual(inventory[0]["domain_tags"], ["code"])
+        self.assertEqual(inventory[0]["keywords"], ["edit file", "patch code"])
 
     def test_manager_replaces_registered_tool_by_name(self):
         manager = ToolManager([DummyTool(name="tool_demo", capability_tags=["old"])])
@@ -427,7 +445,7 @@ class ToolManagerBoundaryTests(unittest.IsolatedAsyncioTestCase):
     def test_manager_inventory_payload_includes_summary(self):
         manager = ToolManager(
             [
-                DummyTool(name="list_curves", source="local", domain_tags=["geoscience"]),
+                DummyTool(name="list_curves", source="local", domain_tags=["geoscience"], keywords=["curve lookup"]),
                 DummyTool(name="mcp_lookup", source="mcp", side_effect_level="execution"),
             ]
         )
@@ -438,6 +456,7 @@ class ToolManagerBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["summary"]["by_source"], {"local": 1, "mcp": 1})
         self.assertEqual(payload["summary"]["by_side_effect"]["execution"], 1)
         self.assertEqual(payload["summary"]["domain_tags"], ["geoscience"])
+        self.assertEqual(payload["summary"]["keywords"], ["curve lookup"])
         self.assertEqual([tool["name"] for tool in payload["tools"]], ["list_curves", "mcp_lookup"])
 
 
@@ -952,6 +971,34 @@ class WebChatViewResultConsumptionTests(unittest.TestCase):
         self.assertEqual(len(view._current_message_cards), 1)
         self.assertEqual(view._current_message_cards[0]["added"], 2)
         self.assertEqual(view._current_message_cards[0]["removed"], 1)
+
+    def test_open_only_html_result_does_not_generate_file_change_card(self):
+        view = WebChatView.__new__(WebChatView)
+        view._run_js = lambda js, callback=None: None
+        view._current_message_tools = []
+        view._current_message_reasoning = ""
+        view._current_message_content = ""
+        view._current_message_process_logs = []
+        view._current_message_steps = []
+        view._current_message_cards = []
+        view._current_message_pending_cards = []
+        view._current_reasoning_step_index = None
+        view._current_live_text_step_index = None
+        view._has_active_ai_message = False
+
+        result = {
+            "ok": True,
+            "filepath": "scripts_user/demo.html",
+            "document_kind": "html",
+            "open_only": True,
+            "message": "HTML preview opened",
+        }
+
+        view.add_tool_call("tool_open_html_preview", status="success", result=result)
+        view.finalize_current_message()
+
+        self.assertEqual(view._current_message_pending_cards, [])
+        self.assertEqual(view._current_message_cards, [])
 
 
 class MessageCardActionRoutingTests(unittest.TestCase):

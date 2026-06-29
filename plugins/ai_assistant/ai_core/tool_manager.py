@@ -75,8 +75,8 @@ class ToolManager:
     def list_specs_by_capability(self, capability_tag: str):
         return [spec for spec in self.list_specs() if capability_tag in set(spec.capability_tags)]
 
-    def list_ranked_specs(self, state=None, strategy: Optional[ToolSelectionStrategy] = None):
-        return self.dispatcher.list_ranked_specs(state=state, strategy=strategy)
+    def list_ranked_specs(self, state=None, strategy: Optional[ToolSelectionStrategy] = None, prompt: str = "", history=None):
+        return self.dispatcher.list_ranked_specs(state=state, strategy=strategy, prompt=prompt, history=history)
 
     def build_tool_configs(
         self,
@@ -88,7 +88,7 @@ class ToolManager:
         history=None,
     ):
         """Return model-ready tool configs after selection and optional domain routing."""
-        ranked_specs = self.list_ranked_specs(state=state, strategy=strategy)
+        ranked_specs = self.list_ranked_specs(state=state, strategy=strategy, prompt=prompt, history=history)
         routed_specs = ranked_specs
         if router is not None:
             routed_specs = router.route_specs(
@@ -118,6 +118,7 @@ class ToolManager:
                     "lifecycle_role": spec.lifecycle_role,
                     "capability_tags": list(spec.capability_tags),
                     "domain_tags": list(spec.domain_tags),
+                    "keywords": list(getattr(spec, "keywords", []) or []),
                 }
             )
         return inventory
@@ -131,9 +132,11 @@ class ToolManager:
             "by_side_effect": {},
             "domain_tags": [],
             "capability_tags": [],
+            "keywords": [],
         }
         domain_tags = set()
         capability_tags = set()
+        keywords = set()
         for spec in self.list_specs():
             summary["total"] += 1
             self._increment(summary["by_source"], spec.source)
@@ -141,9 +144,11 @@ class ToolManager:
             self._increment(summary["by_side_effect"], spec.side_effect_level)
             domain_tags.update(spec.domain_tags)
             capability_tags.update(spec.capability_tags)
+            keywords.update(getattr(spec, "keywords", []) or [])
 
         summary["domain_tags"] = sorted(domain_tags)
         summary["capability_tags"] = sorted(capability_tags)
+        summary["keywords"] = sorted(keywords)
         return summary
 
     def get_inventory_payload(self):

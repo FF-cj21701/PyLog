@@ -64,6 +64,14 @@ class HelpTool(BaseTool):
                 "required_args": ["query"],
                 "side_effect_level": "read",
                 "capability_tags": ["inspection", "search"],
+                "keywords": [
+                    "help",
+                    "tool help",
+                    "api help",
+                    "documentation",
+                    "docs",
+                    "how to use tool",
+                ],
             },
         )
         self.main_window = main_window

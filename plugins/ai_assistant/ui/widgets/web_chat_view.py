@@ -461,10 +461,31 @@ class WebChatView(QWebEngineView):
         if isinstance(explicit_cards, list) and explicit_cards:
             return explicit_cards
 
+        if not result.get("ok", True):
+            return []
+
+        if result.get("open_only"):
+            return []
+
         state = result.get("script_state") or {}
         script_path = result.get("script_path") or result.get("filepath") or state.get("script_path")
         review_stats = state.get("last_review_diff_stats") or {}
         if not script_path:
+            return []
+
+        has_mutation_signal = bool(
+            result.get("previewed")
+            or result.get("saved_to_disk")
+            or result.get("applied_hunks")
+            or (
+                isinstance(review_stats, dict)
+                and (
+                    int(review_stats.get("added") or 0) > 0
+                    or int(review_stats.get("removed") or 0) > 0
+                )
+            )
+        )
+        if not has_mutation_signal:
             return []
 
         normalized_path = str(script_path).replace("\\", "/")

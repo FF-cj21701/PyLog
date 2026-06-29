@@ -22,6 +22,7 @@ class ToolSpec:
     path_argument_names: List[str] = field(default_factory=lambda: ["filepath", "file_path"])
     capability_tags: List[str] = field(default_factory=list)
     domain_tags: List[str] = field(default_factory=list)
+    keywords: List[str] = field(default_factory=list)
     usage_hint: str = ""
     server_name: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -32,6 +33,8 @@ class ToolSpec:
         tags = self.capability_tags + self.domain_tags
         if tags:
             parts.append(f"Tags: {', '.join(tags)}.")
+        if self.keywords:
+            parts.append(f"Keywords: {', '.join(self.keywords)}.")
 
         parts.append(f"Side effects: {self.side_effect_level}.")
         parts.append(f"Risk: {self.risk_level}.")
@@ -69,6 +72,9 @@ class ToolSpec:
                 },
             },
         }
+
+    def get_keywords(self) -> List[str]:
+        return list(self.keywords)
 
     def get_required_args(self) -> List[str]:
         return list(self.required_args or self._infer_required_args())

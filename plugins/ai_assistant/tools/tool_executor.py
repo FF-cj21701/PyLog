@@ -1,7 +1,7 @@
 import os
 import sys
 import json
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, Signal, Slot, Qt
 
 # 动态注入插件根目录，确保内部模块导入的健壮性
 _plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -26,12 +26,19 @@ except ImportError:
         close_agent_page = None
         open_agent_page = None
 
+try:
+    from scripts.ui.widgets.html_preview_widget import HtmlPreviewWidget, is_html_previewable
+except ImportError:
+    HtmlPreviewWidget = None
+    is_html_previewable = None
+
 class ToolExecutor(QObject):
     """工具执行器，用于在主线程中执行UI相关的工具操作"""
     
     # 信号定义
     execute_open_script = Signal(str)
     execute_open_script_file = Signal(str)
+    execute_open_html_preview = Signal(str)
     execute_set_script_code = Signal(object)
     execute_append_script_code = Signal(object)
     execute_preview_script_code = Signal(object, str) # payload(filepath/editor_id), code
@@ -63,6 +70,7 @@ class ToolExecutor(QObject):
         # 连接信号和槽
         self.execute_open_script.connect(self._open_script)
         self.execute_open_script_file.connect(self._open_script_file)
+        self.execute_open_html_preview.connect(self._open_html_preview)
         self.execute_set_script_code.connect(self._set_script_code)
         self.execute_append_script_code.connect(self._append_script_code)
         self.execute_preview_script_code.connect(self._preview_script_code)
@@ -283,6 +291,77 @@ class ToolExecutor(QObject):
         except Exception as e:
             result = {"error": str(e)}
         
+        self.tool_executed.emit(json.dumps(result))
+
+    @Slot(str)
+    def _open_html_preview(self, filepath):
+        """Open a local HTML file in the workspace preview surface."""
+        try:
+            if not self.main_window or not hasattr(self.main_window, "mdi_area"):
+                result = {"ok": False, "error": "no main window"}
+            elif not HtmlPreviewWidget or not is_html_previewable:
+                result = {"ok": False, "error": "html preview widget is unavailable"}
+            else:
+                resolved_path = filepath
+                if not os.path.exists(resolved_path):
+                    if PathResolver and not os.path.isabs(resolved_path):
+                        alt_path = os.path.join(PathResolver.get_project_root(), resolved_path)
+                        if os.path.exists(alt_path):
+                            resolved_path = alt_path
+                    if not os.path.exists(resolved_path):
+                        result = {"ok": False, "error": f"File not found: {filepath}"}
+                        self.tool_executed.emit(json.dumps(result))
+                        return
+
+                resolved_path = os.path.abspath(resolved_path)
+                if not is_html_previewable(resolved_path):
+                    result = {
+                        "ok": False,
+                        "error": f"Unsupported HTML preview file type: {resolved_path}",
+                    }
+                    self.tool_executed.emit(json.dumps(result))
+                    return
+
+                target_abs = resolved_path.lower()
+                for sub in self.main_window.mdi_area.subWindowList():
+                    widget = sub.widget()
+                    if isinstance(widget, HtmlPreviewWidget) and getattr(widget, "file_path", None):
+                        existing_abs = os.path.abspath(widget.file_path).lower()
+                        if existing_abs == target_abs:
+                            widget.load_file(resolved_path)
+                            self.main_window.mdi_area.setActiveSubWindow(sub)
+                            sub.setWindowTitle(f"HTML: {os.path.basename(resolved_path)}")
+                            sub.show()
+                            result = {
+                                "ok": True,
+                                "filepath": resolved_path,
+                                "window_title": sub.windowTitle(),
+                                "view": "html_preview",
+                                "message": "Existing HTML preview focused",
+                            }
+                            self.tool_executed.emit(json.dumps(result))
+                            return
+
+                widget = HtmlPreviewWidget(resolved_path, parent=self.main_window)
+                widget.openSourceRequested.connect(self.execute_open_script_file.emit)
+                sub = self.main_window.mdi_area.addSubWindow(widget)
+                if hasattr(sub, "setAttribute"):
+                    sub.setAttribute(Qt.WA_DeleteOnClose)
+                sub.setWindowTitle(f"HTML: {os.path.basename(resolved_path)}")
+                sub.show()
+                self.main_window.mdi_area.setActiveSubWindow(sub)
+                if hasattr(self.main_window, "_update_workspace_launchpad_visibility"):
+                    self.main_window._update_workspace_launchpad_visibility()
+                result = {
+                    "ok": True,
+                    "filepath": resolved_path,
+                    "window_title": sub.windowTitle(),
+                    "view": "html_preview",
+                    "message": "HTML preview opened",
+                }
+        except Exception as e:
+            result = {"ok": False, "error": str(e)}
+
         self.tool_executed.emit(json.dumps(result))
     
     @Slot(object)

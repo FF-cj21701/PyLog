@@ -1,5 +1,4 @@
 
-import subprocess
 import os
 import importlib
 
@@ -24,41 +23,67 @@ except ImportError:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         register_tool = importlib.import_module("registry").register_tool
 
+try:
+    from ..ai_core.shell_executor import ControlledShellExecutor
+except ImportError:
+    try:
+        from plugins.ai_assistant.ai_core.shell_executor import ControlledShellExecutor
+    except ImportError:
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        ControlledShellExecutor = importlib.import_module("ai_core.shell_executor").ControlledShellExecutor
+
 @register_tool
 class TerminalTool(BaseTool):
     def __init__(self):
-        super().__init__("tool_run_shell_command", "Execute a shell command in the terminal", {
+        super().__init__("tool_run_shell_command", "Execute a controlled local command in the project root", {
             "command": {
                 "type": "string",
-                "description": "Shell command to execute"
+                "description": "Command to execute without shell operators. Use verification tools for tests when possible."
+            },
+            "cwd": {
+                "type": "string",
+                "description": "Optional working directory. Defaults to the PyLog project root.",
+                "nullable": True
+            },
+            "timeout_seconds": {
+                "type": "integer",
+                "description": "Optional timeout in seconds. Defaults to 30.",
+                "nullable": True
             }
         }, metadata={
             "required_args": ["command"],
+            "side_effect_level": "external",
+            "risk_level": "high",
+            "capability_tags": ["shell", "command_execution"],
+            "keywords": [
+                "run shell command",
+                "run command",
+                "terminal",
+                "shell",
+                "command line",
+                "cli command",
+            ],
+            "usage_hint": "Runs a single controlled command without shell control operators. Destructive commands and package installs are blocked.",
         })
 
-    def execute(self, command):
-        try:
-            # Use shell=True for convenience, but be aware of security implications in production
-            # For a local desktop app assistant, this is often desired by users for autonomy.
-            result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
-            stdout = (result.stdout or "")[:2000]
-            stderr = (result.stderr or "")[:2000]
-            combined = stdout.strip()
-            if stderr.strip():
-                combined = f"{combined}\n{stderr}".strip() if combined else stderr.strip()
-            return {
-                "ok": result.returncode == 0,
-                "display_type": "terminal",
-                "terminal_mode": "shell",
-                "command": command,
-                "terminal": combined or "Done (No Output)",
-                "stdout": stdout,
-                "stderr": stderr,
-                "exit_code": result.returncode,
-                "summary": f"Shell command exited with code {result.returncode}",
-            }
-        except Exception as e:
-            return {"error": str(e)}
+    def execute(self, command, cwd=None, timeout_seconds=None):
+        result = ControlledShellExecutor().run(
+            command,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            allow_shell=False,
+        ).to_dict()
+        combined = (result.get("stdout") or "").strip()
+        stderr = (result.get("stderr") or "").strip()
+        if stderr:
+            combined = f"{combined}\n{stderr}".strip() if combined else stderr
+        result.update({
+            "display_type": "terminal",
+            "terminal_mode": "controlled",
+            "terminal": combined or "Done (No Output)",
+        })
+        return result
 
 @register_tool
 class FileSearchTool(BaseTool):
@@ -75,6 +100,12 @@ class FileSearchTool(BaseTool):
             }
         }, metadata={
             "required_args": ["pattern"],
+            "keywords": [
+                "search files",
+                "find files",
+                "file name search",
+                "wildcard file search",
+            ],
         })
 
     def execute(self, pattern, root_dir=None):

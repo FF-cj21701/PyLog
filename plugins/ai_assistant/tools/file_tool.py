@@ -49,6 +49,31 @@ except ImportError:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         register_tool = importlib.import_module("registry").register_tool
 
+try:
+    from scripts.ui.widgets.html_preview_widget import is_html_previewable
+except ImportError:
+    is_html_previewable = None
+
+
+def _normalize_document_path(filepath):
+    if filepath is None:
+        return ""
+    normalized = str(filepath).strip()
+    if not normalized:
+        return ""
+    if not os.path.isabs(normalized) and PathResolver:
+        normalized = os.path.join(PathResolver.get_project_root(), normalized)
+    return os.path.abspath(normalized)
+
+
+def _classify_document_path(filepath):
+    lower_path = str(filepath or "").lower()
+    if lower_path.endswith(".py"):
+        return "script"
+    if is_html_previewable and is_html_previewable(lower_path):
+        return "html"
+    return "unsupported"
+
 
 def _fetch_script_state(tool_executor, editor_id=None, script_path=None):
     if not tool_executor:
@@ -190,6 +215,12 @@ class OpenScriptTool(BaseTool):
         }, metadata={
             "capability_tags": ["editor", "script_session"],
             "domain_tags": ["script"],
+            "keywords": [
+                "open script editor",
+                "new script",
+                "new python script",
+                "create script tab",
+            ],
         })
         self.main_window = main_window
         self.tool_executor = tool_executor
@@ -211,7 +242,10 @@ class OpenScriptTool(BaseTool):
         
         loop.exec()
         
-        return _attach_script_state(result, self.tool_executor, editor_id=result.get("editor_id"))
+        result = _attach_script_state(result, self.tool_executor, editor_id=result.get("editor_id"))
+        if isinstance(result, dict):
+            result.setdefault("open_only", True)
+        return result
 
 @register_tool
 class OpenScriptFileTool(BaseTool):
@@ -226,6 +260,13 @@ class OpenScriptFileTool(BaseTool):
             "path_argument_names": ["filepath"],
             "capability_tags": ["editor", "script_session"],
             "domain_tags": ["script"],
+            "keywords": [
+                "open script",
+                "open python file",
+                "script editor",
+                "python editor",
+                "open .py",
+            ],
             "usage_hint": "If the exact path is unknown, call tool_find_files or tool_search_code first to locate candidate files.",
         })
         self.main_window = main_window
@@ -248,7 +289,127 @@ class OpenScriptFileTool(BaseTool):
         
         loop.exec()
         
-        return _attach_script_state(result, self.tool_executor, editor_id=result.get("editor_id"), script_path=result.get("filepath") or filepath)
+        result = _attach_script_state(result, self.tool_executor, editor_id=result.get("editor_id"), script_path=result.get("filepath") or filepath)
+        if isinstance(result, dict):
+            result.setdefault("open_only", True)
+        return result
+
+
+@register_tool
+class OpenHtmlPreviewTool(BaseTool):
+    def __init__(self, main_window=None, tool_executor=None):
+        super().__init__(
+            "tool_open_html_preview",
+            "Open an existing local HTML file in the workspace as a rendered web preview. Use this for .html or .htm documents when the user wants to view the page itself instead of raw source.",
+            {
+                "filepath": {
+                    "type": "string",
+                    "description": "Full path to the HTML file to open. For example: 'scripts_user/report.html' or 'docs/local_preview.htm'",
+                }
+            },
+            metadata={
+                "required_args": ["filepath"],
+                "path_argument_names": ["filepath"],
+                "capability_tags": ["ui", "html_preview", "workspace"],
+                "domain_tags": ["agent", "script"],
+                "keywords": [
+                    "html",
+                    "htm",
+                    "open html",
+                    "html preview",
+                    "web preview",
+                    "web page",
+                    "rendered html",
+                    "local webpage",
+                ],
+                "usage_hint": "Use this when the target file is a local HTML page and the user wants the rendered result inside PyLog.",
+            },
+        )
+        self.main_window = main_window
+        self.tool_executor = tool_executor
+
+    def execute(self, filepath):
+        if not self.main_window or not self.tool_executor:
+            return {"ok": False, "error": "no main window"}
+
+        normalized_path = _normalize_document_path(filepath)
+        if not normalized_path:
+            return {"ok": False, "error": "filepath is required"}
+
+        loop = QEventLoop()
+        result = {"ok": False, "error": "execution failed"}
+
+        def on_tool_executed(result_str):
+            nonlocal result
+            result = json.loads(result_str)
+            loop.quit()
+
+        self.tool_executor.tool_executed.connect(on_tool_executed)
+        self.tool_executor.execute_open_html_preview.emit(normalized_path)
+
+        loop.exec()
+        if isinstance(result, dict):
+            result.setdefault("open_only", True)
+        return result
+
+
+@register_tool
+class OpenDocumentTool(BaseTool):
+    def __init__(self, main_window=None, tool_executor=None):
+        super().__init__(
+            "tool_open_document",
+            "Open a local workspace document using the most suitable built-in surface. Python scripts open in the script editor, while HTML files open as rendered web previews. This reuses the existing file-specific open tools so future document types can be added centrally.",
+            {
+                "filepath": {
+                    "type": "string",
+                    "description": "Path to the local document to open. Currently supported: .py, .html, .htm",
+                }
+            },
+            metadata={
+                "required_args": ["filepath"],
+                "path_argument_names": ["filepath"],
+                "capability_tags": ["workspace", "document_open", "routing"],
+                "domain_tags": ["agent", "script"],
+                "keywords": [
+                    "open document",
+                    "open file",
+                    "open workspace file",
+                    "html",
+                    "web page",
+                    "html preview",
+                    "script",
+                    "python file",
+                    "script editor",
+                    "auto detect file type",
+                ],
+                "usage_hint": "Use this as the default opener when you know the file path but want PyLog to choose between script editing and rendered HTML preview.",
+            },
+        )
+        self.main_window = main_window
+        self.tool_executor = tool_executor
+
+    def execute(self, filepath):
+        normalized_path = _normalize_document_path(filepath)
+        if not normalized_path:
+            return {"ok": False, "error": "filepath is required"}
+
+        document_kind = _classify_document_path(normalized_path)
+        if document_kind == "script":
+            result = OpenScriptFileTool(self.main_window, self.tool_executor).execute(normalized_path)
+        elif document_kind == "html":
+            result = OpenHtmlPreviewTool(self.main_window, self.tool_executor).execute(normalized_path)
+        else:
+            return {
+                "ok": False,
+                "filepath": normalized_path,
+                "error": "Unsupported document type. Currently supported: .py, .html, .htm",
+            }
+
+        if isinstance(result, dict):
+            result.setdefault("document_kind", document_kind)
+            result.setdefault("filepath", normalized_path)
+            result.setdefault("open_only", True)
+        return result
 
 @register_tool
 class WriteScriptFileTool(BaseTool):
@@ -276,6 +437,12 @@ class WriteScriptFileTool(BaseTool):
             "path_argument_names": ["filepath"],
             "capability_tags": ["script_creation", "editor"],
             "domain_tags": ["script"],
+            "keywords": [
+                "write script file",
+                "create python file",
+                "new script file",
+                "save new script",
+            ],
             "usage_hint": "Use tool_find_files or tool_search_code first when you only know the filename or feature, not the exact path.",
         })
         self.main_window = main_window
@@ -368,6 +535,12 @@ class SetScriptCodeTool(BaseTool):
         }, metadata={
             "capability_tags": ["editor", "script_write"],
             "domain_tags": ["script"],
+            "keywords": [
+                "set script code",
+                "replace script content",
+                "write code in editor",
+                "set editor content",
+            ],
         })
         self.main_window = main_window
         self.tool_executor = tool_executor
@@ -419,6 +592,12 @@ class AppendScriptCodeTool(BaseTool):
             "path_argument_names": ["editor_id"],
             "capability_tags": ["editor", "script_write"],
             "domain_tags": ["script"],
+            "keywords": [
+                "append script code",
+                "append code",
+                "add code to script",
+                "append to editor",
+            ],
         })
         self.main_window = main_window
         self.tool_executor = tool_executor
@@ -490,6 +669,13 @@ class RunScriptTool(BaseTool):
             ],
             "capability_tags": ["script_execution", "python_execution"],
             "domain_tags": ["script"],
+            "keywords": [
+                "run script",
+                "execute script",
+                "run python code",
+                "run editor code",
+                "script execution",
+            ],
             "usage_hint": "Provide at least one of raw code, script_path, or editor_id so the runtime knows what to execute.",
         })
         self.main_window = main_window
@@ -540,6 +726,12 @@ class SaveScriptTool(BaseTool):
             "path_argument_names": ["filename", "editor_id"],
             "capability_tags": ["script_write", "editor"],
             "domain_tags": ["script"],
+            "keywords": [
+                "save script",
+                "save python file",
+                "write editor to disk",
+                "save script as",
+            ],
         })
         self.main_window = main_window
         self.tool_executor = tool_executor
@@ -585,6 +777,13 @@ class GetScriptStateTool(BaseTool):
         }, metadata={
             "capability_tags": ["editor", "inspection"],
             "domain_tags": ["script"],
+            "keywords": [
+                "script state",
+                "editor state",
+                "preview state",
+                "unsaved changes",
+                "script status",
+            ],
         })
         self.main_window = main_window
         self.tool_executor = tool_executor
@@ -621,6 +820,12 @@ class ListScriptsTool(BaseTool):
         super().__init__("tool_list_scripts", "List all user script files in the scripts_user directory", {}, metadata={
             "capability_tags": ["search", "script_inventory"],
             "domain_tags": ["script"],
+            "keywords": [
+                "list scripts",
+                "show scripts",
+                "script inventory",
+                "available scripts",
+            ],
         })
 
     def execute(self):
@@ -655,6 +860,12 @@ class RunTerminalCommandTool(BaseTool):
             "required_args": ["command"],
             "capability_tags": ["script_execution", "terminal"],
             "domain_tags": ["script"],
+            "keywords": [
+                "run terminal command",
+                "python terminal",
+                "interactive python command",
+                "run python command",
+            ],
         })
         self.main_window = main_window
         self.tool_executor = tool_executor

@@ -670,6 +670,15 @@ function updateSendButton() {
             document.getElementById('mention-popover').style.display = 'none';
         }
 
+        function escapePopoverHtml(value) {
+            return String(value == null ? '' : value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
         function showPopover(pill) {
             const popover = document.getElementById('mention-popover');
             const body = document.getElementById('popover-body');
@@ -706,12 +715,12 @@ function updateSendButton() {
                     const ctxs = JSON.parse(pill.dataset.context || '[]');
                     ctxs.forEach(c => {
                         const cType = getTypeLabel(c.type);
-                        const displayName = (c.type === 'curve' && c.track_name) ? `${c.track_name}/${c.name}` : (c.display_name || c.name);
+                        const displayName = escapePopoverHtml((c.type === 'curve' && c.track_name) ? `${c.track_name}/${c.name}` : (c.display_name || c.name));
 
                         let details = '';
                         if (c.breadcrumbs && c.attributes) {
-                            const pathStr = c.breadcrumbs.map(b => b.name).join(' <span style="opacity:0.5; margin:0 2px;">/</span> ');
-                            const attrsStr = c.attributes.map(a => `<div style="margin-top:2px;"><strong>${a.label}:</strong> ${a.value}</div>`).join('');
+                            const pathStr = c.breadcrumbs.map(b => escapePopoverHtml(b.name)).join(' <span style="opacity:0.5; margin:0 2px;">/</span> ');
+                            const attrsStr = c.attributes.map(a => `<div style="margin-top:2px;"><strong>${escapePopoverHtml(a.label)}:</strong> ${escapePopoverHtml(a.value)}</div>`).join('');
                             details = `
                                 <div style="color:var(--text-secondary); font-size:11px; margin-top:4px; line-height:1.4;">
                                     <div style="opacity: 0.8; margin-bottom: 4px; padding-bottom: 4px; border-bottom: 1px dashed var(--border-color); word-break: break-all;">
@@ -723,32 +732,32 @@ function updateSendButton() {
                             `;
                         } else if (c.type === 'curve') {
                             const dbPath = c.db_path || c.path || '';
-                            const wellName = c.well_name || (dbPath ? dbPath.split(/[/\\]/).pop().replace('.db', '') : 'Unknown Well');
+                            const wellName = escapePopoverHtml(c.well_name || (dbPath ? dbPath.split(/[/\\]/).pop().replace('.db', '') : 'Unknown Well'));
                             details = `
                                 <div style="color:var(--text-secondary); font-size:11px; margin-top:2px; line-height:1.4;">
                                     <strong>Well</strong> ${wellName}<br>
-                                    <strong>Unit</strong> ${c.unit || '-'}<br>
-                                    <strong>Curve ID</strong> ${c.id || '-'}<br>
-                                    <strong>Well ID</strong> ${c.well_id || '-'}<br>
-                                    <strong>Database Path</strong> <span style="word-break: break-all;">${dbPath}</span>
+                                    <strong>Unit</strong> ${escapePopoverHtml(c.unit || '-')}<br>
+                                    <strong>Curve ID</strong> ${escapePopoverHtml(c.id || '-')}<br>
+                                    <strong>Well ID</strong> ${escapePopoverHtml(c.well_id || '-')}<br>
+                                    <strong>Database Path</strong> <span style="word-break: break-all;">${escapePopoverHtml(dbPath)}</span>
                                 </div>
                             `;
                         } else if (c.type === 'plot') {
                             details = `
                                 <div style="color:var(--text-secondary); font-size:11px; margin-top:2px; line-height:1.4;">
-                                    <strong>Well</strong> ${c.well_name || 'Unknown Well'}<br>
-                                    <strong>Track Count</strong> ${(c.tracks || []).length}
+                                    <strong>Well</strong> ${escapePopoverHtml(c.well_name || 'Unknown Well')}<br>
+                                    <strong>Track Count</strong> ${escapePopoverHtml((c.tracks || []).length)}
                                 </div>
                             `;
                         } else if (c.type === 'track') {
                             details = `
                                 <div style="color:var(--text-secondary); font-size:11px; margin-top:2px; line-height:1.4;">
-                                    <strong>Well</strong> ${c.well_name || 'Unknown Well'}<br>
-                                    <strong>Included Curves</strong> ${(c.curves || []).join(', ') || '-'}
+                                    <strong>Well</strong> ${escapePopoverHtml(c.well_name || 'Unknown Well')}<br>
+                                    <strong>Included Curves</strong> ${escapePopoverHtml((c.curves || []).join(', ') || '-')}
                                 </div>
                             `;
                         } else if (c.path) {
-                            details = `<div style="color:var(--text-secondary); font-size:11px; margin-top:2px; word-break: break-all;"><strong>Path</strong> ${c.path}</div>`;
+                            details = `<div style="color:var(--text-secondary); font-size:11px; margin-top:2px; word-break: break-all;"><strong>Path</strong> ${escapePopoverHtml(c.path)}</div>`;
                         }
 
                         html += `
@@ -776,7 +785,7 @@ function updateSendButton() {
 
                 if (breadcrumbs.length > 0 || attributes.length > 0) {
                     if (breadcrumbs.length > 0) {
-                        const pathStr = breadcrumbs.map(b => b.name).join(' <span style="opacity:0.5; margin:0 2px;">/</span> ');
+                        const pathStr = breadcrumbs.map(b => escapePopoverHtml(b.name)).join(' <span style="opacity:0.5; margin:0 2px;">/</span> ');
                         html += `
                             <div class="popover-meta-row" style="margin-bottom: 8px;">
                                 <span class="popover-meta-value" style="word-break: break-all; font-size: 11px;">
@@ -790,39 +799,40 @@ function updateSendButton() {
                     html += `
                         <div class="popover-meta-row" style="margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border-color);">
                             <span class="popover-meta-label">Name:</span>
-                            <span class="popover-meta-value">${name}</span>
+                            <span class="popover-meta-value">${escapePopoverHtml(name)}</span>
                         </div>
                         <div class="popover-meta-row">
                             <span class="popover-meta-label">Type:</span>
-                            <span class="popover-meta-value">${getTypeLabel(type)}</span>
+                            <span class="popover-meta-value">${escapePopoverHtml(getTypeLabel(type))}</span>
                         </div>
                     `;
 
                     attributes.forEach(attr => {
                         html += `
                             <div class="popover-meta-row">
-                                <span class="popover-meta-label">${attr.label}:</span>
-                                <span class="popover-meta-value">${attr.value}</span>
+                                <span class="popover-meta-label">${escapePopoverHtml(attr.label)}:</span>
+                                <span class="popover-meta-value">${escapePopoverHtml(attr.value)}</span>
                             </div>
                         `;
                     });
 
                     const finalContent = (ctx && ctx.content) ? ctx.content : (pill.dataset.content || '');
                     if (finalContent) {
+                        const previewText = escapePopoverHtml(finalContent.substring(0, 500)) + (finalContent.length > 500 ? '...' : '');
                         html += `
                             <div class="popover-meta-label" style="margin-top:12px">Preview</div>
-                            <div class="popover-content-preview">${finalContent.substring(0, 500)}${finalContent.length > 500 ? '...' : ''}</div>
+                            <div class="popover-content-preview">${previewText}</div>
                         `;
                     }
                 } else {
                     html = `
                         <div class="popover-meta-row">
                             <span class="popover-meta-label">Name:</span>
-                            <span class="popover-meta-value">${name}</span>
+                            <span class="popover-meta-value">${escapePopoverHtml(name)}</span>
                         </div>
                         <div class="popover-meta-row">
                             <span class="popover-meta-label">Type:</span>
-                            <span class="popover-meta-value">${getTypeLabel(type)}</span>
+                            <span class="popover-meta-value">${escapePopoverHtml(getTypeLabel(type))}</span>
                         </div>
                     `;
 
@@ -830,7 +840,7 @@ function updateSendButton() {
                         html += `
                             <div class="popover-meta-row">
                                 <span class="popover-meta-label">Path</span>
-                                <span class="popover-meta-value">${path}</span>
+                                <span class="popover-meta-value">${escapePopoverHtml(path)}</span>
                             </div>
                         `;
                     }
@@ -839,7 +849,7 @@ function updateSendButton() {
                         html += `
                             <div class="popover-meta-row">
                                 <span class="popover-meta-label">Well ID</span>
-                                <span class="popover-meta-value">${pill.dataset.wellId}</span>
+                                <span class="popover-meta-value">${escapePopoverHtml(pill.dataset.wellId)}</span>
                             </div>
                         `;
                     }
@@ -847,14 +857,16 @@ function updateSendButton() {
                     const finalContent = (ctx && ctx.content) ? ctx.content : (pill.dataset.content || '');
                     if (type === 'track') {
                         const curvesArr = pill.dataset.curves ? pill.dataset.curves.split(',') : [];
+                        const curvesText = escapePopoverHtml(curvesArr.join(', ') || '-');
                         html += `
                             <div class="popover-meta-label" style="margin-top:12px">Included Curves</div>
-                            <div class="popover-content-preview">${curvesArr.join(', ') || '-'}</div>
+                            <div class="popover-content-preview">${curvesText}</div>
                         `;
                     } else if (finalContent) {
+                        const previewText = escapePopoverHtml(finalContent.substring(0, 500)) + (finalContent.length > 500 ? '...' : '');
                         html += `
                             <div class="popover-meta-label" style="margin-top:12px">Preview</div>
-                            <div class="popover-content-preview">${finalContent.substring(0, 500)}${finalContent.length > 500 ? '...' : ''}</div>
+                            <div class="popover-content-preview">${previewText}</div>
                         `;
                     }
                 }

@@ -85,6 +85,13 @@ class BaseTool:
         return str(self.metadata.get("usage_hint", "") or "")
 
     @property
+    def keywords(self):
+        values = self.metadata.get("keywords")
+        if isinstance(values, (list, tuple)):
+            return [str(value) for value in values if str(value).strip()]
+        return []
+
+    @property
     def server_name(self):
         value = self.metadata.get("server_name")
         return str(value) if value else None
@@ -108,6 +115,7 @@ class BaseTool:
             path_argument_names=self.path_argument_names,
             capability_tags=self.capability_tags,
             domain_tags=self.domain_tags,
+            keywords=self.keywords,
             usage_hint=self.usage_hint,
             server_name=self.server_name,
             metadata=dict(self.metadata),

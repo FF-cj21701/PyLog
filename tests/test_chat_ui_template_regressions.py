@@ -183,6 +183,11 @@ class ChatTemplateRegressionTests(unittest.TestCase):
         self.assertIn("rendered: shouldRenderOptimistically", self.input_js)
         self.assertIn("setSendingState(true);", self.input_js)
 
+    def test_metadata_popover_escapes_preview_html_content(self):
+        self.assertIn("function escapePopoverHtml(value)", self.input_js)
+        self.assertIn("const previewText = escapePopoverHtml(finalContent.substring(0, 500))", self.input_js)
+        self.assertNotIn("popover-content-preview\">${finalContent.substring(0, 500)}", self.input_js)
+
 
 class ReviewTemplateRegressionTests(unittest.TestCase):
     @classmethod

@@ -72,6 +72,14 @@ class ReadFileTool(BaseTool):
             "side_effect_level": "read",
             "required_args": ["file_path"],
             "path_argument_names": ["file_path"],
+            "keywords": [
+                "read file",
+                "open file content",
+                "show file",
+                "view file",
+                "read source",
+                "read lines",
+            ],
         })
 
     def execute(self, file_path, offset=0, limit=10000, line_start=None, line_end=None):
@@ -188,6 +196,12 @@ class WriteFileTool(BaseTool):
         }, metadata={
             "required_args": ["file_path", "content"],
             "path_argument_names": ["file_path"],
+            "keywords": [
+                "write file",
+                "create file content",
+                "save file content",
+                "replace file content",
+            ],
         })
     
     def execute(self, file_path, content):
@@ -219,6 +233,12 @@ class ListDirectoryTool(BaseTool):
         }, metadata={
             "required_args": ["directory"],
             "path_argument_names": ["directory"],
+            "keywords": [
+                "list directory",
+                "show folder contents",
+                "browse folder",
+                "list files in directory",
+            ],
         })
     
     def execute(self, directory):
@@ -264,6 +284,12 @@ class AppendFileTool(BaseTool):
         }, metadata={
             "required_args": ["file_path", "content"],
             "path_argument_names": ["file_path"],
+            "keywords": [
+                "append file",
+                "append content",
+                "add to file",
+                "append text",
+            ],
         })
         self.main_window = main_window
         self.tool_executor = tool_executor
@@ -311,6 +337,12 @@ class FileExistsTool(BaseTool):
         }, metadata={
             "required_args": ["file_path"],
             "path_argument_names": ["file_path"],
+            "keywords": [
+                "file exists",
+                "check file exists",
+                "does file exist",
+                "path exists",
+            ],
         })
     
     def execute(self, file_path):
@@ -348,6 +380,11 @@ class DeleteFileTool(BaseTool):
         }, metadata={
             "required_args": ["file_path"],
             "path_argument_names": ["file_path"],
+            "keywords": [
+                "delete file",
+                "remove file",
+                "erase file",
+            ],
         })
 
     def execute(self, file_path):
@@ -380,6 +417,12 @@ class CreateDirectoryTool(BaseTool):
         }, metadata={
             "required_args": ["directory_path"],
             "path_argument_names": ["directory_path"],
+            "keywords": [
+                "create directory",
+                "make folder",
+                "create folder",
+                "mkdir",
+            ],
         })
     
     def execute(self, directory_path):
@@ -412,6 +455,12 @@ class GetFileInfoTool(BaseTool):
         }, metadata={
             "required_args": ["file_path"],
             "path_argument_names": ["file_path"],
+            "keywords": [
+                "file info",
+                "file metadata",
+                "get file details",
+                "file size",
+            ],
         })
 
     def execute(self, file_path):
@@ -478,6 +527,13 @@ class SearchInFileTool(BaseTool):
         }, metadata={
             "required_args": ["file_path", "pattern"],
             "path_argument_names": ["file_path"],
+            "keywords": [
+                "search in file",
+                "find in file",
+                "grep file",
+                "search text in file",
+                "regex in file",
+            ],
         })
     
     def execute(self, file_path, pattern, use_regex=False, case_sensitive=False, max_results=100):

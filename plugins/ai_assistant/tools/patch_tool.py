@@ -161,6 +161,14 @@ class ApplyPatchTool(BaseTool):
                 "path_argument_names": ["filepath"],
                 "capability_tags": ["code_edit", "patch"],
                 "domain_tags": ["code", "script"],
+                "keywords": [
+                    "apply patch",
+                    "patch file",
+                    "structured patch",
+                    "diff patch",
+                    "modify hunks",
+                    "patch code",
+                ],
                 "usage_hint": "If the target path is unknown, locate it first with tool_find_files or tool_search_code before applying hunks.",
             }
         )

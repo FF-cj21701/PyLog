@@ -3,6 +3,17 @@
 - This changelog now uses bilingual titles and English body text for long-term encoding stability.
 - Some older entries were historically affected by mojibake. Those sections were normalized into readable English summaries while preserving dates and main themes.
 
+## [2026-06-30] - Non-opening Script Edit Draft Flow / 非自动打开脚本编辑草稿流程
+
+- Replaced the old `try_preview_change(...)` helper with `draft_change_in_open_editor(...)`.
+- File editing tools now only send draft/review updates when the target Python script is already open in an editor.
+- `tool_edit_file`, `tool_overwrite_file`, and `tool_insert_into_file` no longer open script editors implicitly when editing `.py` files.
+- `tool_append_file` no longer reopens Python scripts after appending content.
+- Added regression coverage for:
+  - structured draft payloads for already-open script editors
+  - no draft signal emission when the target script is not open
+  - insert-tool script-state propagation through the renamed draft helper
+
 ## [2026-06-29] - Context Manager Boundary Foundation / 上下文管理器边界基础
 
 - Started Phase 5 of the Codex-style native agent migration by introducing a dedicated context-building boundary.
@@ -17,10 +28,15 @@
   - existing well context formatting
   - curve context database well-name lookup
   - ChatService prompt composition delegation
+- Extended the first structured context section pass with Active Script State:
+  - supports direct `active_script` / `script_state` context items
+  - also extracts `script_state` from tool result payloads
+  - includes editor id, script path, unsaved-change state, AI draft/review state, review session id, hashes, and run/save targets
+  - keeps selection context before script-state context for prompt stability
 - Current verification command:
   - `.\.venv\Scripts\python.exe -m pytest tests\test_ai_agent_core_behaviors.py tests\test_agent_runtime_boundary.py tests\test_chat_ui_template_regressions.py -q`
 - Current result:
-  - `88 passed`
+  - `206 passed`
 
 ## [2026-06-29] - Controlled Shell Executor Foundation / 受控 Shell 执行器基础
 

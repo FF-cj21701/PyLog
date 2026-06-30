@@ -92,68 +92,57 @@ def _attach_script_state(result, tool_executor, editor_id=None, script_path=None
     return result
 
 
-def try_preview_change(filepath, new_content, tool_executor):
+def draft_change_in_open_editor(filepath, new_content, tool_executor):
     """
-    Attempt to send code changes to the active editor as a preview/draft instead of
-    immediately saving to disk. Returns True if successful, False if preview fails/unsupported.
+    Send code changes to an already-open editor draft/review session.
+
+    This intentionally does not open script editors. If the target script is not
+    already open, callers should write through the normal file-edit path.
     """
-    if not filepath.endswith('.py') or not tool_executor:
-        return False
-        
-    from PySide6.QtCore import QEventLoop, QTimer
-    import json
-    
-    # 1. Ensure the file is open in an editor
-    loop1 = QEventLoop()
-    open_result = None
-    def on_open_done(res):
-        nonlocal open_result
-        tool_executor.tool_executed.disconnect(on_open_done)
-        try:
-            open_result = json.loads(res)
-        except Exception:
-            open_result = None
-        loop1.quit()
-    tool_executor.tool_executed.connect(on_open_done)
-    tool_executor.execute_open_script_file.emit(filepath)
-    loop1.exec()
-    
-    # 2. Wait slightly to ensure Ace editor JavaScript environment is fully loaded
-    loop_wait = QEventLoop()
-    QTimer.singleShot(400, loop_wait.quit)
-    loop_wait.exec()
-        
-    # 3. Trigger preview mode
-    loop2 = QEventLoop()
-    preview_result = None
-    def on_preview_done(res):
-        nonlocal preview_result
-        tool_executor.tool_executed.disconnect(on_preview_done)
+    if not filepath.endswith(".py") or not tool_executor:
+        return None
+
+    from PySide6.QtCore import QEventLoop
+
+    state = _fetch_script_state(tool_executor, script_path=filepath)
+    if not state or (not state.get("editor_id") and not state.get("script_path")):
+        return None
+
+    loop = QEventLoop()
+    draft_result = None
+
+    def on_draft_done(res):
+        nonlocal draft_result
         try:
             res_dict = json.loads(res)
             if res_dict.get("ok"):
-                preview_result = res_dict
-        except:
-            pass
-        loop2.quit()
-    tool_executor.tool_executed.connect(on_preview_done)
+                draft_result = res_dict
+        except Exception:
+            draft_result = None
+        finally:
+            try:
+                tool_executor.tool_executed.disconnect(on_draft_done)
+            except Exception:
+                pass
+            loop.quit()
+
+    tool_executor.tool_executed.connect(on_draft_done)
     tool_executor.execute_preview_script_code.emit({
-        "editor_id": (open_result or {}).get("editor_id") if isinstance(open_result, dict) else None,
-        "script_path": filepath,
+        "editor_id": state.get("editor_id"),
+        "script_path": state.get("script_path") or filepath,
     }, new_content)
-    loop2.exec()
-    
-    if not preview_result:
+    loop.exec()
+
+    if not draft_result:
         return None
 
-    if isinstance(open_result, dict):
-        preview_result.setdefault("editor_id", open_result.get("editor_id"))
-    preview_result.setdefault("script_path", filepath)
-    preview_result["previewed"] = True
+    draft_result.setdefault("editor_id", state.get("editor_id"))
+    draft_result.setdefault("script_path", state.get("script_path") or filepath)
+    draft_result["previewed"] = True
     return _attach_script_state(
-        preview_result,
+        draft_result,
         tool_executor,
-        editor_id=preview_result.get("editor_id"),
+        editor_id=draft_result.get("editor_id"),
         script_path=filepath,
     )
 
@@ -241,8 +230,8 @@ class EditFileTool(BaseTool):
             # 替换内容
             new_content = content.replace(old_string, new_string, 1)
             
-            # 使用沙箱和预览机制：先尝试预览，预览成功则不直接写回文件
-            preview_result = try_preview_change(filepath, new_content, self.tool_executor)
+            # If the script is already open, update its draft review instead of writing immediately.
+            preview_result = draft_change_in_open_editor(filepath, new_content, self.tool_executor)
             if preview_result:
                 return _attach_script_state({
                     "ok": True,
@@ -250,21 +239,17 @@ class EditFileTool(BaseTool):
                     "previewed": True,
                     "editor_id": preview_result.get("editor_id"),
                     "script_path": preview_result.get("script_path"),
-                    "message": f"Preview mode activated for {filepath}. Changes are NOT saved to disk yet, but they ARE loaded in the editor. You can IMMEDIATELY call tool_run_script(script_path='{filepath}') to verify these changes before the user accepts or rejects them."
+                    "message": f"Draft review updated for open script {filepath}. Changes are NOT saved to disk yet."
                 }, self.tool_executor, script_path=filepath)
             
-            # 写回文件 (仅当预览机制不可用时)
+            # Write to disk when no open editor can host a draft review.
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(new_content)
             
-            # 如果是Python脚本，自动通知UI重新打开或刷新
-            if filepath.endswith('.py') and self.tool_executor:
-                self.tool_executor.execute_open_script_file.emit(filepath)
-
             return _attach_script_state({
                 "ok": True,
                 "filepath": filepath,
-                "message": f"File edited successfully (Preview bypass): {filepath}"
+                "message": f"File edited successfully: {filepath}"
             }, self.tool_executor, script_path=filepath)
         except Exception as e:
             return {"error": str(e)}
@@ -322,8 +307,8 @@ class OverwriteFileTool(BaseTool):
             if not os.path.isfile(filepath):
                 return {"error": f"Not a file: {filepath}"}
             
-            # 使用沙箱和预览机制：先尝试预览
-            preview_result = try_preview_change(filepath, content, self.tool_executor)
+            # If the script is already open, update its draft review instead of writing immediately.
+            preview_result = draft_change_in_open_editor(filepath, content, self.tool_executor)
             if preview_result:
                 return _attach_script_state({
                     "ok": True,
@@ -331,21 +316,17 @@ class OverwriteFileTool(BaseTool):
                     "previewed": True,
                     "editor_id": preview_result.get("editor_id"),
                     "script_path": preview_result.get("script_path"),
-                    "message": f"Preview mode activated for overwriting {filepath}. Changes are NOT saved to disk yet, but they ARE loaded in the editor. You can IMMEDIATELY call tool_run_script(script_path='{filepath}') to verify these changes before the user accepts or rejects them."
+                    "message": f"Draft review updated for open script {filepath}. Changes are NOT saved to disk yet."
                 }, self.tool_executor, script_path=filepath)
                 
-            # 写入文件（覆盖，仅当预览不可用）
+            # Write to disk when no open editor can host a draft review.
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(content)
             
-            # 如果是Python脚本，自动通知UI重新打开或刷新
-            if filepath.endswith('.py') and self.tool_executor:
-                self.tool_executor.execute_open_script_file.emit(filepath)
-
             return _attach_script_state({
                 "ok": True,
                 "filepath": filepath,
-                "message": f"File overwritten successfully (Preview bypass): {filepath}"
+                "message": f"File overwritten successfully: {filepath}"
             }, self.tool_executor, script_path=filepath)
         except Exception as e:
             return {"error": str(e)}
@@ -480,7 +461,7 @@ class InsertIntoFileTool(BaseTool):
             # Try applying dynamically to preview
             preview_result = None
             if getattr(self, "tool_executor", None):
-                preview_result = try_preview_change(filepath, new_content_str, self.tool_executor)
+                preview_result = draft_change_in_open_editor(filepath, new_content_str, self.tool_executor)
             if preview_result:
                 return _attach_script_state({
                     "ok": True,
@@ -488,20 +469,17 @@ class InsertIntoFileTool(BaseTool):
                     "previewed": True,
                     "editor_id": preview_result.get("editor_id"),
                     "script_path": preview_result.get("script_path"),
-                    "message": f"Preview mode activated for insertion into {filepath}. Changes are NOT saved to disk yet, but they ARE loaded in the editor. You can IMMEDIATELY call tool_run_script(script_path='{filepath}') to verify these changes before the user accepts or rejects them."
+                    "message": f"Draft review updated for open script {filepath}. Changes are NOT saved to disk yet."
                 }, self.tool_executor, script_path=filepath)
             
-            # 写回文件
+            # Write to disk when no open editor can host a draft review.
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.writelines(lines)
             
-            if filepath.endswith('.py') and getattr(self, "tool_executor", None):
-                self.tool_executor.execute_open_script_file.emit(filepath)
-                
             return _attach_script_state({
                 "ok": True,
                 "filepath": filepath,
-                "message": f"Content inserted successfully into (Preview bypass): {filepath}"
+                "message": f"Content inserted successfully into: {filepath}"
             }, self.tool_executor, script_path=filepath)
         except Exception as e:
             return {"error": str(e)}

@@ -308,20 +308,6 @@ class AppendFileTool(BaseTool):
             with open(file_path, 'a', encoding='utf-8') as f:
                 f.write(content)
 
-            # 如果是Python脚本，自动重新打开
-            if file_path.endswith('.py') and self.tool_executor:
-                from PySide6.QtCore import QEventLoop
-                import json
-                loop = QEventLoop()
-                
-                def on_done(res):
-                    loop.quit()
-                
-                self.tool_executor.tool_executed.connect(on_done)
-                self.tool_executor.execute_open_script_file.emit(file_path)
-                loop.exec()
-                self.tool_executor.tool_executed.disconnect(on_done)
-
             return {"ok": True, "message": f"Content appended successfully: {file_path}"}
         except Exception as e:
             return {"error": str(e)}

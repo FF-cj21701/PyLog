@@ -120,6 +120,57 @@ class ContextManagerTests(unittest.TestCase):
 
         self.assertEqual(prompt, "[ALIVE Context]\nWell: Well-B (db=demo.db)\n\n[User Message]\nplot it")
 
+    def test_active_script_state_section_formats_editor_draft_state(self):
+        context = ContextManager().build_context_block([
+            {
+                "type": "active_script",
+                "editor_id": "editor-1",
+                "script_path": "scripts_user/demo.py",
+                "has_unsaved_changes": True,
+                "is_preview_active": True,
+                "preview_session_id": "session-1",
+                "base_hash": "base123",
+                "draft_hash": "draft456",
+                "working_hash": "work789",
+                "should_run_from": "editor",
+                "should_save_to": "scripts_user/demo.py",
+            }
+        ])
+
+        self.assertIn("[Active Script State]", context)
+        self.assertIn("- editor_id: editor-1", context)
+        self.assertIn("- script_path: scripts_user/demo.py", context)
+        self.assertIn("- has_unsaved_changes: yes", context)
+        self.assertIn("- ai_draft_active: yes", context)
+        self.assertIn("- should_run_from: editor", context)
+
+    def test_script_state_can_be_extracted_from_tool_result_payload(self):
+        context = ContextManager().build_context_block([
+            {
+                "tool_name": "tool_edit_file",
+                "script_state": {
+                    "editor_id": "editor-2",
+                    "script_path": "scripts_user/tool_demo.py",
+                    "has_unsaved_changes": False,
+                    "is_preview_active": False,
+                    "should_run_from": "editor",
+                    "should_save_to": "scripts_user/tool_demo.py",
+                },
+            }
+        ])
+
+        self.assertIn("- editor_id: editor-2", context)
+        self.assertIn("- has_unsaved_changes: no", context)
+        self.assertIn("- ai_draft_active: no", context)
+
+    def test_active_script_state_follows_selection_context(self):
+        context = ContextManager().build_context_block([
+            {"type": "well", "name": "Well-A", "db_path": "demo.db"},
+            {"type": "active_script", "script_path": "scripts_user/demo.py"},
+        ])
+
+        self.assertLess(context.index("Well: Well-A"), context.index("[Active Script State]"))
+
 
 class ToolResultNormalizationTests(unittest.TestCase):
     def test_normalize_dict_result_preserves_metadata_and_summary(self):

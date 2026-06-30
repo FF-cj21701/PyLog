@@ -1996,8 +1996,8 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         self.assertTrue(result.get("previewed"), result)
         mock_preview.assert_called_once()
 
-    def test_try_preview_change_uses_structured_preview_payload(self):
-        from plugins.ai_assistant.tools.edit_file_tool import try_preview_change
+    def test_draft_change_in_open_editor_uses_structured_preview_payload_without_opening(self):
+        from plugins.ai_assistant.tools.edit_file_tool import draft_change_in_open_editor
 
         class DummySignal:
             def __init__(self):
@@ -2019,13 +2019,13 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         class DummyExecutor:
             def __init__(self):
                 self.tool_executed = DummySignal()
-                self.execute_open_script_file = DummySignal()
+                self.execute_get_script_state = DummySignal()
                 self.execute_preview_script_code = DummySignal()
-                self.execute_open_script_file.connect(self._open)
+                self.execute_get_script_state.connect(self._state)
                 self.execute_preview_script_code.connect(self._preview)
 
-            def _open(self, filepath):
-                self.tool_executed.emit('{"ok": true, "editor_id": "editor-1", "filepath": "' + filepath.replace("\\", "\\\\") + '"}')
+            def _state(self, _payload):
+                self.tool_executed.emit('{"ok": true, "editor_id": "editor-1", "script_path": "scripts_user/demo.py"}')
 
             def _preview(self, payload, _code):
                 self.tool_executed.emit('{"ok": true, "message": "Preview shown in editor", "editor_id": "editor-1"}')
@@ -2045,13 +2045,58 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
             side_effect=lambda _ms, fn: fn(),
         ):
             executor = DummyExecutor()
-            result = try_preview_change("scripts_user/demo.py", "print('x')", executor)
+            result = draft_change_in_open_editor("scripts_user/demo.py", "print('x')", executor)
 
         self.assertTrue(result.get("previewed"), result)
         preview_payload, preview_code = executor.execute_preview_script_code.calls[0]
         self.assertEqual(preview_payload["editor_id"], "editor-1")
         self.assertEqual(preview_payload["script_path"], "scripts_user/demo.py")
         self.assertEqual(preview_code, "print('x')")
+        self.assertEqual(len(executor.execute_preview_script_code.calls), 1)
+
+    def test_draft_change_in_open_editor_returns_none_when_script_is_not_open(self):
+        from plugins.ai_assistant.tools.edit_file_tool import draft_change_in_open_editor
+
+        class DummySignal:
+            def __init__(self):
+                self._callbacks = []
+                self.calls = []
+
+            def connect(self, callback):
+                self._callbacks.append(callback)
+
+            def disconnect(self, callback):
+                if callback in self._callbacks:
+                    self._callbacks.remove(callback)
+
+            def emit(self, *args):
+                self.calls.append(args)
+                for callback in list(self._callbacks):
+                    callback(*args)
+
+        class DummyExecutor:
+            def __init__(self):
+                self.tool_executed = DummySignal()
+                self.execute_get_script_state = DummySignal()
+                self.execute_preview_script_code = DummySignal()
+                self.execute_get_script_state.connect(self._state)
+
+            def _state(self, _payload):
+                self.tool_executed.emit('{"ok": false, "error": "no script editor"}')
+
+        class DummyLoop:
+            def exec(self):
+                return None
+
+            def quit(self):
+                return None
+
+        with patch("PySide6.QtCore.QEventLoop", DummyLoop):
+            executor = DummyExecutor()
+            result = draft_change_in_open_editor("scripts_user/demo.py", "print('x')", executor)
+
+        self.assertIsNone(result)
+        self.assertEqual(executor.execute_preview_script_code.calls, [])
 
     def test_apply_patch_prefers_preview_for_python_script(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2146,14 +2191,14 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         self.assertEqual(preview_payload["script_path"], "scripts_user/demo.py")
         self.assertEqual(preview_code, "print('x')")
 
-    def test_insert_into_file_preview_result_includes_script_state(self):
+    def test_insert_into_file_draft_result_includes_script_state(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             filepath = os.path.join(tmpdir, "demo.py")
             with open(filepath, "w", encoding="utf-8") as handle:
                 handle.write("print('old')\n")
 
             tool = InsertIntoFileTool(main_window=object(), tool_executor=object())
-            with patch("plugins.ai_assistant.tools.edit_file_tool.try_preview_change") as mock_preview, patch(
+            with patch("plugins.ai_assistant.tools.edit_file_tool.draft_change_in_open_editor") as mock_preview, patch(
                 "plugins.ai_assistant.tools.edit_file_tool._attach_script_state",
                 side_effect=lambda result, *_args, **_kwargs: result,
             ):

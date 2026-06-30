@@ -120,6 +120,44 @@ class ContextManagerTests(unittest.TestCase):
 
         self.assertEqual(prompt, "[ALIVE Context]\nWell: Well-B (db=demo.db)\n\n[User Message]\nplot it")
 
+    def test_chat_service_injects_recent_runtime_tool_results(self):
+        service = ChatService.__new__(ChatService)
+        service.context_manager = ContextManager()
+        service.agent_state = AgentState()
+        service.agent_state.record_tool_result(
+            "tool_run_test_command",
+            "failed",
+            result={"stdout": "1 failed", "exit_code": 1},
+            error="AssertionError",
+        )
+
+        prompt = service.compose_prompt("fix it", [
+            {"type": "well", "name": "Well-B", "db_path": "demo.db"},
+        ])
+
+        self.assertIn("Well: Well-B (db=demo.db)", prompt)
+        self.assertIn("[Recent Tool Results]", prompt)
+        self.assertIn("- tool_run_test_command: failed; 1 failed; error: AssertionError", prompt)
+        self.assertIn("[User Message]\nfix it", prompt)
+
+    def test_chat_service_injects_last_verification_without_mutating_input_context(self):
+        service = ChatService.__new__(ChatService)
+        service.context_manager = ContextManager()
+        service.agent_state = AgentState()
+        service.agent_state.record_verification({
+            "ok": False,
+            "tool_name": "tool_verify_target",
+            "summary": "Verification failed",
+            "error": "missing import",
+        })
+        context_data = [{"type": "active_script", "script_path": "scripts_user/demo.py"}]
+
+        prompt = service.compose_prompt("continue", context_data)
+
+        self.assertEqual(context_data, [{"type": "active_script", "script_path": "scripts_user/demo.py"}])
+        self.assertIn("[Active Script State]", prompt)
+        self.assertIn("- tool_verify_target: failed; Verification failed; error: missing import", prompt)
+
     def test_active_script_state_section_formats_editor_draft_state(self):
         context = ContextManager().build_context_block([
             {

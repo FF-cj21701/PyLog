@@ -175,7 +175,7 @@ class ChatService(QObject):
         return configured_model
 
     def compose_prompt(self, user_text, context_data):
-        return self.context_manager.compose_prompt(user_text, context_data)
+        return self.context_manager.compose_prompt(user_text, self._compose_runtime_context(context_data))
 
     def handle_system_message(self, message):
         """Handle system messages."""
@@ -185,4 +185,28 @@ class ChatService(QObject):
             self.error.emit(message)
 
     def build_context_block(self, context_data):
-        return self.context_manager.build_context_block(context_data)
+        return self.context_manager.build_context_block(self._compose_runtime_context(context_data))
+
+    def _compose_runtime_context(self, context_data):
+        """Merge user-selected context with recent runtime state for the next turn."""
+        merged = list(context_data or [])
+        agent_state = getattr(self, "agent_state", None)
+        if not agent_state:
+            return merged
+
+        tool_steps = list(getattr(agent_state, "tool_steps", []) or [])
+        if tool_steps:
+            merged.append({
+                "type": "recent_tool_results",
+                "items": tool_steps,
+            })
+
+        last_verification = getattr(agent_state, "last_verification", None)
+        if last_verification:
+            merged.append({
+                "type": "tool_result",
+                "tool_name": last_verification.get("tool_name") or "last_verification",
+                "result": last_verification,
+            })
+
+        return merged

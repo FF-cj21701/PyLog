@@ -9,10 +9,15 @@
 - File editing tools now only send draft/review updates when the target Python script is already open in an editor.
 - `tool_edit_file`, `tool_overwrite_file`, and `tool_insert_into_file` no longer open script editors implicitly when editing `.py` files.
 - `tool_append_file` no longer reopens Python scripts after appending content.
+- Added a structured Recent Tool Results context section:
+  - supports single tool-result items, batched recent result lists, and `AgentState.tool_steps`-style payloads
+  - preserves high-signal fields such as status, summary, error, path, exit code, preview state, and script draft state
+  - limits context size while keeping failed tool results visible for follow-up repair
 - Added regression coverage for:
   - structured draft payloads for already-open script editors
   - no draft signal emission when the target script is not open
   - insert-tool script-state propagation through the renamed draft helper
+  - recent tool-result extraction, ordering, truncation, and failure retention
 
 ## [2026-06-29] - Context Manager Boundary Foundation / 上下文管理器边界基础
 

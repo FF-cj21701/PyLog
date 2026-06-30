@@ -171,6 +171,100 @@ class ContextManagerTests(unittest.TestCase):
 
         self.assertLess(context.index("Well: Well-A"), context.index("[Active Script State]"))
 
+    def test_recent_tool_results_section_formats_high_signal_fields(self):
+        context = ContextManager().build_context_block([
+            {
+                "type": "tool_result",
+                "tool_name": "tool_edit_file",
+                "status": "completed",
+                "result": {
+                    "message": "File edited successfully",
+                    "filepath": "plugins/demo.py",
+                    "previewed": False,
+                    "script_state": {
+                        "script_path": "plugins/demo.py",
+                        "is_preview_active": False,
+                    },
+                },
+            },
+            {
+                "type": "tool_result",
+                "tool_name": "tool_run_test_command",
+                "ok": False,
+                "error": "AssertionError: expected 1 got 2",
+                "exit_code": 1,
+            },
+        ])
+
+        self.assertIn("[Recent Tool Results]", context)
+        self.assertIn("- tool_edit_file: ok; File edited successfully; filepath: plugins/demo.py", context)
+        self.assertIn("previewed: no", context)
+        self.assertIn("ai_draft_active: no", context)
+        self.assertIn("- tool_run_test_command: failed; error: AssertionError: expected 1 got 2; exit_code: 1", context)
+
+    def test_recent_tool_results_can_be_extracted_from_agent_tool_steps(self):
+        context = ContextManager().build_context_block([
+            {
+                "tool_steps": [
+                    {
+                        "command": "tool_read_file",
+                        "status": "completed",
+                        "result": {"summary": "Read 20 lines", "file_path": "demo.py"},
+                    }
+                ]
+            }
+        ])
+
+        self.assertIn("[Recent Tool Results]", context)
+        self.assertIn("- tool_read_file: ok; Read 20 lines; file_path: demo.py", context)
+
+    def test_recent_tool_results_use_stdout_fallback_and_truncate_long_text(self):
+        long_stdout = "x" * (ContextManager.MAX_TOOL_FIELD_LENGTH + 20)
+
+        context = ContextManager().build_context_block([
+            {
+                "type": "tool_result",
+                "tool_name": "tool_run_test_command",
+                "ok": True,
+                "result": {"stdout": long_stdout},
+            }
+        ])
+
+        expected = "x" * (ContextManager.MAX_TOOL_FIELD_LENGTH - 3) + "..."
+        self.assertIn(expected, context)
+        self.assertNotIn(long_stdout, context)
+
+    def test_recent_tool_results_are_limited_but_keep_failures(self):
+        context = ContextManager().build_context_block([
+            {
+                "type": "recent_tool_results",
+                "items": [
+                    {"tool_name": "tool_1", "ok": True, "message": "one"},
+                    {"tool_name": "tool_2", "ok": False, "error": "important failure"},
+                    {"tool_name": "tool_3", "ok": True, "message": "three"},
+                    {"tool_name": "tool_4", "ok": True, "message": "four"},
+                    {"tool_name": "tool_5", "ok": True, "message": "five"},
+                    {"tool_name": "tool_6", "ok": True, "message": "six"},
+                    {"tool_name": "tool_7", "ok": True, "message": "seven"},
+                ],
+            }
+        ])
+
+        self.assertIn("tool_2: failed", context)
+        self.assertNotIn("tool_1: ok", context)
+        self.assertIn("tool_7: ok", context)
+        self.assertEqual(context.count("- tool_"), ContextManager.MAX_RECENT_TOOL_RESULTS)
+
+    def test_recent_tool_results_follow_active_script_state(self):
+        context = ContextManager().build_context_block([
+            {"type": "well", "name": "Well-A", "db_path": "demo.db"},
+            {"type": "active_script", "script_path": "scripts_user/demo.py"},
+            {"type": "tool_result", "tool_name": "tool_read_file", "ok": True, "message": "read"},
+        ])
+
+        self.assertLess(context.index("Well: Well-A"), context.index("[Active Script State]"))
+        self.assertLess(context.index("[Active Script State]"), context.index("[Recent Tool Results]"))
+
 
 class ToolResultNormalizationTests(unittest.TestCase):
     def test_normalize_dict_result_preserves_metadata_and_summary(self):

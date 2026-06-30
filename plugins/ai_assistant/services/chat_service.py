@@ -15,6 +15,7 @@ from ..ai_core.policy import ExecutionPolicy
 from ..ai_core.state_machine import TaskStateMachine
 from ..ai_core.tool_manager import ToolManager
 from ..ai_core.verification_coordinator import VerificationCoordinator
+from ..ai_core.context_manager import ContextManager
 
 class ChatService(QObject):
     finished = Signal(str)
@@ -43,6 +44,7 @@ class ChatService(QObject):
         self.verification_coordinator = VerificationCoordinator()
         self.execution_policy = ExecutionPolicy(verification_coordinator=self.verification_coordinator)
         self.task_state_machine = TaskStateMachine(self.agent_state)
+        self.context_manager = ContextManager()
         self.tools = self._initialize_tools()
         self.tool_manager = ToolManager(self.tools)
         
@@ -189,10 +191,7 @@ class ChatService(QObject):
         return configured_model
 
     def compose_prompt(self, user_text, context_data):
-        ctx = self.build_context_block(context_data)
-        if not ctx:
-            return user_text
-        return ctx + "\n\n[User Message]\n" + user_text
+        return self.context_manager.compose_prompt(user_text, context_data)
 
     def handle_system_message(self, message):
         """处理系统消息"""
@@ -204,6 +203,7 @@ class ChatService(QObject):
             self.error.emit(message)
 
     def build_context_block(self, context_data):
+        return self.context_manager.build_context_block(context_data)
         if not context_data:
             return ""
         

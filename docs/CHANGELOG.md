@@ -3,6 +3,25 @@
 - This changelog now uses bilingual titles and English body text for long-term encoding stability.
 - Some older entries were historically affected by mojibake. Those sections were normalized into readable English summaries while preserving dates and main themes.
 
+## [2026-06-29] - Context Manager Boundary Foundation / 上下文管理器边界基础
+
+- Started Phase 5 of the Codex-style native agent migration by introducing a dedicated context-building boundary.
+- Added `plugins/ai_assistant/ai_core/context_manager.py` with:
+  - `ContextManager` for prompt context block construction
+  - `ContextSection` as the first structured context section model
+  - existing `[ALIVE Context]` well / curve formatting preserved for compatibility
+  - curve-to-well name lookup retained through the selected database path
+- Routed `ChatService.compose_prompt(...)` and `ChatService.build_context_block(...)` through `ContextManager`.
+- Added regression coverage for:
+  - empty context behavior
+  - existing well context formatting
+  - curve context database well-name lookup
+  - ChatService prompt composition delegation
+- Current verification command:
+  - `.\.venv\Scripts\python.exe -m pytest tests\test_ai_agent_core_behaviors.py tests\test_agent_runtime_boundary.py tests\test_chat_ui_template_regressions.py -q`
+- Current result:
+  - `88 passed`
+
 ## [2026-06-29] - Controlled Shell Executor Foundation / 受控 Shell 执行器基础
 
 - Started Phase 4 of the Codex-style native agent migration by introducing a policy-aware shell execution boundary.

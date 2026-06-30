@@ -12,6 +12,7 @@ if PROJECT_ROOT not in sys.path:
 
 from plugins.ai_assistant.ai_core.agent_state import AgentState
 from plugins.ai_assistant.ai_core.api_client import AsyncAIWorker
+from plugins.ai_assistant.ai_core.context_manager import ContextManager
 from plugins.ai_assistant.ai_core.policy import ExecutionPolicy
 from plugins.ai_assistant.ai_core.state_machine import TaskStateMachine
 from plugins.ai_assistant.ai_core.task_plan import TaskPlanner
@@ -73,6 +74,51 @@ class DummyTool:
             capability_tags=self.capability_tags,
             keywords=self.keywords,
         )
+
+
+class ContextManagerTests(unittest.TestCase):
+    def test_empty_context_returns_user_message_unchanged(self):
+        manager = ContextManager()
+
+        self.assertEqual(manager.build_context_block([]), "")
+        self.assertEqual(manager.compose_prompt("hello", []), "hello")
+
+    def test_well_context_matches_existing_alive_context_format(self):
+        manager = ContextManager()
+
+        context = manager.build_context_block([
+            {"type": "well", "name": "Well-A", "db_path": "demo.db"},
+        ])
+
+        self.assertEqual(context, "[ALIVE Context]\nWell: Well-A (db=demo.db)")
+
+    def test_curve_context_resolves_well_name_from_database(self):
+        import sqlite3
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "demo.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute("CREATE TABLE wells (id TEXT PRIMARY KEY, name TEXT)")
+            conn.execute("INSERT INTO wells (id, name) VALUES (?, ?)", ("well-1", "Alpha"))
+            conn.commit()
+            conn.close()
+
+            context = ContextManager().build_context_block([
+                {"type": "curve", "name": "GR", "well_id": "well-1", "db_path": db_path},
+            ])
+
+        self.assertIn("Curve: GR (well=Alpha, db=", context)
+
+    def test_chat_service_delegates_prompt_composition_to_context_manager(self):
+        service = ChatService.__new__(ChatService)
+        service.context_manager = ContextManager()
+
+        prompt = service.compose_prompt("plot it", [
+            {"type": "well", "display_name": "Well-B", "db_path": "demo.db"},
+        ])
+
+        self.assertEqual(prompt, "[ALIVE Context]\nWell: Well-B (db=demo.db)\n\n[User Message]\nplot it")
 
 
 class ToolResultNormalizationTests(unittest.TestCase):

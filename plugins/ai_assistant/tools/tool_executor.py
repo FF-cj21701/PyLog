@@ -3,7 +3,7 @@ import sys
 import json
 from PySide6.QtCore import QObject, Signal, Slot, Qt
 
-# 动态注入插件根目录，确保内部模块导入的健壮性
+# Add the plugin root dynamically so internal imports remain robust.
 _plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _plugin_root not in sys.path:
     sys.path.insert(0, _plugin_root)
@@ -11,7 +11,7 @@ if _plugin_root not in sys.path:
 try:
     from ..common.paths import PathResolver
 except ImportError:
-    # 极端情况下的分级回退适配
+    # Fallback for unusual import layouts.
     try:
         from plugins.ai_assistant.common.paths import PathResolver
     except ImportError:
@@ -33,9 +33,9 @@ except ImportError:
     is_html_previewable = None
 
 class ToolExecutor(QObject):
-    """工具执行器，用于在主线程中执行UI相关的工具操作"""
+    """Execute UI-bound tool operations on the main thread."""
     
-    # 信号定义
+    # Command signals.
     execute_open_script = Signal(str)
     execute_open_script_file = Signal(str)
     execute_open_html_preview = Signal(str)
@@ -50,24 +50,24 @@ class ToolExecutor(QObject):
     execute_close_agent_page = Signal(object)
     execute_get_terminal = Signal()
     execute_run_terminal_command = Signal(str)
-    execute_plot_from_db = Signal(str)  # 传递JSON字符串
-    execute_plot_data = Signal(str)     # 传递JSON字符串
-    execute_plot = Signal(str)          # 统一绘图信号
+    execute_plot_from_db = Signal(str)  # JSON payload.
+    execute_plot_data = Signal(str)     # JSON payload.
+    execute_plot = Signal(str)          # Unified plotting signal.
     execute_create_plot = Signal(str)
     execute_update_plot = Signal(str)
     execute_apply_curve_style = Signal(str)
     execute_apply_track_style = Signal(str)
-    execute_save_curve = Signal(str)    # 曲线保存信号
-    execute_get_plot_details = Signal(str) # 传递窗口标题
+    execute_save_curve = Signal(str)    # Curve save signal.
+    execute_get_plot_details = Signal(str) # Window title payload.
     
-    # 结果信号
+    # Result signals.
     tool_executed = Signal(str)
     
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
         
-        # 连接信号和槽
+        # Connect signals and slots.
         self.execute_open_script.connect(self._open_script)
         self.execute_open_script_file.connect(self._open_script_file)
         self.execute_open_html_preview.connect(self._open_html_preview)
@@ -97,11 +97,11 @@ class ToolExecutor(QObject):
         self._init_ai_context()
     
     def _init_ai_context(self):
-        """初始化 AI 专用的执行上下环境"""
+        """Initialize the dedicated AI execution context."""
         import numpy as np
         from scripts.data.db_manager import DBManager as DBClass
         
-        # 尝试获取数据库路径和实例
+        # Try to capture the current database path and instance.
         db_path = ""
         db = None
         well_info = []
@@ -211,7 +211,7 @@ class ToolExecutor(QObject):
     
     @Slot(str)
     def _open_script(self, title):
-        """在主线程中打开脚本编辑器"""
+        """Open the script editor on the main thread."""
         try:
             if not self.main_window or not hasattr(self.main_window, "new_script_window"):
                 result = {"error": "no main window"}
@@ -237,14 +237,14 @@ class ToolExecutor(QObject):
     
     @Slot(str)
     def _open_script_file(self, filepath):
-        """在主线程中打开已有的脚本文件"""
+        """Open an existing script file on the main thread."""
         try:
             if not self.main_window or not hasattr(self.main_window, "new_script_window"):
                 result = {"error": "no main window"}
             else:
-                # 处理相对路径，尝试在scripts_user目录下查找
+                # Resolve relative paths, preferring scripts_user when applicable.
                 if not os.path.exists(filepath):
-                    # 尝试在scripts_user目录下查找
+                    # Try scripts_user as a convenience lookup root.
                     alt_path = os.path.join("scripts_user", filepath)
                     if os.path.exists(alt_path):
                         filepath = alt_path
@@ -253,20 +253,20 @@ class ToolExecutor(QObject):
                         self.tool_executed.emit(json.dumps(result))
                         return
                 
-                # 读取文件内容
+                # Read file content.
                 with open(filepath, 'r', encoding='utf-8') as f:
                     script_content = f.read()
                 
-                # 检查是否已经打开了该文件
+                # Reuse an existing editor if the file is already open.
                 target_abs = os.path.abspath(filepath).lower()
                 if hasattr(self.main_window, "mdi_area"):
                     for sub in self.main_window.mdi_area.subWindowList():
                         widget = sub.widget()
-                        # 检查 widget 是否有 script_path 属性且匹配
+                        # Match widgets by script_path when available.
                         if hasattr(widget, "script_path") and widget.script_path:
                             existing_abs = os.path.abspath(widget.script_path).lower()
                             if existing_abs == target_abs:
-                                # 已经打开，激活并刷新内容
+                                # Activate the existing editor and refresh its content.
                                 self.main_window.mdi_area.setActiveSubWindow(sub)
                                 self._remember_editor(widget)
                                 if hasattr(widget, "set_code"):
@@ -275,14 +275,14 @@ class ToolExecutor(QObject):
                                 self.tool_executed.emit(json.dumps(result))
                                 return
 
-                # 创建新的脚本编辑器窗口
+                # Create a new script editor window.
                 self.main_window.new_script_window()
                 sub = self.main_window.mdi_area.activeSubWindow() if hasattr(self.main_window, "mdi_area") else None
                 
                 if sub and hasattr(sub.widget(), "set_code"):
                     ed = sub.widget()
                     ed.set_code(script_content)
-                    ed.script_path = filepath # 记录路径以便下次识别
+                    ed.script_path = filepath # Store the path for later matching.
                     sub.setWindowTitle(f"Script: {os.path.basename(filepath)}")
                     self._remember_editor(ed)
                     result = {"ok": True, "filepath": filepath, "editor_id": getattr(ed, "editor_id", None)}
@@ -366,7 +366,7 @@ class ToolExecutor(QObject):
     
     @Slot(object)
     def _set_script_code(self, payload):
-        """在主线程中设置脚本代码"""
+        """Set script code on the main thread."""
         try:
             if not self.main_window or not hasattr(self.main_window, "mdi_area"):
                 result = {"error": "no main window"}
@@ -392,7 +392,7 @@ class ToolExecutor(QObject):
     
     @Slot(object)
     def _append_script_code(self, payload):
-        """在主线程中追加脚本代码"""
+        """Append script code on the main thread."""
         try:
             if not self.main_window or not hasattr(self.main_window, "mdi_area"):
                 result = {"error": "no main window"}
@@ -420,7 +420,7 @@ class ToolExecutor(QObject):
 
     @Slot(object, str)
     def _preview_script_code(self, payload, code):
-        """主线程中触发代码预览"""
+        """Trigger script draft/review handling on the main thread."""
         try:
             if not self.main_window or not hasattr(self.main_window, "mdi_area"):
                 result = {"error": "no main window"}
@@ -468,15 +468,15 @@ class ToolExecutor(QObject):
 
     @Slot(object, object)
     def _run_script(self, code=None, script_path=None):
-        """在主线程中运行 AI 专用终端中的代码 (支持直接传入代码或路径)"""
+        """Run code in the dedicated AI terminal on the main thread."""
         try:
             import io
             import contextlib
             
-            # 捕获输出
+            # Capture output.
             f = io.StringIO()
             
-            # 确定执行的代码
+            # Determine the code to execute.
             exec_code = ""
             
             editor_id = None
@@ -494,7 +494,7 @@ class ToolExecutor(QObject):
                     exec_code = editor.get_code()
                     self._remember_editor(editor)
             elif script_path:
-                # 优先从编辑器中读取代码 (为了支持预览模式下的运行)
+                # Prefer editor code so draft/review execution uses the current workspace.
                 target_abs = os.path.abspath(script_path).lower()
                 found_code = None
                 if self.main_window and hasattr(self.main_window, "mdi_area"):
@@ -514,7 +514,7 @@ class ToolExecutor(QObject):
                 else:
                     exec_code = f"print('Error: Script file not found: {script_path}')"
             else:
-                # 默认从 MDI 中读取代码 (兼容旧行为)
+                # Fall back to reading code from the MDI editor for legacy behavior.
                 if self.main_window and hasattr(self.main_window, "mdi_area"):
                     sub = self.main_window.mdi_area.activeSubWindow()
                     if sub and hasattr(sub.widget(), "get_code"):
@@ -523,25 +523,25 @@ class ToolExecutor(QObject):
             if not exec_code:
                 result = {"error": "No active script code or path to run"}
             else:
-                # 注入当前的 db_path 等状态（防止主窗口状态变化）
+                # Inject current db_path state to avoid main-window state drift.
                 if self.main_window:
                     if hasattr(self.main_window, 'db_path'):
                         self.execution_context["db_path"] = self.main_window.db_path
                     if hasattr(self.main_window, 'db'):
                         self.execution_context["db"] = self.main_window.db
                 
-                # 运行前清理 Matplotlib，防止图形窗口堆积导致崩溃
+                # Clear Matplotlib state before running to avoid accumulated GUI figures.
                 try:
                     import matplotlib.pyplot as plt
                     plt.close('all')
                 except:
                     pass
                 
-                # 设置 print 重定向
+                # Redirect print output.
                 self.execution_context["print"] = lambda *args, **kwargs: print(*args, file=f, **kwargs)
                 
                 try:
-                    # 拦截脚本中的 sys.exit() 以防止其关闭整个 PyLog 进程
+                    # Intercept sys.exit() so user scripts cannot close the PyLog process.
                     import sys
                     _orig_exit = sys.exit
                     def _intercepted_exit(*args, **kwargs):
@@ -561,11 +561,11 @@ class ToolExecutor(QObject):
                     output = f"{f.getvalue()}\nError: {cmd_error}"
                     status = "error"
                 
-                # 记录到历史
+                # Record output history.
                 hist_header = f">>> [Run Script: {script_path if script_path else 'Direct Code' if code else 'MDI'}]\n"
                 self.terminal_history.append(f"{hist_header}{output}")
                 
-                # 限制历史大小
+                # Limit history size.
                 if len(self.terminal_history) > 100:
                     self.terminal_history = self.terminal_history[-100:]
                     
@@ -588,7 +588,7 @@ class ToolExecutor(QObject):
     
     @Slot(object)
     def _save_script(self, payload):
-        """在主线程中保存脚本"""
+        """Save a script on the main thread."""
         try:
             if not self.main_window or not hasattr(self.main_window, "mdi_area"):
                 result = {"error": "no main window"}
@@ -719,9 +719,9 @@ class ToolExecutor(QObject):
     
     @Slot()
     def _get_terminal(self):
-        """在主线程中获取 AI 专用终端内容"""
+        """Return dedicated AI terminal content from the main thread."""
         try:
-            # 返回最近的输出记录
+            # Return recent output history.
             content = "\n".join(self.terminal_history[-20:]) if self.terminal_history else "Terminal is empty."
             result = {
                 "ok": True,
@@ -737,22 +737,22 @@ class ToolExecutor(QObject):
     
     @Slot(str)
     def _run_terminal_command(self, command):
-        """在主线程中执行 AI 专用终端命令（解耦 MDI）"""
+        """Execute a dedicated AI terminal command on the main thread."""
         try:
             import io
             import contextlib
             
-            # 捕获输出
+            # Capture output.
             f = io.StringIO()
             
-            # 注入当前的 db_path 等状态（防止主窗口状态变化）
+            # Inject current db_path state to avoid main-window state drift.
             if self.main_window:
                 if hasattr(self.main_window, 'db_path'):
                     self.execution_context["db_path"] = self.main_window.db_path
                 if hasattr(self.main_window, 'db'):
                     self.execution_context["db"] = self.main_window.db
             
-            # 设置 print 重定向
+            # Redirect print output.
             self.execution_context["print"] = lambda *args, **kwargs: print(*args, file=f, **kwargs)
             
             try:
@@ -764,10 +764,10 @@ class ToolExecutor(QObject):
                 output = f"{f.getvalue()}\nError: {cmd_error}"
                 status = "error"
             
-            # 记录到历史
+            # Record output history.
             self.terminal_history.append(f">>> {command}\n{output}")
             
-            # 限制历史大小
+            # Limit history size.
             if len(self.terminal_history) > 100:
                 self.terminal_history = self.terminal_history[-100:]
                 
@@ -790,7 +790,7 @@ class ToolExecutor(QObject):
     
     @Slot(str)
     def _plot_from_db(self, plot_data_json):
-        """在主线程中执行从数据库绘图操作"""
+        """Execute database-backed plotting on the main thread."""
         try:
             import json
             plot_data = json.loads(plot_data_json)
@@ -825,7 +825,7 @@ class ToolExecutor(QObject):
     
     @Slot(str)
     def _plot_data(self, plot_data_json):
-        """在主线程中执行数据绘图操作"""
+        """Execute data plotting on the main thread."""
         try:
             import json
             plot_data = json.loads(plot_data_json)
@@ -850,12 +850,12 @@ class ToolExecutor(QObject):
 
     @Slot(str)
     def _plot(self, plot_data_json):
-        """统一绘图入口"""
+        """Unified plotting entry point."""
         try:
             plot_data = json.loads(plot_data_json)
             from pylog_api import plot
             
-            # 移除 None 值以使用 API 默认值
+            # Drop None values so API defaults can apply.
             clean_params = {k: v for k, v in plot_data.items() if v is not None}
             clean_params['show_ai_chat'] = False
             clean_params['show_scripts'] = False
@@ -924,7 +924,7 @@ class ToolExecutor(QObject):
 
     @Slot(str)
     def _save_curve(self, save_data_json):
-        """保存曲线并刷新 UI"""
+        """Save a curve and refresh the UI."""
         try:
             save_data = json.loads(save_data_json)
             from pylog_api import save_curve
@@ -938,7 +938,7 @@ class ToolExecutor(QObject):
                 db_path=save_data.get("db_path")
             )
             
-            # 如果保存成功，尝试刷新主界面井目录树
+            # Refresh the main well tree after a successful save.
             if result.get("ok") and self.main_window:
                 if hasattr(self.main_window, "tree_controller"):
                     self.main_window.tree_controller.refresh_tree()
@@ -951,7 +951,7 @@ class ToolExecutor(QObject):
 
     @Slot(str)
     def _get_plot_details(self, title):
-        """在主线程中获取指定绘图窗口的详细信息"""
+        """Get details for a plotting window on the main thread."""
         try:
             if not self.main_window or not hasattr(self.main_window, "mdi_area"):
                 result = {"error": "no main window or mdi area"}

@@ -134,9 +134,9 @@ class ScriptReviewDialog(ThemeDialog):
 
         buttons = QHBoxLayout()
         buttons.addStretch()
-        close_btn = QPushButton("关闭")
-        discard_btn = QPushButton("放弃修改")
-        save_btn = QPushButton("保存修改")
+        close_btn = QPushButton("Close")
+        discard_btn = QPushButton("Discard Changes")
+        save_btn = QPushButton("Save Changes")
         buttons.addWidget(close_btn)
         buttons.addWidget(discard_btn)
         buttons.addWidget(save_btn)
@@ -279,7 +279,7 @@ class VariableInspectorDialog(ThemeDialog):
 
 
 class WebScriptEditor(QWidget):
-    script_saved = Signal(str)  # 保存成功信号，参数为保存的文件路径
+    script_saved = Signal(str)  # Emitted with the saved file path after a successful save.
     
     def __init__(self, db_or_path=None, initial_code="", parent=None):
         super().__init__(parent)
@@ -287,13 +287,13 @@ class WebScriptEditor(QWidget):
         self.db = None
         
         if db_or_path:
-            # 检查是否已经是DBManager对象
+            # Reuse an existing DBManager instance when one is provided.
             if hasattr(db_or_path, 'db_path'):
-                # 已经是DBManager对象，直接使用
+                # Already a DBManager instance.
                 self.db = db_or_path
                 self.db_path = db_or_path.db_path
             else:
-                # 是数据库路径，创建新的DBManager
+                # Treat the input as a database path and create a DBManager.
                 self.db_path = db_or_path
                 from scripts.data.db_manager import DBManager
                 self.db = DBManager(db_or_path)
@@ -453,7 +453,7 @@ class WebScriptEditor(QWidget):
         self.output.setReadOnly(True)
         self.output.setPlaceholderText("Output terminal...")
         # Styles applied in update_theme_styles()
-        self.tab_widget.addTab(self.output, "输出")
+        self.tab_widget.addTab(self.output, "Output")
         
         # Terminal
         self.terminal = QPlainTextEdit()
@@ -466,18 +466,18 @@ class WebScriptEditor(QWidget):
         self.current_command = ""
         # Set initial terminal content with prompt
         self.terminal.setPlainText("Terminal: Type commands here (press Enter to execute)\n>>")
-        self.tab_widget.addTab(self.terminal, "终端")
+        self.tab_widget.addTab(self.terminal, "Terminal")
 
         # 3. Variable Explorer
         from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
         self.var_table = QTableWidget(0, 3)
-        self.var_table.setHorizontalHeaderLabels(["名称", "类型", "值/预览"])
+        self.var_table.setHorizontalHeaderLabels(["Name", "Type", "Value / Preview"])
         self.var_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.var_table.verticalHeader().setVisible(False)
         self.var_table.setAlternatingRowColors(True)
         # Styles applied in update_theme_styles()
         self.var_table.itemDoubleClicked.connect(self.on_variable_opened)
-        self.tab_widget.addTab(self.var_table, "变量")
+        self.tab_widget.addTab(self.var_table, "Variables")
         
         self.splitter.addWidget(self.tab_widget)
         
@@ -937,7 +937,7 @@ class WebScriptEditor(QWidget):
         f = io.StringIO()
         
         # Switch to output tab before running
-        self.tab_widget.setCurrentIndex(0)  # 0 is the index of "输出" tab
+        self.tab_widget.setCurrentIndex(0)  # 0 is the Output tab.
         self.output.setPlainText("Running...")
         
         # Inject print redirector and current file path into context
@@ -1024,15 +1024,15 @@ class WebScriptEditor(QWidget):
         if not os.path.exists(scripts_dir):
             os.makedirs(scripts_dir)
             
-        # 获取默认文件名：从窗口标题中提取
+        # Derive the default filename from the subwindow title.
         default_name = ""
         main_window = self.window()
         if main_window:
-            # 尝试获取子窗口标题
+            # Try to read the MDI subwindow title.
             for sub in main_window.mdi_area.subWindowList():
                 if sub.widget() == self:
                     title = sub.windowTitle()
-                    # 移除 "Script: " 前缀，提取文件名
+                    # Strip the "Script: " prefix to extract the filename.
                     if title.startswith("Script: "):
                         default_name = title.replace("Script: ", "")
                     elif title.startswith("Script "):
@@ -1047,7 +1047,7 @@ class WebScriptEditor(QWidget):
             import time
             default_name = f"script_{int(time.time())}.py"
         
-        # 弹出输入对话框 (Legacy behavior for quick saving to scripts_user)
+        # Show an input dialog. This preserves the legacy quick-save behavior for scripts_user.
         filename, ok = QInputDialog.getText(
             self,
             "Save Script",
@@ -1327,7 +1327,7 @@ class WebScriptEditor(QWidget):
         """)
         
         # 1. AI Actions (Top)
-        chat_action = QAction("AI 聊天 (Chat)", self)
+        chat_action = QAction("AI Chat", self)
         chat_action.setShortcut("Ctrl+L")
         chat_action.triggered.connect(lambda: self.trigger_ai_action("", use_context=True))
         menu.addAction(chat_action)
@@ -1335,27 +1335,27 @@ class WebScriptEditor(QWidget):
         menu.addSeparator()
 
         # 2. Standard Actions
-        undo_action = QAction("撤销 (Undo)", self)
+        undo_action = QAction("Undo", self)
         undo_action.triggered.connect(lambda: self.web_view.page().runJavaScript("editor.undo()"))
         menu.addAction(undo_action)
         
-        redo_action = QAction("重做 (Redo)", self)
+        redo_action = QAction("Redo", self)
         redo_action.triggered.connect(lambda: self.web_view.page().runJavaScript("editor.redo()"))
         menu.addAction(redo_action)
         
         menu.addSeparator()
         
-        copy_action = QAction("复制 (Copy)", self)
+        copy_action = QAction("Copy", self)
         copy_action.triggered.connect(lambda: self.web_view.page().runJavaScript("document.execCommand('copy')"))
         menu.addAction(copy_action)
         
-        paste_action = QAction("粘贴 (Paste)", self)
+        paste_action = QAction("Paste", self)
         paste_action.triggered.connect(lambda: self.web_view.page().runJavaScript("document.execCommand('paste')"))
         menu.addAction(paste_action)
         
         # 3. Formatting Actions
         menu.addSeparator()
-        format_action = QAction("格式化代码 (autopep8)", self)
+        format_action = QAction("Format Code (autopep8)", self)
         format_action.triggered.connect(self.format_code)
         menu.addAction(format_action)
         
@@ -1432,7 +1432,7 @@ class WebScriptEditor(QWidget):
 
     def _process_ai_prompt(self, prompt_prefix, selected_text):
         """Send prompt with code to AI."""
-        prompt = f"{prompt_prefix}\n\n代码如下：\n```python\n{selected_text}\n```"
+        prompt = f"{prompt_prefix}\n\nCode:\n```python\n{selected_text}\n```"
         
         # Find AI Assistant Widget
         ai_widget = self.find_ai_assistant_widget()

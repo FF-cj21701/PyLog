@@ -270,6 +270,7 @@ class ContextManagerTests(unittest.TestCase):
 
         expected = "x" * (ContextManager.MAX_TOOL_FIELD_LENGTH - 3) + "..."
         self.assertIn(expected, context)
+        self.assertIn("truncated: summary shortened", context)
         self.assertNotIn(long_stdout, context)
 
     def test_recent_tool_results_are_limited_but_keep_failures(self):
@@ -291,6 +292,7 @@ class ContextManagerTests(unittest.TestCase):
         self.assertIn("tool_2: failed", context)
         self.assertNotIn("tool_1: ok", context)
         self.assertIn("tool_7: ok", context)
+        self.assertIn("- omitted: 2 older tool result(s)", context)
         self.assertEqual(context.count("- tool_"), ContextManager.MAX_RECENT_TOOL_RESULTS)
 
     def test_recent_tool_results_follow_active_script_state(self):
@@ -302,6 +304,47 @@ class ContextManagerTests(unittest.TestCase):
 
         self.assertLess(context.index("Well: Well-A"), context.index("[Active Script State]"))
         self.assertLess(context.index("[Active Script State]"), context.index("[Recent Tool Results]"))
+
+    def test_context_section_policies_control_priority_and_budget(self):
+        manager = ContextManager()
+
+        sections = manager.build_sections([
+            {"type": "well", "name": "Well-A", "db_path": "demo.db"},
+            {"type": "active_script", "script_path": "scripts_user/demo.py"},
+            {"type": "tool_result", "tool_name": "tool_read_file", "ok": True, "message": "read"},
+        ])
+        priorities = {section.title: section.priority for section in sections}
+
+        self.assertEqual(priorities["selection"], ContextManager.SECTION_POLICIES["selection"]["priority"])
+        self.assertEqual(
+            priorities["active_script_state"],
+            ContextManager.SECTION_POLICIES["active_script_state"]["priority"],
+        )
+        self.assertEqual(
+            priorities["recent_tool_results"],
+            ContextManager.SECTION_POLICIES["recent_tool_results"]["priority"],
+        )
+
+    def test_section_budget_preserves_high_priority_sections_before_truncating_recent_results(self):
+        items = [{"tool_name": f"tool_{index}", "ok": True, "message": str(index)} for index in range(10)]
+
+        context = ContextManager().build_context_block([
+            {"type": "well", "name": "Well-A", "db_path": "demo.db"},
+            {
+                "type": "active_script",
+                "editor_id": "editor-1",
+                "script_path": "scripts_user/demo.py",
+                "has_unsaved_changes": True,
+            },
+            {"type": "recent_tool_results", "items": items},
+        ])
+
+        self.assertIn("Well: Well-A (db=demo.db)", context)
+        self.assertIn("[Active Script State]", context)
+        self.assertIn("- script_path: scripts_user/demo.py", context)
+        self.assertIn("[Recent Tool Results]", context)
+        self.assertIn("- omitted: 5 older tool result(s)", context)
+        self.assertEqual(context.count("- tool_"), ContextManager.SECTION_POLICIES["recent_tool_results"]["max_items"])
 
 
 class ToolResultNormalizationTests(unittest.TestCase):

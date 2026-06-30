@@ -17,12 +17,17 @@
   - `ChatService` now merges `agent_state.tool_steps` into context before each new prompt
   - latest verification results are also injected so the next turn can repair failed checks
   - user-selected well/curve/script context is preserved without mutating the original context payload
+- Added section-level context budgeting policies:
+  - centralizes section priority and line/item budgets in `ContextManager.SECTION_POLICIES`
+  - keeps selection and active script state ahead of lower-priority runtime summaries
+  - emits explicit `omitted` and `truncated` hints when recent tool results are compressed
 - Added regression coverage for:
   - structured draft payloads for already-open script editors
   - no draft signal emission when the target script is not open
   - insert-tool script-state propagation through the renamed draft helper
   - recent tool-result extraction, ordering, truncation, and failure retention
   - automatic runtime context injection from `ChatService`
+  - context section priority and budget behavior
 
 ## [2026-06-29] - Context Manager Boundary Foundation / 上下文管理器边界基础
 

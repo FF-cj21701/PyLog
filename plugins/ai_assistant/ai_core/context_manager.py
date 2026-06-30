@@ -21,6 +21,19 @@ class ContextManager:
     HEADER = "[ALIVE Context]"
     MAX_RECENT_TOOL_RESULTS = 5
     MAX_TOOL_FIELD_LENGTH = 180
+    SECTION_POLICIES = {
+        "selection": {"priority": 10, "max_lines": None, "drop_strategy": "keep"},
+        "active_script_state": {"priority": 20, "max_lines": 12, "drop_strategy": "keep"},
+        "task_plan": {"priority": 25, "max_lines": 12, "drop_strategy": "summarize"},
+        "recent_tool_results": {
+            "priority": 30,
+            "max_lines": 8,
+            "max_items": MAX_RECENT_TOOL_RESULTS,
+            "drop_strategy": "keep_failures",
+        },
+        "retrieved_context": {"priority": 40, "max_lines": 10, "drop_strategy": "relevance"},
+        "raw_outputs": {"priority": 90, "max_lines": 4, "drop_strategy": "truncate"},
+    }
 
     def build_context_block(self, context_data: Optional[Iterable[Mapping[str, Any]]]) -> str:
         sections = self.build_sections(context_data)
@@ -50,15 +63,13 @@ class ContextManager:
             tool_result_items.extend(self._extract_tool_result_items(item))
 
         sections = []
-        if not selection_lines:
-            selection_lines = []
-        else:
-            sections.append(ContextSection(title="selection", lines=selection_lines, priority=10))
+        if selection_lines:
+            sections.append(self._make_section("selection", selection_lines))
         if script_state_lines:
-            sections.append(ContextSection(title="active_script_state", lines=script_state_lines, priority=20))
+            sections.append(self._make_section("active_script_state", script_state_lines))
         tool_result_lines = self._format_recent_tool_results(tool_result_items)
         if tool_result_lines:
-            sections.append(ContextSection(title="recent_tool_results", lines=tool_result_lines, priority=30))
+            sections.append(self._make_section("recent_tool_results", tool_result_lines))
         return sections
 
     def compose_prompt(self, user_text: str, context_data: Optional[Iterable[Mapping[str, Any]]]) -> str:
@@ -125,7 +136,7 @@ class ContextManager:
         return []
 
     def _format_recent_tool_results(self, items: List[Mapping[str, Any]]) -> List[str]:
-        selected = self._select_recent_tool_results(items)
+        selected, omitted_count = self._select_recent_tool_results(items)
         if not selected:
             return []
 
@@ -134,25 +145,28 @@ class ContextManager:
             line = self._format_tool_result_line(item)
             if line:
                 lines.append(line)
+        if omitted_count:
+            lines.append(f"- omitted: {omitted_count} older tool result(s)")
         return lines if len(lines) > 1 else []
 
-    def _select_recent_tool_results(self, items: List[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
-        if len(items) <= self.MAX_RECENT_TOOL_RESULTS:
-            return items
+    def _select_recent_tool_results(self, items: List[Mapping[str, Any]]) -> tuple[List[Mapping[str, Any]], int]:
+        max_items = int(self._section_policy("recent_tool_results").get("max_items") or self.MAX_RECENT_TOOL_RESULTS)
+        if len(items) <= max_items:
+            return items, 0
 
         selected_indexes = set()
         for index in range(len(items) - 1, -1, -1):
             if self._tool_result_failed(items[index]):
                 selected_indexes.add(index)
-            if len(selected_indexes) >= self.MAX_RECENT_TOOL_RESULTS:
+            if len(selected_indexes) >= max_items:
                 break
 
         for index in range(len(items) - 1, -1, -1):
-            if len(selected_indexes) >= self.MAX_RECENT_TOOL_RESULTS:
+            if len(selected_indexes) >= max_items:
                 break
             selected_indexes.add(index)
 
-        return [items[index] for index in sorted(selected_indexes)]
+        return [items[index] for index in sorted(selected_indexes)], len(items) - len(selected_indexes)
 
     def _format_tool_result_line(self, item: Mapping[str, Any]) -> str:
         result = item.get("result")
@@ -177,11 +191,17 @@ class ContextManager:
             result if isinstance(result, str) else None,
         )
         if summary:
-            parts.append(self._truncate(summary))
+            summary_text, was_truncated = self._truncate_with_flag(summary)
+            parts.append(summary_text)
+            if was_truncated:
+                parts.append("truncated: summary shortened")
 
         error = self._first_text(item.get("error"), result_map.get("error"), result_map.get("stderr"))
         if error and status != "ok":
-            parts.append(f"error: {self._truncate(error)}")
+            error_text, was_truncated = self._truncate_with_flag(error)
+            parts.append(f"error: {error_text}")
+            if was_truncated:
+                parts.append("truncated: error shortened")
 
         for key in ("filepath", "file_path", "script_path"):
             value = item.get(key) or result_map.get(key)
@@ -240,10 +260,37 @@ class ContextManager:
         return ""
 
     def _truncate(self, value: Any) -> str:
+        return self._truncate_with_flag(value)[0]
+
+    def _truncate_with_flag(self, value: Any) -> tuple[str, bool]:
         text = " ".join(str(value).split())
         if len(text) <= self.MAX_TOOL_FIELD_LENGTH:
-            return text
-        return text[: self.MAX_TOOL_FIELD_LENGTH - 3].rstrip() + "..."
+            return text, False
+        return text[: self.MAX_TOOL_FIELD_LENGTH - 3].rstrip() + "...", True
+
+    def _make_section(self, title: str, lines: List[str]) -> ContextSection:
+        policy = self._section_policy(title)
+        return ContextSection(
+            title=title,
+            lines=self._apply_section_budget(title, lines),
+            priority=int(policy.get("priority", 100)),
+        )
+
+    def _section_policy(self, title: str) -> Mapping[str, Any]:
+        return self.SECTION_POLICIES.get(title, {"priority": 100, "max_lines": None, "drop_strategy": "truncate"})
+
+    def _apply_section_budget(self, title: str, lines: List[str]) -> List[str]:
+        policy = self._section_policy(title)
+        max_lines = policy.get("max_lines")
+        if not max_lines or len(lines) <= int(max_lines):
+            return lines
+
+        limit = int(max_lines)
+        omitted_count = len(lines) - limit + 1
+        kept = list(lines[: max(limit - 1, 0)])
+        if kept:
+            kept.append(f"- omitted: {omitted_count} {title} line(s)")
+        return kept
 
     @staticmethod
     def _append_state_line(lines: List[str], label: str, value: Any) -> None:

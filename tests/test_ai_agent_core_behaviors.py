@@ -158,6 +158,22 @@ class ContextManagerTests(unittest.TestCase):
         self.assertIn("[Active Script State]", prompt)
         self.assertIn("- tool_verify_target: failed; Verification failed; error: missing import", prompt)
 
+    def test_chat_service_injects_current_task_plan(self):
+        service = ChatService.__new__(ChatService)
+        service.context_manager = ContextManager()
+        service.agent_state = AgentState()
+        plan = TaskPlanner().create_plan("fix code bug")
+        service.agent_state.set_task_plan(plan, source="model")
+        service.agent_state.mark_plan_step_in_progress("implement")
+
+        prompt = service.compose_prompt("continue", [])
+
+        self.assertIn("[Task Plan]", prompt)
+        self.assertIn("- domain: code", prompt)
+        self.assertIn("- source: model", prompt)
+        self.assertIn("- current_step_id: implement", prompt)
+        self.assertIn("[in_progress current] implement: Make the code change", prompt)
+
     def test_active_script_state_section_formats_editor_draft_state(self):
         context = ContextManager().build_context_block([
             {
@@ -208,6 +224,65 @@ class ContextManagerTests(unittest.TestCase):
         ])
 
         self.assertLess(context.index("Well: Well-A"), context.index("[Active Script State]"))
+
+    def test_task_plan_section_formats_current_step_and_notes(self):
+        context = ContextManager().build_context_block([
+            {
+                "type": "task_plan",
+                "plan_domain": "code",
+                "plan_source": "model",
+                "current_step_id": "implement",
+                "steps": [
+                    {"id": "inspect", "title": "Inspect relevant files", "status": "completed"},
+                    {
+                        "id": "implement",
+                        "title": "Make the change",
+                        "status": "in_progress",
+                        "notes": "Editing context manager",
+                    },
+                    {"id": "verify", "title": "Run tests", "status": "pending"},
+                ],
+            }
+        ])
+
+        self.assertIn("[Task Plan]", context)
+        self.assertIn("- domain: code", context)
+        self.assertIn("- source: model", context)
+        self.assertIn("- current_step_id: implement", context)
+        self.assertIn("- 1. [completed] inspect: Inspect relevant files", context)
+        self.assertIn("- 2. [in_progress current] implement: Make the change", context)
+        self.assertIn("notes: Editing context manager", context)
+
+    def test_task_plan_section_follows_active_script_before_recent_results(self):
+        context = ContextManager().build_context_block([
+            {"type": "well", "name": "Well-A", "db_path": "demo.db"},
+            {"type": "active_script", "script_path": "scripts_user/demo.py"},
+            {
+                "type": "task_plan",
+                "current_step_id": "verify",
+                "steps": [{"id": "verify", "title": "Verify", "status": "in_progress"}],
+            },
+            {"type": "tool_result", "tool_name": "tool_read_file", "ok": True, "message": "read"},
+        ])
+
+        self.assertLess(context.index("Well: Well-A"), context.index("[Active Script State]"))
+        self.assertLess(context.index("[Active Script State]"), context.index("[Task Plan]"))
+        self.assertLess(context.index("[Task Plan]"), context.index("[Recent Tool Results]"))
+
+    def test_task_plan_budget_reports_omitted_steps(self):
+        steps = [
+            {"id": f"step_{index}", "title": f"Step {index}", "status": "pending"}
+            for index in range(15)
+        ]
+
+        context = ContextManager().build_context_block([
+            {"type": "task_plan", "steps": steps, "current_step_id": "step_2"},
+        ])
+
+        self.assertIn("[Task Plan]", context)
+        self.assertIn("- 1. [pending] step_0: Step 0", context)
+        self.assertIn("- omitted: 6 task_plan line(s)", context)
+        self.assertNotIn("step_14", context)
 
     def test_recent_tool_results_section_formats_high_signal_fields(self):
         context = ContextManager().build_context_block([
@@ -311,6 +386,7 @@ class ContextManagerTests(unittest.TestCase):
         sections = manager.build_sections([
             {"type": "well", "name": "Well-A", "db_path": "demo.db"},
             {"type": "active_script", "script_path": "scripts_user/demo.py"},
+            {"type": "task_plan", "steps": [{"id": "verify", "title": "Verify", "status": "pending"}]},
             {"type": "tool_result", "tool_name": "tool_read_file", "ok": True, "message": "read"},
         ])
         priorities = {section.title: section.priority for section in sections}
@@ -320,6 +396,7 @@ class ContextManagerTests(unittest.TestCase):
             priorities["active_script_state"],
             ContextManager.SECTION_POLICIES["active_script_state"]["priority"],
         )
+        self.assertEqual(priorities["task_plan"], ContextManager.SECTION_POLICIES["task_plan"]["priority"])
         self.assertEqual(
             priorities["recent_tool_results"],
             ContextManager.SECTION_POLICIES["recent_tool_results"]["priority"],

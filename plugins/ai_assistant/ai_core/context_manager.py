@@ -50,6 +50,7 @@ class ContextManager:
 
         selection_lines = []
         script_state_lines = []
+        task_plan_lines = []
         tool_result_items = []
         for item in context_data:
             if not isinstance(item, Mapping):
@@ -60,6 +61,9 @@ class ContextManager:
             script_state = self._extract_script_state(item)
             if script_state:
                 script_state_lines.extend(self._format_script_state(script_state))
+            task_plan = self._extract_task_plan(item)
+            if task_plan:
+                task_plan_lines.extend(self._format_task_plan(task_plan))
             tool_result_items.extend(self._extract_tool_result_items(item))
 
         sections = []
@@ -67,6 +71,8 @@ class ContextManager:
             sections.append(self._make_section("selection", selection_lines))
         if script_state_lines:
             sections.append(self._make_section("active_script_state", script_state_lines))
+        if task_plan_lines:
+            sections.append(self._make_section("task_plan", task_plan_lines))
         tool_result_lines = self._format_recent_tool_results(tool_result_items)
         if tool_result_lines:
             sections.append(self._make_section("recent_tool_results", tool_result_lines))
@@ -116,6 +122,47 @@ class ContextManager:
         self._append_state_line(lines, "should_run_from", state.get("should_run_from"))
         self._append_state_line(lines, "should_save_to", state.get("should_save_to"))
         return lines if len(lines) > 1 else []
+
+    def _extract_task_plan(self, item: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        item_type = item.get("type")
+        if item_type == "task_plan":
+            return item
+        plan = item.get("task_plan") or item.get("plan")
+        if isinstance(plan, Mapping):
+            merged = dict(plan)
+            for key in ("current_step_id", "plan_domain", "plan_source"):
+                if item.get(key) is not None and key not in merged:
+                    merged[key] = item.get(key)
+            return merged
+        return None
+
+    def _format_task_plan(self, plan: Mapping[str, Any]) -> List[str]:
+        steps = plan.get("steps")
+        if not isinstance(steps, list) or not steps:
+            return []
+
+        lines = ["[Task Plan]"]
+        self._append_state_line(lines, "domain", plan.get("plan_domain") or plan.get("domain"))
+        self._append_state_line(lines, "source", plan.get("plan_source") or plan.get("source"))
+        current_step_id = plan.get("current_step_id")
+        self._append_state_line(lines, "current_step_id", current_step_id)
+
+        for index, step in enumerate(steps, start=1):
+            if not isinstance(step, Mapping):
+                continue
+            lines.append(self._format_task_plan_step(index, step, current_step_id))
+        return lines if len(lines) > 1 else []
+
+    def _format_task_plan_step(self, index: int, step: Mapping[str, Any], current_step_id: Any) -> str:
+        step_id = step.get("id") or step.get("kind") or f"step_{index}"
+        status = step.get("status") or "pending"
+        marker = " current" if current_step_id and str(step_id) == str(current_step_id) else ""
+        title = self._truncate(step.get("title") or step.get("summary") or step_id)
+        line = f"- {index}. [{status}{marker}] {step_id}: {title}"
+        notes = self._first_text(step.get("notes"))
+        if notes:
+            line += f" (notes: {self._truncate(notes)})"
+        return line
 
     def _extract_tool_result_items(self, item: Mapping[str, Any]) -> List[Mapping[str, Any]]:
         item_type = item.get("type")

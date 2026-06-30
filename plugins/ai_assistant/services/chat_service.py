@@ -194,6 +194,16 @@ class ChatService(QObject):
         if not agent_state:
             return merged
 
+        current_plan = list(getattr(agent_state, "current_plan", []) or [])
+        if current_plan:
+            merged.append({
+                "type": "task_plan",
+                "steps": current_plan,
+                "current_step_id": getattr(agent_state, "current_plan_step_id", None),
+                "plan_domain": getattr(agent_state, "current_plan_domain", None),
+                "plan_source": getattr(agent_state, "current_plan_source", None),
+            })
+
         tool_steps = list(getattr(agent_state, "tool_steps", []) or [])
         if tool_steps:
             merged.append({

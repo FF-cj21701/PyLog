@@ -21,6 +21,10 @@
   - centralizes section priority and line/item budgets in `ContextManager.SECTION_POLICIES`
   - keeps selection and active script state ahead of lower-priority runtime summaries
   - emits explicit `omitted` and `truncated` hints when recent tool results are compressed
+- Added a structured Task Plan context section:
+  - formats task-plan domain, source, current step id, step status, titles, and notes
+  - marks the current step inline so follow-up turns can continue from the right place
+  - injects `AgentState.current_plan` from `ChatService` before recent tool results
 - Added regression coverage for:
   - structured draft payloads for already-open script editors
   - no draft signal emission when the target script is not open
@@ -28,6 +32,7 @@
   - recent tool-result extraction, ordering, truncation, and failure retention
   - automatic runtime context injection from `ChatService`
   - context section priority and budget behavior
+  - task-plan formatting, ordering, budget truncation, and prompt injection
 
 ## [2026-06-29] - Context Manager Boundary Foundation / 上下文管理器边界基础
 

@@ -20,6 +20,7 @@ class ContextManager:
 
     HEADER = "[ALIVE Context]"
     MAX_RECENT_TOOL_RESULTS = 5
+    MAX_RETRIEVED_CONTEXT_ITEMS = 6
     MAX_TOOL_FIELD_LENGTH = 180
     SECTION_POLICIES = {
         "selection": {"priority": 10, "max_lines": None, "drop_strategy": "keep"},
@@ -31,7 +32,12 @@ class ContextManager:
             "max_items": MAX_RECENT_TOOL_RESULTS,
             "drop_strategy": "keep_failures",
         },
-        "retrieved_context": {"priority": 40, "max_lines": 10, "drop_strategy": "relevance"},
+        "retrieved_context": {
+            "priority": 40,
+            "max_lines": 10,
+            "max_items": MAX_RETRIEVED_CONTEXT_ITEMS,
+            "drop_strategy": "relevance",
+        },
         "raw_outputs": {"priority": 90, "max_lines": 4, "drop_strategy": "truncate"},
     }
 
@@ -52,6 +58,7 @@ class ContextManager:
         script_state_lines = []
         task_plan_lines = []
         tool_result_items = []
+        retrieved_context_items = []
         for item in context_data:
             if not isinstance(item, Mapping):
                 continue
@@ -65,6 +72,7 @@ class ContextManager:
             if task_plan:
                 task_plan_lines.extend(self._format_task_plan(task_plan))
             tool_result_items.extend(self._extract_tool_result_items(item))
+            retrieved_context_items.extend(self._extract_retrieved_context_items(item))
 
         sections = []
         if selection_lines:
@@ -76,6 +84,9 @@ class ContextManager:
         tool_result_lines = self._format_recent_tool_results(tool_result_items)
         if tool_result_lines:
             sections.append(self._make_section("recent_tool_results", tool_result_lines))
+        retrieved_context_lines = self._format_retrieved_context(retrieved_context_items)
+        if retrieved_context_lines:
+            sections.append(self._make_section("retrieved_context", retrieved_context_lines))
         return sections
 
     def compose_prompt(self, user_text: str, context_data: Optional[Iterable[Mapping[str, Any]]]) -> str:
@@ -181,6 +192,141 @@ class ContextManager:
         ):
             return [item]
         return []
+
+    def _extract_retrieved_context_items(self, item: Mapping[str, Any]) -> List[Mapping[str, Any]]:
+        item_type = item.get("type")
+        if item_type == "retrieved_context":
+            for key in ("items", "results", "contexts", "matches"):
+                value = item.get(key)
+                if isinstance(value, list):
+                    return [entry for entry in value if isinstance(entry, Mapping)]
+            return [item] if self._looks_like_retrieved_context(item) else []
+        if item_type in {"search_result", "file_summary", "code_location"}:
+            return [item]
+
+        tool_name = item.get("tool_name") or item.get("tool") or item.get("command")
+        result = item.get("result")
+        if not tool_name or not isinstance(result, Mapping):
+            return []
+        return self._extract_retrieved_from_tool_result(str(tool_name), result)
+
+    def _extract_retrieved_from_tool_result(self, tool_name: str, result: Mapping[str, Any]) -> List[Mapping[str, Any]]:
+        lowered = tool_name.lower()
+        if not any(token in lowered for token in ("search", "grep", "find", "read_file", "symbol", "reference")):
+            return []
+
+        items = []
+        for entry in self._iter_result_entries(result):
+            items.extend(self._normalize_retrieved_entry(tool_name, entry))
+
+        if not items and self._looks_like_retrieved_context(result):
+            items.extend(self._normalize_retrieved_entry(tool_name, result))
+        return items
+
+    def _iter_result_entries(self, result: Mapping[str, Any]) -> List[Mapping[str, Any]]:
+        entries = []
+        for key in ("results", "matches", "files", "items"):
+            value = result.get(key)
+            if isinstance(value, list):
+                entries.extend(entry for entry in value if isinstance(entry, Mapping))
+        return entries
+
+    def _normalize_retrieved_entry(self, source: str, entry: Mapping[str, Any]) -> List[Mapping[str, Any]]:
+        path = entry.get("path") or entry.get("filepath") or entry.get("file_path") or entry.get("filename")
+        nested_matches = entry.get("matches")
+        if isinstance(nested_matches, list) and nested_matches:
+            normalized = []
+            for match in nested_matches:
+                if not isinstance(match, Mapping):
+                    continue
+                nested = dict(match)
+                if path and not any(nested.get(key) for key in ("path", "filepath", "file_path", "filename")):
+                    nested["path"] = path
+                normalized.extend(self._normalize_retrieved_entry(source, nested))
+            return normalized
+
+        normalized = dict(entry)
+        normalized.setdefault("source", source)
+        if path:
+            normalized["path"] = path
+        return [normalized] if self._looks_like_retrieved_context(normalized) else []
+
+    def _looks_like_retrieved_context(self, item: Mapping[str, Any]) -> bool:
+        return any(
+            item.get(key) is not None
+            for key in ("path", "filepath", "file_path", "filename", "summary", "snippet", "line", "line_number", "symbol")
+        )
+
+    def _format_retrieved_context(self, items: List[Mapping[str, Any]]) -> List[str]:
+        selected, omitted_count = self._select_retrieved_context(items)
+        if not selected:
+            return []
+
+        lines = ["[Retrieved Context]"]
+        for item in selected:
+            line = self._format_retrieved_context_line(item)
+            if line:
+                lines.append(line)
+        if omitted_count:
+            lines.append(f"- omitted: {omitted_count} lower-priority retrieved item(s)")
+        return lines if len(lines) > 1 else []
+
+    def _select_retrieved_context(self, items: List[Mapping[str, Any]]) -> tuple[List[Mapping[str, Any]], int]:
+        max_items = int(self._section_policy("retrieved_context").get("max_items") or self.MAX_RETRIEVED_CONTEXT_ITEMS)
+        if len(items) <= max_items:
+            return items, 0
+
+        indexed = list(enumerate(items))
+        indexed.sort(key=lambda pair: (-self._retrieved_context_rank(pair[1]), pair[0]))
+        selected_indexes = sorted(index for index, _item in indexed[:max_items])
+        return [items[index] for index in selected_indexes], len(items) - len(selected_indexes)
+
+    def _retrieved_context_rank(self, item: Mapping[str, Any]) -> float:
+        score = item.get("score")
+        try:
+            rank = float(score) if score is not None else 0.0
+        except (TypeError, ValueError):
+            rank = 0.0
+        if item.get("path") or item.get("filepath") or item.get("file_path") or item.get("filename"):
+            rank += 0.25
+        if item.get("line") or item.get("line_number"):
+            rank += 0.15
+        if item.get("symbol"):
+            rank += 0.1
+        return rank
+
+    def _format_retrieved_context_line(self, item: Mapping[str, Any]) -> str:
+        source = item.get("source") or item.get("type") or "retrieved"
+        path = item.get("path") or item.get("filepath") or item.get("file_path") or item.get("filename")
+        line_number = item.get("line_number") or item.get("lineno")
+        symbol = item.get("symbol") or item.get("name") or item.get("matched_symbol")
+        score = item.get("score")
+        summary = self._first_text(item.get("summary"), item.get("description"), item.get("content"))
+        snippet = self._first_text(item.get("snippet"), item.get("line_text"), item.get("line"), item.get("context"))
+
+        parts = [f"- {source}"]
+        if path:
+            location = self._truncate(path)
+            if line_number and not isinstance(line_number, str):
+                location += f":{line_number}"
+            parts.append(f"path: {location}")
+        elif line_number:
+            parts.append(f"line: {line_number}")
+        if symbol:
+            parts.append(f"symbol: {self._truncate(symbol)}")
+        if score is not None:
+            parts.append(f"score: {score}")
+        if summary:
+            summary_text, was_truncated = self._truncate_with_flag(summary)
+            parts.append(f"summary: {summary_text}")
+            if was_truncated:
+                parts.append("truncated: summary shortened")
+        if snippet and snippet != summary:
+            snippet_text, was_truncated = self._truncate_with_flag(snippet)
+            parts.append(f"snippet: {snippet_text}")
+            if was_truncated:
+                parts.append("truncated: snippet shortened")
+        return "; ".join(part for part in parts if part)
 
     def _format_recent_tool_results(self, items: List[Mapping[str, Any]]) -> List[str]:
         selected, omitted_count = self._select_recent_tool_results(items)

@@ -380,6 +380,86 @@ class ContextManagerTests(unittest.TestCase):
         self.assertLess(context.index("Well: Well-A"), context.index("[Active Script State]"))
         self.assertLess(context.index("[Active Script State]"), context.index("[Recent Tool Results]"))
 
+    def test_retrieved_context_section_formats_search_and_file_summary_items(self):
+        context = ContextManager().build_context_block([
+            {
+                "type": "retrieved_context",
+                "items": [
+                    {
+                        "type": "code_location",
+                        "source": "tool_search_code",
+                        "path": "plugins/demo.py",
+                        "line_number": 12,
+                        "symbol": "demo_func",
+                        "score": 0.9,
+                        "snippet": "def demo_func(): pass",
+                    },
+                    {
+                        "type": "file_summary",
+                        "path": "README.md",
+                        "summary": "Project overview and setup notes",
+                    },
+                ],
+            }
+        ])
+
+        self.assertIn("[Retrieved Context]", context)
+        self.assertIn(
+            "- tool_search_code; path: plugins/demo.py:12; symbol: demo_func; score: 0.9; snippet: def demo_func(): pass",
+            context,
+        )
+        self.assertIn("- file_summary; path: README.md; summary: Project overview and setup notes", context)
+
+    def test_retrieved_context_can_be_extracted_from_search_tool_result(self):
+        context = ContextManager().build_context_block([
+            {
+                "tool_name": "tool_search_code",
+                "status": "completed",
+                "result": {
+                    "results": [
+                        {
+                            "filepath": "plugins/ai_assistant/ai_core/context_manager.py",
+                            "matches": [
+                                {"line_number": 42, "line": "def build_sections(self, context_data):"},
+                            ],
+                        }
+                    ]
+                },
+            }
+        ])
+
+        self.assertIn("[Retrieved Context]", context)
+        self.assertIn("tool_search_code; path: plugins/ai_assistant/ai_core/context_manager.py:42", context)
+        self.assertIn("snippet: def build_sections(self, context_data):", context)
+
+    def test_retrieved_context_budget_keeps_high_score_items_and_reports_omitted(self):
+        items = [
+            {"source": "search", "path": f"file_{index}.py", "score": float(index), "summary": f"hit {index}"}
+            for index in range(10)
+        ]
+
+        context = ContextManager().build_context_block([
+            {"type": "retrieved_context", "items": items},
+        ])
+
+        self.assertIn("[Retrieved Context]", context)
+        self.assertNotIn("file_0.py", context)
+        self.assertIn("file_9.py", context)
+        self.assertIn("- omitted: 4 lower-priority retrieved item(s)", context)
+        self.assertEqual(context.count("- search;"), ContextManager.SECTION_POLICIES["retrieved_context"]["max_items"])
+
+    def test_retrieved_context_follows_recent_tool_results(self):
+        context = ContextManager().build_context_block([
+            {"type": "well", "name": "Well-A", "db_path": "demo.db"},
+            {"type": "active_script", "script_path": "scripts_user/demo.py"},
+            {"type": "task_plan", "steps": [{"id": "verify", "title": "Verify", "status": "pending"}]},
+            {"type": "tool_result", "tool_name": "tool_read_file", "ok": True, "message": "read"},
+            {"type": "search_result", "path": "demo.py", "summary": "found demo"},
+        ])
+
+        self.assertLess(context.index("[Task Plan]"), context.index("[Recent Tool Results]"))
+        self.assertLess(context.index("[Recent Tool Results]"), context.index("[Retrieved Context]"))
+
     def test_context_section_policies_control_priority_and_budget(self):
         manager = ContextManager()
 
@@ -388,6 +468,7 @@ class ContextManagerTests(unittest.TestCase):
             {"type": "active_script", "script_path": "scripts_user/demo.py"},
             {"type": "task_plan", "steps": [{"id": "verify", "title": "Verify", "status": "pending"}]},
             {"type": "tool_result", "tool_name": "tool_read_file", "ok": True, "message": "read"},
+            {"type": "search_result", "path": "demo.py", "summary": "found demo"},
         ])
         priorities = {section.title: section.priority for section in sections}
 
@@ -401,6 +482,7 @@ class ContextManagerTests(unittest.TestCase):
             priorities["recent_tool_results"],
             ContextManager.SECTION_POLICIES["recent_tool_results"]["priority"],
         )
+        self.assertEqual(priorities["retrieved_context"], ContextManager.SECTION_POLICIES["retrieved_context"]["priority"])
 
     def test_section_budget_preserves_high_priority_sections_before_truncating_recent_results(self):
         items = [{"tool_name": f"tool_{index}", "ok": True, "message": str(index)} for index in range(10)]

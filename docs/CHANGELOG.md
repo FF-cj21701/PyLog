@@ -25,6 +25,10 @@
   - formats task-plan domain, source, current step id, step status, titles, and notes
   - marks the current step inline so follow-up turns can continue from the right place
   - injects `AgentState.current_plan` from `ChatService` before recent tool results
+- Added a structured Retrieved Context section:
+  - supports explicit `retrieved_context`, `search_result`, `file_summary`, and `code_location` items
+  - extracts code/file locations from search-style tool results such as `tool_search_code`
+  - ranks retrieved items by score and location specificity, then emits omitted hints when compressed
 - Added regression coverage for:
   - structured draft payloads for already-open script editors
   - no draft signal emission when the target script is not open
@@ -33,6 +37,7 @@
   - automatic runtime context injection from `ChatService`
   - context section priority and budget behavior
   - task-plan formatting, ordering, budget truncation, and prompt injection
+  - retrieved-context formatting, search-result extraction, ordering, and budget truncation
 
 ## [2026-06-29] - Context Manager Boundary Foundation / 上下文管理器边界基础
 

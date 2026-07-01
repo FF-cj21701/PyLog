@@ -16,6 +16,7 @@ from ..ai_core.state_machine import TaskStateMachine
 from ..ai_core.tool_manager import ToolManager
 from ..ai_core.verification_coordinator import VerificationCoordinator
 from ..ai_core.context_manager import ContextManager
+from ..ai_core.workspace_state_collector import WorkspaceStateCollector
 
 
 class ChatService(QObject):
@@ -45,6 +46,7 @@ class ChatService(QObject):
         self.execution_policy = ExecutionPolicy(verification_coordinator=self.verification_coordinator)
         self.task_state_machine = TaskStateMachine(self.agent_state)
         self.context_manager = ContextManager()
+        self.workspace_state_collector = WorkspaceStateCollector()
         self.tools = self._initialize_tools()
         self.tool_manager = ToolManager(self.tools)
 
@@ -190,6 +192,10 @@ class ChatService(QObject):
     def _compose_runtime_context(self, context_data):
         """Merge user-selected context with recent runtime state for the next turn."""
         merged = list(context_data or [])
+        workspace_state = self._collect_workspace_state()
+        if workspace_state:
+            merged.append(workspace_state)
+
         agent_state = getattr(self, "agent_state", None)
         if not agent_state:
             return merged
@@ -220,3 +226,12 @@ class ChatService(QObject):
             })
 
         return merged
+
+    def _collect_workspace_state(self):
+        collector = getattr(self, "workspace_state_collector", None)
+        if not collector:
+            return None
+        try:
+            return collector.collect(getattr(self, "main_window", None))
+        except Exception:
+            return None

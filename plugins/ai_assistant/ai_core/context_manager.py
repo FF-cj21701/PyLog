@@ -25,6 +25,7 @@ class ContextManager:
     SECTION_POLICIES = {
         "selection": {"priority": 10, "max_lines": None, "drop_strategy": "keep"},
         "active_script_state": {"priority": 20, "max_lines": 12, "drop_strategy": "keep"},
+        "plot_window_state": {"priority": 23, "max_lines": 12, "drop_strategy": "summarize"},
         "task_plan": {"priority": 25, "max_lines": 12, "drop_strategy": "summarize"},
         "recent_tool_results": {
             "priority": 30,
@@ -56,6 +57,7 @@ class ContextManager:
 
         selection_lines = []
         script_state_lines = []
+        plot_window_lines = []
         task_plan_lines = []
         tool_result_items = []
         retrieved_context_items = []
@@ -68,6 +70,9 @@ class ContextManager:
             script_state = self._extract_script_state(item)
             if script_state:
                 script_state_lines.extend(self._format_script_state(script_state))
+            plot_window_state = self._extract_plot_window_state(item)
+            if plot_window_state:
+                plot_window_lines.extend(self._format_plot_window_state(plot_window_state))
             task_plan = self._extract_task_plan(item)
             if task_plan:
                 task_plan_lines.extend(self._format_task_plan(task_plan))
@@ -79,6 +84,8 @@ class ContextManager:
             sections.append(self._make_section("selection", selection_lines))
         if script_state_lines:
             sections.append(self._make_section("active_script_state", script_state_lines))
+        if plot_window_lines:
+            sections.append(self._make_section("plot_window_state", plot_window_lines))
         if task_plan_lines:
             sections.append(self._make_section("task_plan", task_plan_lines))
         tool_result_lines = self._format_recent_tool_results(tool_result_items)
@@ -133,6 +140,61 @@ class ContextManager:
         self._append_state_line(lines, "should_run_from", state.get("should_run_from"))
         self._append_state_line(lines, "should_save_to", state.get("should_save_to"))
         return lines if len(lines) > 1 else []
+
+    def _extract_plot_window_state(self, item: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        if isinstance(item.get("plot_window_state"), Mapping):
+            return item.get("plot_window_state")
+        item_type = item.get("type")
+        if item_type in {"plot_window_state", "plot_state", "window_state", "active_plot"}:
+            return item
+        return None
+
+    def _format_plot_window_state(self, state: Mapping[str, Any]) -> List[str]:
+        lines = ["[Plot / Window State]"]
+        active_window = state.get("active_window") if isinstance(state.get("active_window"), Mapping) else {}
+        plot = state.get("plot") if isinstance(state.get("plot"), Mapping) else {}
+
+        self._append_state_line(lines, "active_window_title", state.get("active_window_title") or active_window.get("title"))
+        self._append_state_line(lines, "active_window_type", state.get("active_window_type") or active_window.get("type"))
+        self._append_state_line(lines, "plot_title", state.get("plot_title") or plot.get("title") or state.get("title"))
+        self._append_state_line(lines, "well", state.get("well") or state.get("well_name") or plot.get("well"))
+        self._append_state_line(lines, "db_path", state.get("db_path") or plot.get("db_path"))
+        self._append_state_line(lines, "depth_range", self._format_range(state.get("depth_range") or plot.get("depth_range")))
+        self._append_state_line(lines, "track_count", state.get("track_count") or plot.get("track_count"))
+        self._append_state_line(lines, "curve_count", state.get("curve_count") or plot.get("curve_count"))
+        table = state.get("table") if isinstance(state.get("table"), Mapping) else {}
+        self._append_state_line(lines, "table_rows", table.get("row_count"))
+        self._append_state_line(lines, "table_columns", table.get("column_count"))
+        if table.get("visible_columns"):
+            self._append_state_line(lines, "visible_columns", self._format_name_list(table.get("visible_columns")))
+
+        selected_curves = state.get("selected_curves") or plot.get("selected_curves")
+        if selected_curves:
+            self._append_state_line(lines, "selected_curves", self._format_name_list(selected_curves))
+
+        tracks = state.get("tracks") or plot.get("tracks")
+        if isinstance(tracks, list):
+            for index, track in enumerate(tracks[:4], start=1):
+                line = self._format_plot_track(index, track)
+                if line:
+                    lines.append(line)
+            if len(tracks) > 4:
+                lines.append(f"- omitted: {len(tracks) - 4} plot track(s)")
+
+        return lines if len(lines) > 1 else []
+
+    def _format_plot_track(self, index: int, track: Any) -> str:
+        if isinstance(track, Mapping):
+            name = track.get("name") or track.get("track_name") or f"Track {index}"
+            curves = track.get("curves") or track.get("curve_names")
+            depth_range = self._format_range(track.get("depth_range"))
+            parts = [f"- track {index}: {self._truncate(name)}"]
+            if curves:
+                parts.append(f"curves: {self._format_name_list(curves)}")
+            if depth_range:
+                parts.append(f"depth_range: {depth_range}")
+            return "; ".join(parts)
+        return f"- track {index}: {self._truncate(track)}" if track else ""
 
     def _extract_task_plan(self, item: Mapping[str, Any]) -> Mapping[str, Any] | None:
         item_type = item.get("type")
@@ -451,6 +513,34 @@ class ContextManager:
             if text:
                 return text
         return ""
+
+    def _format_range(self, value: Any) -> str:
+        if value is None or value == "":
+            return ""
+        if isinstance(value, Mapping):
+            start = value.get("min") if value.get("min") is not None else value.get("start")
+            end = value.get("max") if value.get("max") is not None else value.get("end")
+            unit = value.get("unit") or ""
+            if start is not None and end is not None:
+                return f"{start}~{end}{unit}"
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            return f"{value[0]}~{value[1]}"
+        return self._truncate(value)
+
+    def _format_name_list(self, value: Any, max_items: int = 8) -> str:
+        if isinstance(value, str):
+            return self._truncate(value)
+        if not isinstance(value, Iterable):
+            return self._truncate(value)
+        items = [str(item) for item in list(value)[:max_items]]
+        text = ", ".join(items)
+        try:
+            total = len(value)
+        except TypeError:
+            total = len(items)
+        if total > max_items:
+            text += f", +{total - max_items} more"
+        return self._truncate(text)
 
     def _truncate(self, value: Any) -> str:
         return self._truncate_with_flag(value)[0]

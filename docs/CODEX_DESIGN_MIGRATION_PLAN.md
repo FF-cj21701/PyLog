@@ -163,7 +163,7 @@ Context sources:
 - current selected well
 - selected curves
 - database path
-- plot/window state
+- plot/window state, including active MDI plot and Data Viewer summaries
 - active script editor state
 - recent tool observations
 - enabled skills
@@ -184,6 +184,10 @@ The context manager should enforce a token or character budget and prefer struct
 ### 5.7 Skill System
 
 Keep `.agents/skills` as the single source of truth for domain skills.
+
+Current sequencing note: the current skill catalog is still provisional, so `Skills Summary`
+should remain outside the structured `ContextManager` section set until skill metadata,
+enabled/disabled behavior, and skill-driven routing are stable enough for Phase 6.
 
 Required behavior:
 
@@ -302,7 +306,8 @@ Deliverables:
 
 - Add a `ContextManager`.
 - Move `ChatService.build_context_block` logic into it.
-- Add structured well, curve, database, plot, script, skill, and history context sections.
+- Add structured well, curve, database, plot/window, script, skill, and history context sections.
+- Add a lightweight workspace-state collector so active MDI plot/Data Viewer state can be summarized without making tools inspect UI widgets directly.
 
 Acceptance criteria:
 

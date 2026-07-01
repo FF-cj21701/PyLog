@@ -28,6 +28,7 @@ from plugins.ai_assistant.ai_core.tool_result import (
     tool_result_to_dict,
 )
 from plugins.ai_assistant.ai_core.verification_coordinator import VerificationCoordinator
+from plugins.ai_assistant.ai_core.workspace_state_collector import WorkspaceStateCollector
 from plugins.ai_assistant.services.chat_service import ChatService
 from plugins.ai_assistant.ui.main_window import AIAssistantWidget
 from plugins.ai_assistant.ui.message_formatter import MessageFormatter
@@ -224,6 +225,178 @@ class ContextManagerTests(unittest.TestCase):
         ])
 
         self.assertLess(context.index("Well: Well-A"), context.index("[Active Script State]"))
+
+    def test_plot_window_state_section_formats_active_plot_details(self):
+        context = ContextManager().build_context_block([
+            {
+                "type": "plot_window_state",
+                "active_window_title": "Plot: Gangtan1",
+                "active_window_type": "plot",
+                "plot_title": "Gangtan1 GR vs DEN",
+                "well": "Gangtan1",
+                "db_path": "data/Gangtan1.db",
+                "depth_range": {"min": 7528, "max": 8217, "unit": "m"},
+                "selected_curves": ["GR", "DEN"],
+                "tracks": [
+                    {"name": "Track 1", "curves": ["GR"], "depth_range": [7528, 8217]},
+                    {"name": "Track 2", "curves": ["DEN"]},
+                ],
+            }
+        ])
+
+        self.assertIn("[Plot / Window State]", context)
+        self.assertIn("- active_window_title: Plot: Gangtan1", context)
+        self.assertIn("- active_window_type: plot", context)
+        self.assertIn("- plot_title: Gangtan1 GR vs DEN", context)
+        self.assertIn("- well: Gangtan1", context)
+        self.assertIn("- depth_range: 7528~8217m", context)
+        self.assertIn("- selected_curves: GR, DEN", context)
+        self.assertIn("- track 1: Track 1; curves: GR; depth_range: 7528~8217", context)
+
+    def test_plot_window_state_can_be_extracted_from_nested_payload(self):
+        context = ContextManager().build_context_block([
+            {
+                "plot_window_state": {
+                    "active_window": {"title": "MDI Plot", "type": "plot"},
+                    "plot": {"title": "Nested Plot", "well": "Well-A", "track_count": 2, "curve_count": 4},
+                }
+            }
+        ])
+
+        self.assertIn("[Plot / Window State]", context)
+        self.assertIn("- active_window_title: MDI Plot", context)
+        self.assertIn("- plot_title: Nested Plot", context)
+        self.assertIn("- track_count: 2", context)
+        self.assertIn("- curve_count: 4", context)
+
+    def test_plot_window_state_section_formats_data_viewer_table_details(self):
+        context = ContextManager().build_context_block([
+            {
+                "type": "plot_window_state",
+                "active_window_type": "data_viewer",
+                "selected_curves": ["GR", "RT"],
+                "table": {
+                    "row_count": 120,
+                    "column_count": 3,
+                    "visible_columns": ["Depth", "GR", "RT"],
+                },
+            }
+        ])
+
+        self.assertIn("[Plot / Window State]", context)
+        self.assertIn("- active_window_type: data_viewer", context)
+        self.assertIn("- table_rows: 120", context)
+        self.assertIn("- table_columns: 3", context)
+        self.assertIn("- visible_columns: Depth, GR, RT", context)
+
+    def test_plot_window_state_follows_active_script_before_task_plan(self):
+        context = ContextManager().build_context_block([
+            {"type": "well", "name": "Well-A", "db_path": "demo.db"},
+            {"type": "active_script", "script_path": "scripts_user/demo.py"},
+            {"type": "plot_window_state", "plot_title": "Current Plot"},
+            {"type": "task_plan", "steps": [{"id": "verify", "title": "Verify", "status": "pending"}]},
+        ])
+
+        self.assertLess(context.index("Well: Well-A"), context.index("[Active Script State]"))
+        self.assertLess(context.index("[Active Script State]"), context.index("[Plot / Window State]"))
+        self.assertLess(context.index("[Plot / Window State]"), context.index("[Task Plan]"))
+
+    def test_chat_service_injects_active_plot_window_state(self):
+        class DummyPlotWidget:
+            db_path = "demo.db"
+            well_name = "Well-A"
+            track_containers = []
+
+        class DummyPlotTrack:
+            def __init__(self, name, curves):
+                self.track_name = name
+                self.curve_names = curves
+
+        class DummySubWindow:
+            def windowTitle(self):
+                return "Plot Window"
+
+            def widget(self):
+                widget = DummyPlotWidget()
+                widget.track_containers = [DummyPlotTrack("Track 1", ["GR", "RT"])]
+                return widget
+
+        class DummyMdiArea:
+            def activeSubWindow(self):
+                return DummySubWindow()
+
+        class DummyMainWindow:
+            mdi_area = DummyMdiArea()
+
+        service = ChatService.__new__(ChatService)
+        service.context_manager = ContextManager()
+        service.workspace_state_collector = WorkspaceStateCollector()
+        service.main_window = DummyMainWindow()
+        service.agent_state = AgentState()
+
+        prompt = service.compose_prompt("continue", [])
+
+        self.assertIn("[Plot / Window State]", prompt)
+        self.assertIn("- active_window_title: Plot Window", prompt)
+        self.assertIn("- active_window_type: plot", prompt)
+        self.assertIn("- well: Well-A", prompt)
+        self.assertIn("- track 1: Track 1; curves: GR, RT", prompt)
+
+    def test_chat_service_injects_data_viewer_window_state(self):
+        class DummyModel:
+            columns = ["Depth", "GR", "RT"]
+
+            def rowCount(self):
+                return 50
+
+            def columnCount(self):
+                return 3
+
+        class DummyDataViewer:
+            model = DummyModel()
+            _curve_entries = [
+                {"curve_name": "GR"},
+                {"curve_name": "RT"},
+            ]
+            _depth_union = [1000.0, 1005.0, 1010.0]
+
+        class DummySubWindow:
+            def windowTitle(self):
+                return "Data Viewer"
+
+            def widget(self):
+                return DummyDataViewer()
+
+        class DummyMdiArea:
+            def activeSubWindow(self):
+                return DummySubWindow()
+
+        class DummyMainWindow:
+            mdi_area = DummyMdiArea()
+
+        service = ChatService.__new__(ChatService)
+        service.context_manager = ContextManager()
+        service.workspace_state_collector = WorkspaceStateCollector()
+        service.main_window = DummyMainWindow()
+        service.agent_state = AgentState()
+
+        prompt = service.compose_prompt("continue", [])
+
+        self.assertIn("- active_window_type: data_viewer", prompt)
+        self.assertIn("- depth_range: 1000.0~1010.0", prompt)
+        self.assertIn("- selected_curves: GR, RT", prompt)
+        self.assertIn("- table_rows: 50", prompt)
+        self.assertIn("- visible_columns: Depth, GR, RT", prompt)
+
+    def test_workspace_state_collector_returns_none_without_active_subwindow(self):
+        class DummyMdiArea:
+            def activeSubWindow(self):
+                return None
+
+        class DummyMainWindow:
+            mdi_area = DummyMdiArea()
+
+        self.assertIsNone(WorkspaceStateCollector().collect(DummyMainWindow()))
 
     def test_task_plan_section_formats_current_step_and_notes(self):
         context = ContextManager().build_context_block([
@@ -466,6 +639,7 @@ class ContextManagerTests(unittest.TestCase):
         sections = manager.build_sections([
             {"type": "well", "name": "Well-A", "db_path": "demo.db"},
             {"type": "active_script", "script_path": "scripts_user/demo.py"},
+            {"type": "plot_window_state", "plot_title": "Current Plot"},
             {"type": "task_plan", "steps": [{"id": "verify", "title": "Verify", "status": "pending"}]},
             {"type": "tool_result", "tool_name": "tool_read_file", "ok": True, "message": "read"},
             {"type": "search_result", "path": "demo.py", "summary": "found demo"},
@@ -476,6 +650,10 @@ class ContextManagerTests(unittest.TestCase):
         self.assertEqual(
             priorities["active_script_state"],
             ContextManager.SECTION_POLICIES["active_script_state"]["priority"],
+        )
+        self.assertEqual(
+            priorities["plot_window_state"],
+            ContextManager.SECTION_POLICIES["plot_window_state"]["priority"],
         )
         self.assertEqual(priorities["task_plan"], ContextManager.SECTION_POLICIES["task_plan"]["priority"])
         self.assertEqual(

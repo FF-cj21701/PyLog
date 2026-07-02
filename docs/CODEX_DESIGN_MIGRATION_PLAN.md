@@ -318,6 +318,16 @@ Acceptance criteria:
 
 ### Phase 6: Skill-Driven Domain Behavior
 
+Status: **Deferred intentionally.** Phase 6 is skipped for now so the migration can proceed directly to Phase 7. The current Phase 5 implementation already leaves the extension points needed to resume this later:
+
+- `SkillService.get_skill_summaries(...)`
+- `tool_read_skill(name=...)`
+- structured `[Skills Summary]` context section
+- `disabled_skills` settings support
+- stable system-prompt rule requiring full skill consultation before domain calculations or PyLog script-generation workflows
+
+Do not treat this as an accidental gap. Resume this phase only when skill metadata, routing policy, and skill-read enforcement become the active priority.
+
 Deliverables:
 
 - Use skill metadata for task routing.

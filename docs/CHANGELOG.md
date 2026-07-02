@@ -10,6 +10,7 @@
   - `ChatService` injects enabled skills and disabled-skill state through runtime context
   - `ContextManager` formats compact skill IDs, titles, aliases, and descriptions with `tool_read_skill` guidance
   - the system prompt keeps only the stable rule to consult full skills before domain calculations or PyLog script generation
+- Marked Phase 6 skill-driven routing as intentionally deferred; the retained extension points are `SkillService.get_skill_summaries(...)`, `tool_read_skill(...)`, `[Skills Summary]`, and `disabled_skills`.
 - Added the first structured Conversation Summary context section:
   - `AgentState` can store and merge long-lived conversation summary fields
   - `ChatService` injects the summary automatically before each prompt

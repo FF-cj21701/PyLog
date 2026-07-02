@@ -334,3 +334,17 @@ class SkillService:
                 alias_text = ""
             summary += f"- `{s}` ({title}{alias_text}): {desc}\n"
         return summary
+
+    def get_skill_summaries(self, disabled_list=None):
+        """Return structured metadata for enabled skills."""
+        summaries = []
+        for skill_id in self.list_skills(disabled_list=disabled_list):
+            meta = self.get_skill_metadata(skill_id)
+            aliases = [alias for alias in self.get_skill_aliases(skill_id) if alias.lower() != skill_id.lower()]
+            summaries.append({
+                "id": skill_id,
+                "title": meta.get("title") or skill_id,
+                "description": meta.get("description") or "",
+                "aliases": aliases,
+            })
+        return summaries

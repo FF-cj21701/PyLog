@@ -26,6 +26,7 @@ class ContextManager:
         "selection": {"priority": 10, "max_lines": None, "drop_strategy": "keep"},
         "active_script_state": {"priority": 20, "max_lines": 12, "drop_strategy": "keep"},
         "plot_window_state": {"priority": 23, "max_lines": 12, "drop_strategy": "summarize"},
+        "skills_summary": {"priority": 24, "max_lines": 10, "max_items": 8, "drop_strategy": "summarize"},
         "task_plan": {"priority": 25, "max_lines": 12, "drop_strategy": "summarize"},
         "recent_tool_results": {
             "priority": 30,
@@ -59,6 +60,8 @@ class ContextManager:
         selection_lines = []
         script_state_lines = []
         plot_window_lines = []
+        skills_summary_items = []
+        skills_summary_meta = {}
         task_plan_lines = []
         tool_result_items = []
         retrieved_context_items = []
@@ -75,6 +78,16 @@ class ContextManager:
             plot_window_state = self._extract_plot_window_state(item)
             if plot_window_state:
                 plot_window_lines.extend(self._format_plot_window_state(plot_window_state))
+            skills_summary = self._extract_skills_summary(item)
+            if skills_summary:
+                skills_summary_meta.update({
+                    key: value
+                    for key, value in skills_summary.items()
+                    if key not in {"skills", "items"} and value not in (None, "", [], {})
+                })
+                for skill in skills_summary.get("skills") or skills_summary.get("items") or []:
+                    if isinstance(skill, Mapping):
+                        skills_summary_items.append(skill)
             task_plan = self._extract_task_plan(item)
             if task_plan:
                 task_plan_lines.extend(self._format_task_plan(task_plan))
@@ -91,6 +104,9 @@ class ContextManager:
             sections.append(self._make_section("active_script_state", script_state_lines))
         if plot_window_lines:
             sections.append(self._make_section("plot_window_state", plot_window_lines))
+        skills_summary_lines = self._format_skills_summary(skills_summary_items, skills_summary_meta)
+        if skills_summary_lines:
+            sections.append(self._make_section("skills_summary", skills_summary_lines))
         if task_plan_lines:
             sections.append(self._make_section("task_plan", task_plan_lines))
         tool_result_lines = self._format_recent_tool_results(tool_result_items)
@@ -207,6 +223,51 @@ class ContextManager:
                 parts.append(f"depth_range: {depth_range}")
             return "; ".join(parts)
         return f"- track {index}: {self._truncate(track)}" if track else ""
+
+    def _extract_skills_summary(self, item: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        if isinstance(item.get("skills_summary"), Mapping):
+            return item.get("skills_summary")
+        if item.get("type") in {"skills_summary", "skill_summary", "enabled_skills"}:
+            return item
+        return None
+
+    def _format_skills_summary(self, skills: List[Mapping[str, Any]], meta: Mapping[str, Any]) -> List[str]:
+        if not skills and not meta:
+            return []
+
+        max_items = int(self._section_policy("skills_summary").get("max_items") or 8)
+        lines = ["[Skills Summary]"]
+        self._append_state_line(lines, "use_tool", "tool_read_skill(name='<skill_id>') before applying detailed skill guidance")
+        total_count = meta.get("total_count") if meta.get("total_count") is not None else len(skills)
+        self._append_state_line(lines, "enabled_count", total_count)
+
+        disabled = meta.get("disabled_skills")
+        if disabled:
+            self._append_state_line(lines, "disabled_skills", self._format_name_list(disabled, max_items=6))
+
+        for skill in skills[:max_items]:
+            line = self._format_skill_summary_line(skill)
+            if line:
+                lines.append(line)
+        if len(skills) > max_items:
+            lines.append(f"- omitted: {len(skills) - max_items} skill summary item(s)")
+        return lines if len(lines) > 1 else []
+
+    def _format_skill_summary_line(self, skill: Mapping[str, Any]) -> str:
+        skill_id = skill.get("id") or skill.get("name") or skill.get("skill")
+        if not skill_id:
+            return ""
+        title = skill.get("title")
+        description = self._first_text(skill.get("description"), skill.get("summary"))
+        aliases = skill.get("aliases")
+        parts = [f"- {self._truncate(skill_id)}"]
+        if title and title != skill_id:
+            parts.append(f"title: {self._truncate(title)}")
+        if aliases:
+            parts.append(f"aliases: {self._format_name_list(aliases, max_items=4)}")
+        if description:
+            parts.append(f"description: {self._truncate(description)}")
+        return "; ".join(parts)
 
     def _extract_task_plan(self, item: Mapping[str, Any]) -> Mapping[str, Any] | None:
         item_type = item.get("type")

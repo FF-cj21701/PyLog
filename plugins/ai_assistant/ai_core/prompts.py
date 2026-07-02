@@ -156,7 +156,8 @@ class SystemPrompts:
     GEOSCIENCE_SKILL_GUIDELINES = (
         "## SPECIALIZED GEOSCIENCE SKILLS (Expertise)\n"
         "You have access to specialized geoscience skills. "
-        "ALWAYS use `tool_read_skill(name='skill_name')` to consult these skills when performing calculations (e.g., Sw, Vsh, Phi).\n"
+        "Enabled skill summaries are provided in the structured `[Skills Summary]` context section. "
+        "ALWAYS use `tool_read_skill(name='skill_name')` to consult the full skill before performing calculations (e.g., Sw, Vsh, Phi) or PyLog script-generation workflows.\n"
     )
 
     @classmethod
@@ -175,7 +176,6 @@ class SystemPrompts:
             + "File tools can only access files within:\n"
             + f"{whitelist_info}\n\n"
             + cls.GEOSCIENCE_SKILL_GUIDELINES
-            + f"{cls._get_skills_info()}\n\n"
             + cls.SCRIPTING_GUIDELINES
             + "## CORE API SUMMARY (Search for more via `tool_get_help`)\n"
             + APIDocumentation.CORE_API_SUMMARY

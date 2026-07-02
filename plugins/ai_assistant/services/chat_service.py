@@ -2,6 +2,7 @@ from PySide6.QtCore import QObject, Signal
 import asyncio
 import qasync
 import numpy as np
+import json
 from scripts.data.db_manager import DBManager
 
 from ..ai_core.api_client import AsyncAIWorker
@@ -17,6 +18,7 @@ from ..ai_core.tool_manager import ToolManager
 from ..ai_core.verification_coordinator import VerificationCoordinator
 from ..ai_core.context_manager import ContextManager
 from ..ai_core.workspace_state_collector import WorkspaceStateCollector
+from ..services.skill_service import SkillService
 
 
 class ChatService(QObject):
@@ -47,6 +49,7 @@ class ChatService(QObject):
         self.task_state_machine = TaskStateMachine(self.agent_state)
         self.context_manager = ContextManager()
         self.workspace_state_collector = WorkspaceStateCollector()
+        self.skill_service = SkillService()
         self.tools = self._initialize_tools()
         self.tool_manager = ToolManager(self.tools)
 
@@ -243,6 +246,10 @@ class ChatService(QObject):
         if workspace_state:
             merged.append(workspace_state)
 
+        skills_summary = self._collect_skills_summary()
+        if skills_summary:
+            merged.append(skills_summary)
+
         agent_state = getattr(self, "agent_state", None)
         if not agent_state:
             return merged
@@ -289,3 +296,41 @@ class ChatService(QObject):
             return collector.collect(getattr(self, "main_window", None))
         except Exception:
             return None
+
+    def _collect_skills_summary(self):
+        skill_service = getattr(self, "skill_service", None)
+        if not skill_service:
+            return None
+        try:
+            disabled_skills = self._get_disabled_skills()
+            skills = skill_service.get_skill_summaries(disabled_list=disabled_skills)
+            if not skills:
+                return {
+                    "type": "skills_summary",
+                    "skills": [],
+                    "total_count": 0,
+                    "disabled_skills": disabled_skills,
+                }
+            return {
+                "type": "skills_summary",
+                "skills": skills,
+                "total_count": len(skills),
+                "disabled_skills": disabled_skills,
+            }
+        except Exception:
+            return None
+
+    def _get_disabled_skills(self):
+        try:
+            from PySide6.QtCore import QSettings
+
+            settings = QSettings("PyLog", "AIAssistant")
+            disabled_skills = settings.value("disabled_skills", [])
+            if isinstance(disabled_skills, str):
+                try:
+                    disabled_skills = json.loads(disabled_skills)
+                except Exception:
+                    disabled_skills = []
+            return disabled_skills if isinstance(disabled_skills, list) else []
+        except Exception:
+            return []

@@ -5,6 +5,11 @@
 
 ## [2026-07-02] - Effective Context Bubble and Data Viewer Selection Tools / 有效上下文气泡与Data Viewer选区工具
 
+- Moved skill inventory from always-embedded system prompt content into a structured Skills Summary context section:
+  - `SkillService` now exposes structured enabled-skill summaries
+  - `ChatService` injects enabled skills and disabled-skill state through runtime context
+  - `ContextManager` formats compact skill IDs, titles, aliases, and descriptions with `tool_read_skill` guidance
+  - the system prompt keeps only the stable rule to consult full skills before domain calculations or PyLog script generation
 - Added the first structured Conversation Summary context section:
   - `AgentState` can store and merge long-lived conversation summary fields
   - `ChatService` injects the summary automatically before each prompt
@@ -33,7 +38,6 @@
   - places plot/window state after active script state and before task-plan/runtime summaries
 - Added `WorkspaceStateCollector` and wired `ChatService` to inject the active MDI plot/data-viewer state automatically before each prompt.
 - Data Viewer context now includes curve names, depth range, table row/column counts, and visible columns through the same Plot / Window State section.
-- Marked Skills Summary as deferred because the current skill catalog is still provisional; it should move into ContextManager after skill metadata/routing stabilizes.
 - Added regression coverage for plot/window formatting, nested payload extraction, active workspace injection, data-viewer summaries, section ordering, and policy priority.
 
 ## [2026-06-30] - Non-opening Script Edit Draft Flow / 非自动打开脚本编辑草稿流程

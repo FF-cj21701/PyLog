@@ -193,6 +193,36 @@ class ContextManagerTests(unittest.TestCase):
         self.assertIn("- open_items: Finish conversation summary section", prompt)
         self.assertIn("[User Message]\ncontinue", prompt)
 
+    def test_chat_service_injects_skills_summary(self):
+        class DummySkillService:
+            def get_skill_summaries(self, disabled_list=None):
+                return [
+                    {
+                        "id": "pylog-scripting",
+                        "title": "PyLog Scripting",
+                        "description": "Write scripts using pylog_api.",
+                        "aliases": ["PyLog Scripting"],
+                    },
+                    {
+                        "id": "petropy",
+                        "title": "Petrophysics",
+                        "description": "Calculate Vsh, porosity, and saturation.",
+                    },
+                ]
+
+        service = ChatService.__new__(ChatService)
+        service.context_manager = ContextManager()
+        service.agent_state = AgentState()
+        service.skill_service = DummySkillService()
+        service._get_disabled_skills = lambda: []
+
+        prompt = service.compose_prompt("make a vsh script", [])
+
+        self.assertIn("[Skills Summary]", prompt)
+        self.assertIn("- enabled_count: 2", prompt)
+        self.assertIn("- pylog-scripting; title: PyLog Scripting; aliases: PyLog Scripting; description: Write scripts using pylog_api.", prompt)
+        self.assertIn("- petropy; title: Petrophysics; description: Calculate Vsh, porosity, and saturation.", prompt)
+
     def test_agent_state_conversation_summary_merges_and_survives_task_reset(self):
         state = AgentState()
         state.update_conversation_summary(
@@ -731,6 +761,48 @@ class ContextManagerTests(unittest.TestCase):
         self.assertIn("- goal: Keep agent context compact", context)
         self.assertIn("- notes: Summarize history instead of dumping raw chat", context)
 
+    def test_skills_summary_section_formats_enabled_skills(self):
+        context = ContextManager().build_context_block([
+            {
+                "type": "skills_summary",
+                "total_count": 2,
+                "disabled_skills": ["legacy-skill"],
+                "skills": [
+                    {
+                        "id": "pylog-scripting",
+                        "title": "PyLog Scripting",
+                        "description": "Advanced script writing in PyLog.",
+                        "aliases": ["PyLog Scripting"],
+                    },
+                    {
+                        "id": "petropy",
+                        "title": "Petrophysics",
+                        "description": "Formation evaluation formulas.",
+                    },
+                ],
+            }
+        ])
+
+        self.assertIn("[Skills Summary]", context)
+        self.assertIn("tool_read_skill(name='<skill_id>')", context)
+        self.assertIn("- enabled_count: 2", context)
+        self.assertIn("- disabled_skills: legacy-skill", context)
+        self.assertIn("- pylog-scripting; title: PyLog Scripting; aliases: PyLog Scripting; description: Advanced script writing in PyLog.", context)
+        self.assertIn("- petropy; title: Petrophysics; description: Formation evaluation formulas.", context)
+
+    def test_skills_summary_can_be_extracted_from_nested_payload(self):
+        context = ContextManager().build_context_block([
+            {
+                "skills_summary": {
+                    "skills": [{"id": "petropy", "description": "Petrophysical calculations."}],
+                    "total_count": 1,
+                }
+            }
+        ])
+
+        self.assertIn("[Skills Summary]", context)
+        self.assertIn("- petropy; description: Petrophysical calculations.", context)
+
     def test_retrieved_context_budget_keeps_high_score_items_and_reports_omitted(self):
         items = [
             {"source": "search", "path": f"file_{index}.py", "score": float(index), "summary": f"hit {index}"}
@@ -766,6 +838,7 @@ class ContextManagerTests(unittest.TestCase):
             {"type": "well", "name": "Well-A", "db_path": "demo.db"},
             {"type": "active_script", "script_path": "scripts_user/demo.py"},
             {"type": "plot_window_state", "plot_title": "Current Plot"},
+            {"type": "skills_summary", "skills": [{"id": "pylog-scripting"}]},
             {"type": "task_plan", "steps": [{"id": "verify", "title": "Verify", "status": "pending"}]},
             {"type": "tool_result", "tool_name": "tool_read_file", "ok": True, "message": "read"},
             {"type": "search_result", "path": "demo.py", "summary": "found demo"},
@@ -782,6 +855,7 @@ class ContextManagerTests(unittest.TestCase):
             priorities["plot_window_state"],
             ContextManager.SECTION_POLICIES["plot_window_state"]["priority"],
         )
+        self.assertEqual(priorities["skills_summary"], ContextManager.SECTION_POLICIES["skills_summary"]["priority"])
         self.assertEqual(priorities["task_plan"], ContextManager.SECTION_POLICIES["task_plan"]["priority"])
         self.assertEqual(
             priorities["recent_tool_results"],

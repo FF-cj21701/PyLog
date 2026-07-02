@@ -185,9 +185,9 @@ The context manager should enforce a token or character budget and prefer struct
 
 Keep `.agents/skills` as the single source of truth for domain skills.
 
-Current sequencing note: the current skill catalog is still provisional, so `Skills Summary`
-should remain outside the structured `ContextManager` section set until skill metadata,
-enabled/disabled behavior, and skill-driven routing are stable enough for Phase 6.
+Current implementation note: enabled skills are summarized through the structured
+`Skills Summary` context section, while complete `SKILL.md` guidance remains on-demand
+through `tool_read_skill(...)`. Phase 6 should build on this metadata for task routing.
 
 Required behavior:
 

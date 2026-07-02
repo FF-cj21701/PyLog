@@ -8,9 +8,10 @@ class VerificationCoordinator:
 
     def get_finish_block_message(self, state) -> str:
         recommendation = self.get_verification_recommendation(state)
+        coverage_note = self._verification_coverage_note(state)
         return (
             "Policy blocked tool_finish because files were modified and no successful verification "
-            f"has been recorded yet. {recommendation}"
+            f"has been recorded yet. {coverage_note}{recommendation}"
         )
 
     def get_verification_recommendation(self, state) -> str:
@@ -64,3 +65,11 @@ class VerificationCoordinator:
             or "/scripts/" in normalized
             or normalized.startswith("scripts/")
         ) and normalized.endswith(".py")
+
+    @staticmethod
+    def _verification_coverage_note(state) -> str:
+        last_verification = getattr(state, "last_verification", None) or {}
+        if last_verification.get("ok") and last_verification.get("covers_modified_files") is False:
+            target = last_verification.get("target") or "unknown target"
+            return f"The last successful verification targeted `{target}`, but it did not cover the modified files. "
+        return ""

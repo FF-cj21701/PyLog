@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
@@ -322,16 +323,23 @@ class AgentState:
             "error": error,
         })
 
-    def record_verification(self, result: Any) -> None:
+    def record_verification(self, result: Any, target: Optional[str] = None) -> None:
         """Persist the latest verification outcome and update finish eligibility."""
         normalized = tool_result_to_dict(result)
+        if target:
+            normalized["target"] = target
         self.last_verification = normalized
         ok = tool_result_ok(result)
         self.last_error = None if ok else tool_result_error(result)
         if ok:
-            self.failure_count = 0
-            self.verification_required = False
-            self.finish_requested = False
+            if self._verification_covers_modified_files(target):
+                normalized["covers_modified_files"] = True
+                self.failure_count = 0
+                self.verification_required = False
+                self.finish_requested = False
+            else:
+                normalized["covers_modified_files"] = False
+                self.last_error = "Verification succeeded but did not cover the modified files."
         else:
             self.failure_count += 1
 
@@ -367,3 +375,29 @@ class AgentState:
         if not self.last_verification:
             return False
         return bool(self.last_verification.get("ok"))
+
+    def _verification_covers_modified_files(self, target: Optional[str]) -> bool:
+        if not self.files_modified:
+            return True
+        if not target:
+            return True
+        normalized_target = self._normalize_path(target)
+        if not normalized_target:
+            return True
+        for modified in self.files_modified:
+            normalized_modified = self._normalize_path(modified)
+            if normalized_modified == normalized_target:
+                continue
+            if normalized_modified and normalized_modified.startswith(normalized_target + os.sep):
+                continue
+            return False
+        return True
+
+    @staticmethod
+    def _normalize_path(filepath: Optional[str]) -> str:
+        if not filepath:
+            return ""
+        try:
+            return os.path.normcase(os.path.normpath(os.path.abspath(str(filepath))))
+        except Exception:
+            return str(filepath)

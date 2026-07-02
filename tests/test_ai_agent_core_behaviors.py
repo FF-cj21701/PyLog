@@ -1598,6 +1598,73 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
         self.assertFalse(self.state.verification_required)
         self.assertTrue(self.state.can_finish())
 
+    def test_successful_verification_for_unmodified_target_does_not_clear_finish_block(self):
+        verify_tool = DummyTool(
+            name="tool_verify_target",
+            side_effect_level="execution",
+            is_verification_tool=True,
+        )
+        self.state.mark_file_modified("scripts/example.py")
+
+        self.policy.after_tool_call(
+            self.state,
+            verify_tool.name,
+            {"filepath": "scripts/other.py"},
+            {"ok": True, "summary": "verified other file"},
+            tool=verify_tool,
+        )
+
+        self.assertTrue(self.state.verification_required)
+        self.assertFalse(self.state.can_finish())
+        self.assertFalse(self.state.last_verification["covers_modified_files"])
+        self.assertIn("did not cover", self.state.last_error)
+
+        error = self.policy.before_tool_call(self.state, "tool_finish", {}, tool=None)
+
+        self.assertIsNotNone(error)
+        self.assertIn("did not cover the modified files", error)
+        self.assertIn(os.path.abspath("scripts/other.py").lower(), error.lower())
+
+    def test_project_level_verification_without_target_clears_finish_block(self):
+        verify_tool = DummyTool(
+            name="tool_run_test_command",
+            side_effect_level="execution",
+            is_verification_tool=True,
+        )
+        self.state.mark_file_modified("plugins/example.py")
+
+        self.policy.after_tool_call(
+            self.state,
+            verify_tool.name,
+            {},
+            {"ok": True, "summary": "pytest passed"},
+            tool=verify_tool,
+        )
+
+        self.assertFalse(self.state.verification_required)
+        self.assertTrue(self.state.can_finish())
+
+    def test_single_file_verification_does_not_clear_multiple_modified_files(self):
+        verify_tool = DummyTool(
+            name="tool_verify_target",
+            side_effect_level="execution",
+            is_verification_tool=True,
+        )
+        self.state.mark_file_modified("scripts/example.py")
+        self.state.mark_file_modified("scripts/helper.py")
+
+        self.policy.after_tool_call(
+            self.state,
+            verify_tool.name,
+            {"filepath": "scripts/example.py"},
+            {"ok": True, "summary": "verified one file"},
+            tool=verify_tool,
+        )
+
+        self.assertTrue(self.state.verification_required)
+        self.assertFalse(self.state.can_finish())
+        self.assertFalse(self.state.last_verification["covers_modified_files"])
+
     def test_read_tool_marks_file_as_read_even_when_tool_object_is_present(self):
         read_tool = DummyTool(
             name="tool_read_file",

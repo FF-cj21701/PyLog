@@ -346,6 +346,7 @@ Acceptance criteria:
 Deliverables:
 
 - Strengthen finish blocking after mutations.
+- Ensure successful verification covers all modified files before clearing the finish blocker.
 - Improve automatic verification recommendations.
 - Add clear unresolved-failure reporting.
 

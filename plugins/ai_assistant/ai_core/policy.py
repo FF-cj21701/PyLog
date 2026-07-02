@@ -214,6 +214,7 @@ class ExecutionPolicy:
 
         if is_verification_tool(tool_name, tool=tool):
             verification = result_obj
+            verification_target = self._verification_target(args, result_obj, tool=tool)
             if not verification:
                 error_text = tool_result_error(result) or "Unknown verification error"
                 verification = {
@@ -225,7 +226,7 @@ class ExecutionPolicy:
                 verification.setdefault("summary", tool_result_summary(result))
                 if not verification.get("ok"):
                     verification.setdefault("error", tool_result_error(result))
-            state.record_verification(verification)
+            state.record_verification(verification, target=verification_target)
 
     def finish_guidance(self, state) -> Optional[str]:
         if state.dirty and state.verification_required:
@@ -294,6 +295,16 @@ class ExecutionPolicy:
             "starting with `tool_verify_target`, then fall back to "
             "`tool_run_test_command`, `tool_run_lint_command`, or `tool_run_format_command` if needed."
         )
+
+    def _verification_target(self, args: Optional[Dict[str, Any]], result: Dict[str, Any], tool=None) -> Optional[str]:
+        args = args or {}
+        result = result or {}
+        for payload in (args, result):
+            for key in ("filepath", "file_path", "target", "path", "script_path"):
+                value = payload.get(key)
+                if value:
+                    return _normalize_tracked_path(value)
+        return _normalize_tracked_path(_get_filepath(args, tool=tool))
 
     def _high_risk_tool_guard(self, state, tool_name: str, args: Optional[Dict[str, Any]], tool=None) -> Optional[str]:
         if not is_high_risk_tool(tool_name, tool=tool):

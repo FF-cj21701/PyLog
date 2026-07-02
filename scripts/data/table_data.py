@@ -292,6 +292,8 @@ class MultiCurveTableModel(QAbstractTableModel):
         self.columns = []
         self._cache = {}
         self._expanded_headers = set()
+        self._virtual_selected_columns = set()
+        self._virtual_current_column = None
 
     def reset_data(self):
         self.beginResetModel()
@@ -299,6 +301,8 @@ class MultiCurveTableModel(QAbstractTableModel):
         self.columns = []
         self._cache = {}
         self._expanded_headers = set()
+        self._virtual_selected_columns = set()
+        self._virtual_current_column = None
         self.endResetModel()
 
     def set_viewer_data(self, depth_data, columns):
@@ -307,7 +311,25 @@ class MultiCurveTableModel(QAbstractTableModel):
         self.columns = list(columns)
         self._cache = {}
         self._expanded_headers = set()
+        self._virtual_selected_columns = set()
+        self._virtual_current_column = None
         self.endResetModel()
+
+    def set_virtual_selected_columns(self, columns, current=None):
+        normalized = {column for column in columns if 0 <= column < self.columnCount()}
+        self._virtual_selected_columns = normalized
+        self._virtual_current_column = current if current in normalized else None
+        if self.rowCount() > 0 and self.columnCount() > 0:
+            self.dataChanged.emit(
+                self.index(0, 0),
+                self.index(self.rowCount() - 1, self.columnCount() - 1),
+                [Qt.BackgroundRole, Qt.ForegroundRole],
+            )
+        if self.columnCount() > 0:
+            self.headerDataChanged.emit(Qt.Horizontal, 0, self.columnCount() - 1)
+
+    def clear_virtual_selected_columns(self):
+        self.set_virtual_selected_columns(set(), current=None)
 
     def toggle_header_expanded(self, section):
         if section <= 1 or section >= self.columnCount():
@@ -368,8 +390,11 @@ class MultiCurveTableModel(QAbstractTableModel):
         if role == Qt.TextAlignmentRole:
             return Qt.AlignRight | Qt.AlignVCenter
 
-        if role == Qt.BackgroundRole and col in (0, 1):
-            return QBrush(QColor(app_config.get_theme_color("bg_pure")))
+        if role == Qt.BackgroundRole:
+            if col in self._virtual_selected_columns:
+                return QBrush(QColor(app_config.get_theme_color("accent_light")))
+            if col in (0, 1):
+                return QBrush(QColor(app_config.get_theme_color("bg_pure")))
 
         if role == Qt.ForegroundRole:
             if col in (0, 1):
@@ -426,6 +451,8 @@ class MultiCurveTableModel(QAbstractTableModel):
                 return "Depth"
             column = self.columns[section - 2]
             return column.get("tooltip") or column.get("label", f"Curve {section}")
+        if orientation == Qt.Horizontal and role == Qt.BackgroundRole and section in self._virtual_selected_columns:
+            return QBrush(QColor(app_config.get_theme_color("accent_light")))
         if role != Qt.DisplayRole:
             return None
         if orientation == Qt.Horizontal:
@@ -442,25 +469,36 @@ class MultiCurveTableModel(QAbstractTableModel):
         return str(section + 1)
 
 
-def copy_table_selection_to_clipboard(table, model, include_headers=False):
+def copy_table_selection_to_clipboard(table, model, include_headers=False, selected_columns=None):
     """Copy current table selection to clipboard as TSV."""
-    selection_model = table.selectionModel()
-    if not selection_model:
-        return False
-
-    selection = selection_model.selectedIndexes()
-    if not selection:
-        return False
-
+    explicit_columns = sorted(selected_columns or [])
     row_map = {}
-    selected_columns = set()
-    for index in selection:
-        row = index.row()
-        col = index.column()
-        selected_columns.add(col)
-        row_map.setdefault(row, {})[col] = model.data(index, Qt.DisplayRole) or ""
+    if explicit_columns:
+        if model.rowCount() == 0:
+            return False
+        ordered_columns = explicit_columns
+        for row in range(model.rowCount()):
+            row_map[row] = {
+                col: model.data(model.index(row, col), Qt.DisplayRole) or ""
+                for col in ordered_columns
+            }
+    else:
+        selection_model = table.selectionModel()
+        if not selection_model:
+            return False
 
-    ordered_columns = sorted(selected_columns)
+        selection = selection_model.selectedIndexes()
+        if not selection:
+            return False
+
+        selected_column_set = set()
+        for index in selection:
+            row = index.row()
+            col = index.column()
+            selected_column_set.add(col)
+            row_map.setdefault(row, {})[col] = model.data(index, Qt.DisplayRole) or ""
+
+        ordered_columns = sorted(selected_column_set)
     output = []
 
     if include_headers:

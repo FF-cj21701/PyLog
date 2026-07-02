@@ -188,6 +188,12 @@ class ChatTemplateRegressionTests(unittest.TestCase):
         self.assertIn("const previewText = escapePopoverHtml(finalContent.substring(0, 500))", self.input_js)
         self.assertNotIn("popover-content-preview\">${finalContent.substring(0, 500)}", self.input_js)
 
+    def test_effective_context_summary_updates_toolbar_bubble(self):
+        self.assertIn("function setEffectiveContextInfo(summaryData)", self.bootstrap)
+        self.assertIn("contextEl.dataset.type = 'effective_context';", self.bootstrap)
+        self.assertIn("Effective Prompt Context", self.input_js)
+        self.assertIn("Failed to parse effective context payload.", self.input_js)
+
 
 class ReviewTemplateRegressionTests(unittest.TestCase):
     @classmethod

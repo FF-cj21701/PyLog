@@ -189,6 +189,53 @@ class ChatService(QObject):
     def build_context_block(self, context_data):
         return self.context_manager.build_context_block(self._compose_runtime_context(context_data))
 
+    def build_effective_context_summary(self, context_data):
+        """Build a compact UI summary for the same context that will enter the prompt."""
+        runtime_context = self._compose_runtime_context(context_data)
+        sections = self.context_manager.build_sections(runtime_context)
+        groups = []
+        for section in sorted(sections, key=lambda item: item.priority):
+            section_has_header = bool(section.lines and str(section.lines[0]).startswith("["))
+            source_lines = section.lines[1:] if section_has_header else section.lines
+            body_lines = [str(line) for line in source_lines if str(line).strip()]
+            if not body_lines:
+                continue
+            title = section.lines[0].strip("[]") if section_has_header else "Manual Context"
+            groups.append({
+                "id": section.title,
+                "title": title,
+                "lines": body_lines[:12],
+            })
+
+        return {
+            "label": self._format_effective_context_label(groups),
+            "groups": groups,
+        }
+
+    def _format_effective_context_label(self, groups):
+        if not groups:
+            return ""
+
+        primary = ""
+        extras = 0
+        for group in groups:
+            group_id = group.get("id")
+            lines = group.get("lines") or []
+            if group_id == "plot_window_state" and not primary:
+                type_line = next((line for line in lines if line.startswith("- active_window_type:")), "")
+                window_type = type_line.split(": ", 1)[1] if ": " in type_line else "workspace"
+                primary = window_type.replace("_", " ").title()
+            elif group_id == "active_script_state" and not primary:
+                script_line = next((line for line in lines if line.startswith("- script_path:")), "")
+                primary = script_line.split(": ", 1)[1] if ": " in script_line else "Script"
+            else:
+                extras += 1
+        if not primary:
+            first = groups[0]
+            primary = first.get("title") or "Context"
+            extras = max(0, len(groups) - 1)
+        return f"{primary} +{extras}" if extras else primary
+
     def _compose_runtime_context(self, context_data):
         """Merge user-selected context with recent runtime state for the next turn."""
         merged = list(context_data or [])

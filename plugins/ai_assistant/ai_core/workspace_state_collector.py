@@ -119,6 +119,10 @@ class WorkspaceStateCollector:
         return names
 
     def _collect_data_viewer_state(self, widget: Any) -> dict[str, Any]:
+        widget_state = self._safe_call(getattr(widget, "get_workspace_state", None))
+        if isinstance(widget_state, Mapping):
+            return {key: value for key, value in widget_state.items() if self._has_value(value)}
+
         entries = [entry for entry in self._iter_items(getattr(widget, "_curve_entries", None)) if isinstance(entry, Mapping)]
         curve_names = [self._curve_name(entry) for entry in entries]
         curve_names = [name for name in curve_names if name]

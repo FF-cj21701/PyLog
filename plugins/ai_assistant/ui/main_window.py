@@ -93,6 +93,9 @@ class AIAssistantWidget(QWidget):
         self._stream_flush_timer = QTimer(self)
         self._stream_flush_timer.setSingleShot(True)
         self._stream_flush_timer.timeout.connect(self._flush_stream_updates)
+        self._context_refresh_timer = QTimer(self)
+        self._context_refresh_timer.setSingleShot(True)
+        self._context_refresh_timer.timeout.connect(self._refresh_effective_context_info_now)
 
         # Setup Web Chat View
         self.chat_view = WebChatView()
@@ -167,6 +170,38 @@ class AIAssistantWidget(QWidget):
         import json
         self.chat_view.set_context_info(json.dumps(self.selection_context) if self.selection_context else None)
 
+    def _merged_chat_contexts(self):
+        merged = []
+        seen = set()
+        for item in list(getattr(self, "chat_contexts", []) or []) + list(getattr(self, "selection_context", []) or []):
+            if not isinstance(item, dict):
+                continue
+            key = (
+                item.get("type"),
+                item.get("path") or item.get("db_path"),
+                item.get("name") or item.get("display_name"),
+                item.get("id") or item.get("curve_id"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+        return merged
+
+    def refresh_effective_context_info(self, delay_ms=80):
+        if hasattr(self, "_context_refresh_timer"):
+            self._context_refresh_timer.start(max(0, int(delay_ms)))
+        else:
+            self._refresh_effective_context_info_now()
+
+    def _refresh_effective_context_info_now(self):
+        if not hasattr(self, "chat_view") or not hasattr(self, "chat_service"):
+            return
+        effective_context = self._merged_chat_contexts()
+        self.chat_view.set_effective_context_info(
+            self.chat_service.build_effective_context_summary(effective_context)
+        )
+
     def set_code_context(self, filename, lines, text):
         """Set code selection as context in the input box."""
         self.chat_view.set_selection_context(filename, lines, text)
@@ -205,6 +240,8 @@ class AIAssistantWidget(QWidget):
 
         self._is_sending = True
         self.chat_view.set_sending_state(True)
+        effective_context = self._merged_chat_contexts()
+        self.refresh_effective_context_info(delay_ms=0)
         if not rendered_by_client:
             self.chat_view.append_message("user", display_text, is_html=True)
         self.chat_view.set_input_enabled(False)
@@ -222,7 +259,7 @@ class AIAssistantWidget(QWidget):
 
         def _start_chat_after_placeholder(_result=None):
             self._pending_mode = "chat"
-            self.chat_service.start_chat(full_text, [], self.memory.get_recent_history(), mode=self.mode)
+            self.chat_service.start_chat(full_text, effective_context, self.memory.get_recent_history(), mode=self.mode)
 
         self.append_ai_message("", callback=_start_chat_after_placeholder)  # Placeholder
 

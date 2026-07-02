@@ -915,6 +915,361 @@ class DataViewerModelTests(unittest.TestCase):
         self.assertTrue(widget._has_curve("a.db", 1, 10))
         self.assertFalse(widget._has_curve("a.db", 1, 11))
 
+    def test_data_viewer_header_selection_tracks_columns_without_real_column_selection(self):
+        from scripts.ui.widgets.data_viewer_widget import DataViewerWidget
+
+        widget = DataViewerWidget()
+        widget._curve_entries = [
+            {
+                "db_path": "a.db",
+                "well_id": 1,
+                "curve_id": 10,
+                "well_name": "WellA",
+                "curve_name": "GR",
+                "label": "GR",
+                "tooltip": "WellA/FolderA/GR",
+                "folder_name": "FolderA",
+                "depth": np.array([100.0, 101.0, 102.0]),
+                "data": np.array([10.0, 11.0, 12.0]),
+            }
+        ]
+        widget._rebuild_model()
+
+        widget._select_column_from_header(2)
+
+        self.assertEqual(widget._selected_header_columns, {2})
+        self.assertEqual(widget._selected_curve_column_indexes(), [0])
+        self.assertEqual(widget.table.selectionModel().selectedIndexes(), [])
+
+    def test_data_viewer_header_selection_clears_current_index_highlight(self):
+        from scripts.ui.widgets.data_viewer_widget import DataViewerWidget
+
+        widget = DataViewerWidget()
+        widget._curve_entries = [
+            {
+                "db_path": "a.db",
+                "well_id": 1,
+                "curve_id": 10,
+                "well_name": "WellA",
+                "curve_name": "GR",
+                "label": "GR",
+                "tooltip": "WellA/FolderA/GR",
+                "folder_name": "FolderA",
+                "depth": np.array([100.0, 101.0, 102.0]),
+                "data": np.array([10.0, 11.0, 12.0]),
+            }
+        ]
+        widget._rebuild_model()
+        widget.table.setCurrentIndex(widget.model.index(1, 2))
+
+        widget._select_column_from_header(2)
+
+        self.assertEqual(widget._selected_header_columns, {2})
+        self.assertFalse(widget.table.currentIndex().isValid())
+        self.assertEqual(widget.table.selectionModel().selectedIndexes(), [])
+
+    def test_data_viewer_cell_press_clears_virtual_header_selection(self):
+        from scripts.ui.widgets.data_viewer_widget import DataViewerWidget
+
+        widget = DataViewerWidget()
+        widget._curve_entries = [
+            {
+                "db_path": "a.db",
+                "well_id": 1,
+                "curve_id": 10,
+                "well_name": "WellA",
+                "curve_name": "GR",
+                "label": "GR",
+                "tooltip": "WellA/FolderA/GR",
+                "folder_name": "FolderA",
+                "depth": np.array([100.0, 101.0, 102.0]),
+                "data": np.array([10.0, 11.0, 12.0]),
+            }
+        ]
+        widget._rebuild_model()
+        widget._select_column_from_header(2)
+
+        widget._handle_table_press(widget.model.index(0, 2))
+
+        self.assertEqual(widget._selected_header_columns, set())
+        self.assertFalse(widget._header_selection_active)
+
+    def test_data_viewer_copy_uses_virtual_header_selection(self):
+        from scripts.ui.widgets.data_viewer_widget import DataViewerWidget
+
+        widget = DataViewerWidget()
+        widget._curve_entries = [
+            {
+                "db_path": "a.db",
+                "well_id": 1,
+                "curve_id": 10,
+                "well_name": "WellA",
+                "curve_name": "GR",
+                "label": "GR",
+                "tooltip": "WellA/FolderA/GR",
+                "folder_name": "FolderA",
+                "depth": np.array([100.0, 101.0]),
+                "data": np.array([10.0, 11.0]),
+            }
+        ]
+        widget._rebuild_model()
+        widget._select_column_from_header(2)
+
+        with patch("scripts.ui.widgets.data_viewer_widget.copy_table_selection_to_clipboard") as mock_copy:
+            widget.copy_selection()
+
+        mock_copy.assert_called_once()
+        self.assertEqual(mock_copy.call_args.kwargs.get("selected_columns"), [2])
+
+    def test_data_viewer_exposes_workspace_state_for_agent_context(self):
+        from scripts.ui.widgets.data_viewer_widget import DataViewerWidget
+
+        widget = DataViewerWidget()
+        widget._curve_entries = [
+            {
+                "db_path": "a.db",
+                "well_id": 1,
+                "curve_id": 10,
+                "well_name": "WellA",
+                "curve_name": "GR",
+                "label": "GR",
+                "tooltip": "WellA/FolderA/GR",
+                "folder_name": "FolderA",
+                "depth": np.array([100.0, 101.0]),
+                "data": np.array([10.0, 11.0]),
+            },
+            {
+                "db_path": "a.db",
+                "well_id": 1,
+                "curve_id": 11,
+                "well_name": "WellA",
+                "curve_name": "RT",
+                "label": "RT",
+                "tooltip": "WellA/FolderA/RT",
+                "folder_name": "FolderA",
+                "depth": np.array([100.0, 101.0]),
+                "data": np.array([20.0, 21.0]),
+            },
+        ]
+        widget._rebuild_model()
+        widget._set_header_selection({2}, current=2, anchor=2)
+        widget.model.setData(widget.model.index(0, 2), "15")
+
+        state = widget.get_workspace_state()
+
+        self.assertEqual(state["active_window_type"], "data_viewer")
+        self.assertEqual(state["curve_count"], 2)
+        self.assertEqual(state["selected_curves"], ["GR", "RT"])
+        self.assertEqual(state["depth_range"], {"min": 100.0, "max": 101.0})
+        self.assertTrue(state["has_unsaved_changes"])
+        self.assertEqual(state["table"]["row_count"], 2)
+        self.assertEqual(state["table"]["column_count"], 4)
+        self.assertEqual(state["table"]["visible_columns"], ["Row", "Depth", "GR", "RT"])
+        self.assertEqual(state["table"]["selected_columns"], ["GR"])
+
+    def test_data_viewer_workspace_state_summarizes_selected_rows_as_ranges(self):
+        from PySide6.QtCore import QItemSelection, QItemSelectionModel
+        from scripts.ui.widgets.data_viewer_widget import DataViewerWidget
+
+        widget = DataViewerWidget()
+        widget._curve_entries = [
+            {
+                "db_path": "a.db",
+                "well_id": 1,
+                "curve_id": 10,
+                "well_name": "WellA",
+                "curve_name": "GR",
+                "label": "GR",
+                "tooltip": "WellA/FolderA/GR",
+                "folder_name": "FolderA",
+                "depth": np.array([100.0, 101.0, 102.0, 103.0]),
+                "data": np.array([10.0, 11.0, 12.0, 13.0]),
+            }
+        ]
+        widget._rebuild_model()
+        selection_model = widget.table.selectionModel()
+        selection_model.select(
+            QItemSelection(widget.model.index(0, 2), widget.model.index(2, 2)),
+            QItemSelectionModel.ClearAndSelect,
+        )
+
+        state = widget.get_workspace_state()
+
+        self.assertEqual(state["table"]["selected_rows"], ["1~3"])
+
+    def test_data_viewer_emits_workspace_state_changed_on_table_selection(self):
+        from PySide6.QtCore import QItemSelection, QItemSelectionModel
+        from scripts.ui.widgets.data_viewer_widget import DataViewerWidget
+
+        widget = DataViewerWidget()
+        widget._curve_entries = [
+            {
+                "db_path": "a.db",
+                "well_id": 1,
+                "curve_id": 10,
+                "well_name": "WellA",
+                "curve_name": "GR",
+                "label": "GR",
+                "tooltip": "WellA/FolderA/GR",
+                "folder_name": "FolderA",
+                "depth": np.array([100.0, 101.0]),
+                "data": np.array([10.0, 11.0]),
+            }
+        ]
+        widget._rebuild_model()
+        emissions = []
+        widget.workspaceStateChanged.connect(lambda: emissions.append(True))
+
+        widget.table.selectionModel().select(
+            QItemSelection(widget.model.index(0, 2), widget.model.index(1, 2)),
+            QItemSelectionModel.ClearAndSelect,
+        )
+
+        self.assertTrue(emissions)
+
+    def test_data_viewer_selection_payload_reads_current_table_values(self):
+        from PySide6.QtCore import QItemSelection, QItemSelectionModel
+        from scripts.ui.widgets.data_viewer_widget import DataViewerWidget
+
+        widget = DataViewerWidget()
+        widget._curve_entries = [
+            {
+                "db_path": "a.db",
+                "well_id": 1,
+                "curve_id": 10,
+                "well_name": "WellA",
+                "curve_name": "GR",
+                "label": "GR",
+                "tooltip": "WellA/FolderA/GR",
+                "folder_name": "FolderA",
+                "depth": np.array([100.0, 101.0, 102.0]),
+                "data": np.array([10.0, 11.0, 12.0]),
+            }
+        ]
+        widget._rebuild_model()
+        widget.model.setData(widget.model.index(1, 2), "15.5")
+        widget.table.selectionModel().select(
+            QItemSelection(widget.model.index(0, 1), widget.model.index(2, 2)),
+            QItemSelectionModel.ClearAndSelect,
+        )
+
+        payload = widget.get_selection_payload(max_rows=2)
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["columns"], ["Depth", "GR"])
+        self.assertEqual(payload["selected_rows"], ["1~3"])
+        self.assertEqual(payload["returned_rows"], 2)
+        self.assertTrue(payload["truncated"])
+        self.assertEqual(payload["rows"][1]["values"], {"Depth": 101.0, "GR": 15.5})
+        self.assertEqual(payload["stats"]["GR"]["count"], 3)
+
+    def test_get_active_data_viewer_selection_tool_reads_active_widget(self):
+        from PySide6.QtCore import QItemSelection, QItemSelectionModel
+        from plugins.ai_assistant.tools.data_viewer_tool import GetActiveDataViewerSelectionTool
+        from scripts.ui.widgets.data_viewer_widget import DataViewerWidget
+
+        widget = DataViewerWidget()
+        widget._curve_entries = [
+            {
+                "db_path": "a.db",
+                "well_id": 1,
+                "curve_id": 10,
+                "well_name": "WellA",
+                "curve_name": "GR",
+                "label": "GR",
+                "tooltip": "WellA/FolderA/GR",
+                "folder_name": "FolderA",
+                "depth": np.array([100.0, 101.0]),
+                "data": np.array([10.0, 11.0]),
+            }
+        ]
+        widget._rebuild_model()
+        widget.table.selectionModel().select(
+            QItemSelection(widget.model.index(0, 2), widget.model.index(1, 2)),
+            QItemSelectionModel.ClearAndSelect,
+        )
+
+        class DummySubWindow:
+            def widget(self):
+                return widget
+
+        class DummyMdiArea:
+            def activeSubWindow(self):
+                return DummySubWindow()
+
+        class DummyMainWindow:
+            mdi_area = DummyMdiArea()
+
+        result = GetActiveDataViewerSelectionTool(main_window=DummyMainWindow()).execute(max_rows=10)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["columns"], ["GR"])
+        self.assertEqual(result["rows"][0]["values"], {"GR": 10.0})
+
+    def test_data_viewer_header_context_keeps_existing_selected_column(self):
+        from scripts.ui.widgets.data_viewer_widget import DataViewerWidget
+
+        widget = DataViewerWidget()
+        widget._curve_entries = [
+            {
+                "db_path": "a.db",
+                "well_id": 1,
+                "curve_id": 10,
+                "well_name": "WellA",
+                "curve_name": "GR",
+                "label": "GR",
+                "tooltip": "WellA/FolderA/GR",
+                "folder_name": "FolderA",
+                "depth": np.array([100.0, 101.0]),
+                "data": np.array([10.0, 11.0]),
+            },
+            {
+                "db_path": "a.db",
+                "well_id": 1,
+                "curve_id": 11,
+                "well_name": "WellA",
+                "curve_name": "RT",
+                "label": "RT",
+                "tooltip": "WellA/FolderA/RT",
+                "folder_name": "FolderA",
+                "depth": np.array([100.0, 101.0]),
+                "data": np.array([20.0, 21.0]),
+            },
+        ]
+        widget._rebuild_model()
+        widget._set_header_selection({2, 3}, current=3, anchor=2)
+
+        widget._ensure_header_column_selected(3)
+
+        self.assertEqual(widget._selected_header_columns, {2, 3})
+
+    def test_data_viewer_remove_selected_columns_clears_virtual_header_selection(self):
+        from scripts.ui.widgets.data_viewer_widget import DataViewerWidget
+
+        widget = DataViewerWidget()
+        widget._curve_entries = [
+            {
+                "db_path": "a.db",
+                "well_id": 1,
+                "curve_id": 10,
+                "well_name": "WellA",
+                "curve_name": "GR",
+                "label": "GR",
+                "tooltip": "WellA/FolderA/GR",
+                "folder_name": "FolderA",
+                "depth": np.array([100.0, 101.0]),
+                "data": np.array([10.0, 11.0]),
+            }
+        ]
+        widget._rebuild_model()
+        widget._select_column_from_header(2)
+
+        with patch("scripts.ui.widgets.data_viewer_widget.ThemeDialog.confirm", return_value=True):
+            widget.remove_selected_columns()
+
+        self.assertEqual(widget._selected_header_columns, set())
+        self.assertFalse(widget._header_selection_active)
+
     def test_data_viewer_dirty_and_reset_follow_model_edits(self):
         from PySide6.QtCore import Qt
         from scripts.ui.widgets.data_viewer_widget import DataViewerWidget

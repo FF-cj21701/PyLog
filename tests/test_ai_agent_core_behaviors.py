@@ -279,6 +279,8 @@ class ContextManagerTests(unittest.TestCase):
                     "row_count": 120,
                     "column_count": 3,
                     "visible_columns": ["Depth", "GR", "RT"],
+                    "selected_columns": ["GR"],
+                    "selected_rows": [2, 3],
                 },
             }
         ])
@@ -288,6 +290,8 @@ class ContextManagerTests(unittest.TestCase):
         self.assertIn("- table_rows: 120", context)
         self.assertIn("- table_columns: 3", context)
         self.assertIn("- visible_columns: Depth, GR, RT", context)
+        self.assertIn("- selected_columns: GR", context)
+        self.assertIn("- selected_rows: 2, 3", context)
 
     def test_plot_window_state_follows_active_script_before_task_plan(self):
         context = ContextManager().build_context_block([
@@ -353,12 +357,18 @@ class ContextManagerTests(unittest.TestCase):
                 return 3
 
         class DummyDataViewer:
-            model = DummyModel()
-            _curve_entries = [
-                {"curve_name": "GR"},
-                {"curve_name": "RT"},
-            ]
-            _depth_union = [1000.0, 1005.0, 1010.0]
+            def get_workspace_state(self):
+                return {
+                    "active_window_type": "data_viewer",
+                    "depth_range": {"min": 1000.0, "max": 1010.0},
+                    "selected_curves": ["GR", "RT"],
+                    "table": {
+                        "row_count": 50,
+                        "column_count": 3,
+                        "visible_columns": ["Depth", "GR", "RT"],
+                        "selected_columns": ["GR"],
+                    },
+                }
 
         class DummySubWindow:
             def windowTitle(self):
@@ -387,6 +397,53 @@ class ContextManagerTests(unittest.TestCase):
         self.assertIn("- selected_curves: GR, RT", prompt)
         self.assertIn("- table_rows: 50", prompt)
         self.assertIn("- visible_columns: Depth, GR, RT", prompt)
+        self.assertIn("- selected_columns: GR", prompt)
+
+    def test_chat_service_builds_effective_context_summary_from_runtime_context(self):
+        class DummyDataViewer:
+            def get_workspace_state(self):
+                return {
+                    "active_window_type": "data_viewer",
+                    "depth_range": {"min": 1111, "max": 2222},
+                    "selected_curves": ["GR"],
+                    "has_unsaved_changes": True,
+                    "table": {
+                        "row_count": 1200,
+                        "column_count": 3,
+                        "visible_columns": ["Row", "Depth", "GR"],
+                        "selected_columns": ["GR"],
+                        "selected_rows": ["1111~2222"],
+                    },
+                }
+
+        class DummySubWindow:
+            def windowTitle(self):
+                return "Data Viewer"
+
+            def widget(self):
+                return DummyDataViewer()
+
+        class DummyMdiArea:
+            def activeSubWindow(self):
+                return DummySubWindow()
+
+        class DummyMainWindow:
+            mdi_area = DummyMdiArea()
+
+        service = ChatService.__new__(ChatService)
+        service.context_manager = ContextManager()
+        service.workspace_state_collector = WorkspaceStateCollector()
+        service.main_window = DummyMainWindow()
+        service.agent_state = AgentState()
+
+        summary = service.build_effective_context_summary([
+            {"type": "well", "name": "Well-A", "db_path": "demo.db"},
+        ])
+
+        self.assertEqual(summary["label"], "Data Viewer +1")
+        workspace_group = next(group for group in summary["groups"] if group["id"] == "plot_window_state")
+        self.assertIn("- selected_columns: GR", workspace_group["lines"])
+        self.assertIn("- selected_rows: 1111~2222", workspace_group["lines"])
 
     def test_workspace_state_collector_returns_none_without_active_subwindow(self):
         class DummyMdiArea:
@@ -1704,6 +1761,94 @@ class MessageCardActionRoutingTests(unittest.TestCase):
 
         mock_open.assert_called_once()
         self.assertEqual(system_messages, [])
+
+    def test_send_message_uses_merged_context_for_summary_and_chat_start(self):
+        widget = AIAssistantWidget.__new__(AIAssistantWidget)
+        widget._is_sending = False
+        widget.mode = "chat"
+        widget.chat_contexts = [{"type": "well", "name": "Well-A", "db_path": "demo.db"}]
+        widget.selection_context = [{"type": "well", "name": "Well-A", "db_path": "demo.db"}]
+        widget._stream_flush_timer = type("DummyTimer", (), {"stop": lambda self: None})()
+
+        class DummyChatView:
+            def __init__(self):
+                self.effective_summary = None
+
+            def set_sending_state(self, value):
+                self.sending = value
+
+            def set_effective_context_info(self, summary):
+                self.effective_summary = summary
+
+            def append_message(self, *args, **kwargs):
+                self.appended = (args, kwargs)
+
+            def set_input_enabled(self, value):
+                self.input_enabled = value
+
+            def clear_current_message_state(self):
+                self.cleared_message_state = True
+
+            def clear_task_progress(self):
+                self.cleared_task_progress = True
+
+        class DummyMemory:
+            def add_user_message(self, message):
+                self.message = message
+
+            def get_recent_history(self):
+                return []
+
+        class DummyChatService:
+            def __init__(self):
+                self.started = None
+
+            def build_effective_context_summary(self, context):
+                self.summary_context = context
+                return {"label": "Manual: 1 item(s)", "groups": [{"id": "selection", "title": "Manual", "lines": ["Well"]}]}
+
+            def start_chat(self, text, context, history, mode="chat"):
+                self.started = (text, context, history, mode)
+
+        chat_view = DummyChatView()
+        chat_service = DummyChatService()
+        widget.chat_view = chat_view
+        widget.chat_service = chat_service
+        widget.memory = DummyMemory()
+        widget.append_ai_message = lambda _text, callback=None: callback() if callback else None
+
+        widget.send_message('{"actual":"hello","display":"hello","rendered":true}')
+
+        self.assertEqual(chat_service.summary_context, [{"type": "well", "name": "Well-A", "db_path": "demo.db"}])
+        self.assertEqual(chat_view.effective_summary["label"], "Manual: 1 item(s)")
+        self.assertEqual(
+            chat_service.started,
+            ("hello", [{"type": "well", "name": "Well-A", "db_path": "demo.db"}], [], "chat"),
+        )
+
+    def test_refresh_effective_context_info_updates_chat_bubble_summary(self):
+        widget = AIAssistantWidget.__new__(AIAssistantWidget)
+        widget.chat_contexts = [{"type": "well", "name": "Well-A", "db_path": "demo.db"}]
+        widget.selection_context = []
+
+        class DummyChatView:
+            def set_effective_context_info(self, summary):
+                self.summary = summary
+
+        class DummyChatService:
+            def build_effective_context_summary(self, context):
+                self.context = context
+                return {"label": "Manual: 1 item(s)", "groups": []}
+
+        chat_view = DummyChatView()
+        chat_service = DummyChatService()
+        widget.chat_view = chat_view
+        widget.chat_service = chat_service
+
+        widget.refresh_effective_context_info()
+
+        self.assertEqual(chat_service.context, [{"type": "well", "name": "Well-A", "db_path": "demo.db"}])
+        self.assertEqual(chat_view.summary["label"], "Manual: 1 item(s)")
 
 
 class MessageFormatterResultConsumptionTests(unittest.TestCase):

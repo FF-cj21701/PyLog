@@ -1,6 +1,6 @@
 import numpy as np
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import Qt, QTimer, Signal, QModelIndex
+from PySide6.QtGui import QBrush, QCloseEvent, QColor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -19,6 +19,9 @@ from PySide6.QtWidgets import (
     QMenu,
     QGraphicsOpacityEffect,
     QSizePolicy,
+    QStyledItemDelegate,
+    QStyle,
+    QStyleOptionViewItem,
 )
 from PySide6.QtCore import QItemSelection, QItemSelectionModel
 
@@ -38,8 +41,34 @@ from scripts.ui.base_dialog import ThemeDialog
 from scripts.ui.theme_manager import ThemeManager
 
 
+class _DataViewerItemDelegate(QStyledItemDelegate):
+    """Paint lightweight virtual column selection without selecting every cell."""
+
+    def __init__(self, parent=None, owner=None):
+        super().__init__(parent)
+        self._owner = owner
+
+    def paint(self, painter, option, index):
+        owner = self._owner
+        if owner is not None and index.column() in owner._selected_header_columns:
+            opt = QStyleOptionViewItem(option)
+            self.initStyleOption(opt, index)
+            color = QColor(app_config.get_theme_color("accent_light"))
+            opt.backgroundBrush = QBrush(color)
+            opt.state &= ~QStyle.State_Selected
+            style = opt.widget.style() if opt.widget is not None else QApplication.style()
+            painter.save()
+            painter.fillRect(opt.rect, color)
+            style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+            painter.restore()
+            return
+        super().paint(painter, option, index)
+
+
 class DataViewerWidget(QWidget):
     """MDI widget for curve table viewing and comparison."""
+
+    workspaceStateChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -50,8 +79,10 @@ class DataViewerWidget(QWidget):
         self._workers = []
         self._curve_entries = []
         self._depth_union = np.array([], dtype=float)
-        self._header_selection_snapshot = None
-        self._header_current_index_snapshot = None
+        self._selected_header_columns = set()
+        self._current_header_column = None
+        self._header_anchor_column = None
+        self._header_selection_active = False
         self._dirty = False
         self._baseline_columns = []
         self._setup_ui()
@@ -64,6 +95,8 @@ class DataViewerWidget(QWidget):
 
         self.table = QTableView()
         self.table.setModel(self.model)
+        self._item_delegate = _DataViewerItemDelegate(self.table, self)
+        self.table.setItemDelegate(self._item_delegate)
         self._header = _DataViewerHeaderView(Qt.Horizontal, self.table, self)
         self.table.setHorizontalHeader(self._header)
         configure_curve_table_view(
@@ -75,6 +108,7 @@ class DataViewerWidget(QWidget):
             on_header_context_menu=self._show_header_context_menu,
         )
         self.table.pressed.connect(self._handle_table_press)
+        self.table.selectionModel().selectionChanged.connect(self._emit_workspace_state_changed)
         self.model.dataChanged.connect(self._on_model_data_changed)
         install_corner_select_all(self.table)
         layout.addWidget(self.table)
@@ -445,10 +479,207 @@ class DataViewerWidget(QWidget):
         for idx in remove_indexes:
             if 0 <= idx < len(self._curve_entries):
                 self._curve_entries.pop(idx)
+        self._clear_header_selection()
         self._rebuild_model()
 
     def copy_selection(self):
+        if self._selected_header_columns:
+            copy_table_selection_to_clipboard(
+                self.table,
+                self.model,
+                selected_columns=sorted(self._selected_header_columns),
+            )
+            return
         copy_table_selection_to_clipboard(self.table, self.model)
+
+    def get_workspace_state(self):
+        """Return a compact, JSON-safe state summary for AI context."""
+        table = {
+            "row_count": self.model.rowCount(),
+            "column_count": self.model.columnCount(),
+            "visible_columns": self._workspace_column_names(),
+        }
+        selected_columns = self._workspace_selected_column_names()
+        if selected_columns:
+            table["selected_columns"] = selected_columns
+        selected_rows = self._workspace_selected_rows()
+        if selected_rows:
+            table["selected_rows"] = selected_rows
+
+        return {
+            "active_window_type": "data_viewer",
+            "depth_range": self._workspace_depth_range(),
+            "curve_count": len(self.model.columns),
+            "selected_curves": self._workspace_curve_names(),
+            "has_unsaved_changes": bool(self._dirty),
+            "table": table,
+        }
+
+    def get_selection_payload(self, max_rows=50, include_stats=True):
+        """Return selected table data for AI tools without reading from disk."""
+        selected_columns = self._workspace_selected_column_indexes()
+        selected_ranges = self._workspace_selected_row_ranges()
+        if not selected_columns:
+            return {"ok": False, "error": "No Data Viewer columns are selected."}
+        if not selected_ranges:
+            return {"ok": False, "error": "No Data Viewer rows are selected."}
+
+        max_rows = max(1, int(max_rows or 50))
+        rows = []
+        total_selected_rows = 0
+        for start, end in selected_ranges:
+            total_selected_rows += end - start + 1
+            for row in range(start, end + 1):
+                if len(rows) >= max_rows:
+                    continue
+                rows.append({
+                    "row": row + 1,
+                    "values": {
+                        self._workspace_column_label(column): self._json_safe_table_value(row, column)
+                        for column in selected_columns
+                    },
+                })
+
+        columns = [self._workspace_column_label(column) for column in selected_columns]
+        payload = {
+            "ok": True,
+            "active_window_type": "data_viewer",
+            "columns": columns,
+            "selected_rows": self._format_workspace_row_ranges((start + 1, end + 1) for start, end in selected_ranges),
+            "total_selected_rows": total_selected_rows,
+            "returned_rows": len(rows),
+            "truncated": total_selected_rows > len(rows),
+            "rows": rows,
+        }
+        if include_stats:
+            payload["stats"] = self._selection_stats(selected_ranges, selected_columns)
+        return payload
+
+    def _workspace_selected_column_indexes(self):
+        columns = set(self._selected_header_columns)
+        selection_model = self.table.selectionModel()
+        if not columns and selection_model is not None:
+            for selection_range in selection_model.selection():
+                for column in range(selection_range.left(), selection_range.right() + 1):
+                    columns.add(column)
+        return sorted(column for column in columns if 0 <= column < self.model.columnCount())
+
+    def _workspace_selected_row_ranges(self):
+        selection_model = self.table.selectionModel()
+        if selection_model is None:
+            return []
+        ranges = []
+        for selection_range in selection_model.selection():
+            ranges.append((selection_range.top(), selection_range.bottom()))
+        return self._merge_row_ranges(ranges)
+
+    @staticmethod
+    def _merge_row_ranges(ranges):
+        normalized = sorted((min(start, end), max(start, end)) for start, end in ranges)
+        merged = []
+        for start, end in normalized:
+            if not merged or start > merged[-1][1] + 1:
+                merged.append([start, end])
+            else:
+                merged[-1][1] = max(merged[-1][1], end)
+        return [(start, end) for start, end in merged]
+
+    def _workspace_column_label(self, column):
+        if column == 0:
+            return "Row"
+        if column == 1:
+            return "Depth"
+        if 2 <= column < self.model.columnCount():
+            value = self.model.headerData(column, Qt.Horizontal, Qt.DisplayRole)
+            return str(value or f"Column {column + 1}")
+        return f"Column {column + 1}"
+
+    def _json_safe_table_value(self, row, column):
+        value = self.model.data(self.model.index(row, column), Qt.EditRole if column > 1 else Qt.DisplayRole)
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return str(value)
+
+    def _selection_stats(self, selected_ranges, selected_columns):
+        stats = {}
+        for column in selected_columns:
+            label = self._workspace_column_label(column)
+            values = []
+            for start, end in selected_ranges:
+                for row in range(start, end + 1):
+                    value = self._json_safe_table_value(row, column)
+                    if isinstance(value, (int, float)):
+                        values.append(float(value))
+            if values:
+                arr = np.asarray(values, dtype=float)
+                stats[label] = {
+                    "count": int(arr.size),
+                    "min": float(np.nanmin(arr)),
+                    "max": float(np.nanmax(arr)),
+                    "mean": float(np.nanmean(arr)),
+                }
+        return stats
+
+    def _workspace_column_names(self):
+        names = ["Row", "Depth"]
+        for column in self.model.columns:
+            names.append(str(column.get("label") or column.get("tooltip") or "Curve").strip())
+        return names
+
+    def _workspace_curve_names(self):
+        names = []
+        for column in self.model.columns:
+            name = str(column.get("label") or "").strip()
+            if name and name not in names:
+                names.append(name)
+        return names
+
+    def _workspace_selected_column_names(self):
+        columns = set(self._selected_header_columns)
+        selection_model = self.table.selectionModel()
+        if not columns and selection_model is not None:
+            for selection_range in selection_model.selection():
+                for column in range(selection_range.left(), selection_range.right() + 1):
+                    columns.add(column)
+        return [
+            name
+            for column, name in enumerate(self._workspace_column_names())
+            if column in columns
+        ]
+
+    def _workspace_selected_rows(self):
+        selection_model = self.table.selectionModel()
+        if selection_model is None:
+            return []
+        ranges = []
+        for selection_range in selection_model.selection():
+            ranges.append((selection_range.top() + 1, selection_range.bottom() + 1))
+        if not ranges:
+            return []
+        return self._format_workspace_row_ranges(ranges)
+
+    @staticmethod
+    def _format_workspace_row_ranges(ranges):
+        normalized = sorted((min(start, end), max(start, end)) for start, end in ranges)
+        merged = []
+        for start, end in normalized:
+            if not merged or start > merged[-1][1] + 1:
+                merged.append([start, end])
+            else:
+                merged[-1][1] = max(merged[-1][1], end)
+        return [
+            str(start) if start == end else f"{start}~{end}"
+            for start, end in merged[:8]
+        ]
+
+    def _workspace_depth_range(self):
+        values = np.asarray(self._depth_union, dtype=float)
+        if values.size == 0:
+            return None
+        return {"min": float(np.nanmin(values)), "max": float(np.nanmax(values))}
 
     def paste_from_clipboard(self):
         text = QApplication.clipboard().text()
@@ -506,36 +737,76 @@ class DataViewerWidget(QWidget):
         return changed
 
     def _selected_curve_column_indexes(self):
-        columns = {index.column() for index in self.table.selectionModel().selectedIndexes()}
+        if self._selected_header_columns:
+            return sorted({column - 2 for column in self._selected_header_columns if column > 1}, reverse=True)
+        selection_model = self.table.selectionModel()
+        if selection_model is None:
+            return []
+        columns = set()
+        for selection_range in selection_model.selection():
+            for column in range(selection_range.left(), selection_range.right() + 1):
+                columns.add(column)
         return sorted({column - 2 for column in columns if column > 1}, reverse=True)
+
+    def _set_header_selection(self, columns, *, current=None, anchor=None):
+        normalized = {column for column in columns if 0 <= column < self.model.columnCount()}
+        self._selected_header_columns = normalized
+        self._current_header_column = current if current in normalized else (max(normalized) if normalized else None)
+        self._header_anchor_column = anchor if anchor is not None else self._current_header_column
+        self._header_selection_active = bool(normalized)
+        selection_model = self.table.selectionModel()
+        if selection_model is not None:
+            selection_model.clearSelection()
+            selection_model.setCurrentIndex(QModelIndex(), QItemSelectionModel.Clear)
+        self.model.set_virtual_selected_columns(normalized, current=self._current_header_column)
+        self.table.viewport().update()
+        self.table.horizontalHeader().viewport().update()
+        self._emit_workspace_state_changed()
+
+    def _clear_header_selection(self):
+        if not self._selected_header_columns and not self._header_selection_active and self._current_header_column is None:
+            return
+        self._selected_header_columns.clear()
+        self._current_header_column = None
+        self._header_anchor_column = None
+        self._header_selection_active = False
+        self.model.clear_virtual_selected_columns()
+        self.table.viewport().update()
+        self.table.horizontalHeader().viewport().update()
+        self._emit_workspace_state_changed()
+
+    def _toggle_header_column(self, section):
+        columns = set(self._selected_header_columns)
+        if section in columns:
+            columns.remove(section)
+        else:
+            columns.add(section)
+        current = section if columns else None
+        anchor = section if columns else None
+        self._set_header_selection(columns, current=current, anchor=anchor)
+
+    def _select_header_column_range(self, section):
+        anchor = self._header_anchor_column if self._header_anchor_column is not None else section
+        start = min(anchor, section)
+        end = max(anchor, section)
+        self._set_header_selection(set(range(start, end + 1)), current=section, anchor=anchor)
+
+    def _ensure_header_column_selected(self, section):
+        if section in self._selected_header_columns:
+            return
+        self._set_header_selection({section}, current=section, anchor=section)
 
     def _select_column_from_header(self, section):
         if section < 0:
             return
-        self.table.selectColumn(section)
+        modifiers = QApplication.keyboardModifiers()
+        if modifiers & Qt.ShiftModifier:
+            self._select_header_column_range(section)
+        elif modifiers & Qt.ControlModifier:
+            self._toggle_header_column(section)
+        else:
+            self._set_header_selection({section}, current=section, anchor=section)
         self.table.setFocus()
-
-    def _capture_selection_snapshot(self):
-        selection_model = self.table.selectionModel()
-        if selection_model is None:
-            self._header_selection_snapshot = None
-            self._header_current_index_snapshot = None
-            return
-        self._header_selection_snapshot = selection_model.selection()
-        self._header_current_index_snapshot = selection_model.currentIndex()
-
-    def _restore_selection_snapshot(self):
-        selection_model = self.table.selectionModel()
-        if selection_model is None:
-            return
-        selection_model.clearSelection()
-        if self._header_selection_snapshot:
-            selection_model.select(self._header_selection_snapshot, selection_model.SelectionFlag.Select)
-        if self._header_current_index_snapshot and self._header_current_index_snapshot.isValid():
-            selection_model.setCurrentIndex(
-                self._header_current_index_snapshot,
-                selection_model.SelectionFlag.NoUpdate,
-            )
 
     def _toggle_header_label(self, section):
         if section < 0:
@@ -545,6 +816,7 @@ class DataViewerWidget(QWidget):
     def _handle_table_press(self, index):
         if not index.isValid():
             return
+        self._clear_header_selection()
         if index.column() == 0:
             self.table.selectRow(index.row())
             self.table.setFocus()
@@ -553,6 +825,10 @@ class DataViewerWidget(QWidget):
         if top_left.column() <= 1:
             return
         self._set_dirty(self._compute_is_dirty())
+        self._emit_workspace_state_changed()
+
+    def _emit_workspace_state_changed(self, *args):
+        self.workspaceStateChanged.emit()
 
     def _compute_is_dirty(self):
         return bool(self._get_modified_column_indexes())
@@ -916,7 +1192,8 @@ class DataViewerWidget(QWidget):
         remove_action = menu.addAction("Remove Selected")
         clear_action = menu.addAction("Clear")
 
-        has_cells = bool(self.table.selectionModel().selectedIndexes())
+        selection_model = self.table.selectionModel()
+        has_cells = bool(self._selected_header_columns) or bool(selection_model and selection_model.hasSelection())
         has_curve_columns = bool(self._selected_curve_column_indexes())
         copy_action.setEnabled(has_cells)
         remove_action.setEnabled(has_curve_columns)
@@ -933,7 +1210,7 @@ class DataViewerWidget(QWidget):
     def _show_header_context_menu(self, pos):
         section = self.table.horizontalHeader().logicalIndexAt(pos)
         if section >= 0:
-            self._select_column_from_header(section)
+            self._ensure_header_column_selected(section)
         mapped = self.table.viewport().mapFromGlobal(self.table.horizontalHeader().mapToGlobal(pos))
         self._show_context_menu(mapped)
 
@@ -998,7 +1275,6 @@ class _DataViewerHeaderView(QHeaderView):
                 return
             section = self.logicalIndexAt(event.position().toPoint())
             if section >= 0 and section == self._pressed_section:
-                self._owner._capture_selection_snapshot()
                 self._pending_section = section
                 self._click_timer.start(max(1, self._HEADER_CLICK_DELAY_MS))
                 self._pressed_section = None
@@ -1019,7 +1295,6 @@ class _DataViewerHeaderView(QHeaderView):
             self._pressed_section = None
             self._suppress_release_selection = True
             if section >= 0:
-                self._owner._restore_selection_snapshot()
                 self._owner._toggle_header_label(section)
                 event.accept()
                 return

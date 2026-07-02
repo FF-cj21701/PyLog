@@ -697,12 +697,40 @@ function updateSendButton() {
                 if (contextType === 'folder') return 'Folder';
                 if (contextType === 'selection') return 'Selection';
                 if (contextType === 'bubbles') return 'Bubbles';
+                if (contextType === 'effective_context') return 'Effective Context';
                 return contextType || 'Unknown';
             };
 
             let html = '';
 
-            if (type === 'bubbles') {
+            if (type === 'effective_context') {
+                html = `
+                    <div class="popover-meta-row">
+                        <span class="popover-meta-label">Category</span>
+                        <span class="popover-meta-value">Effective Prompt Context</span>
+                    </div>
+                    <div class="popover-meta-label" style="margin-top:12px">Sections</div>
+                    <div class="popover-content-preview" style="max-height: 400px; overflow-y: auto; white-space: normal;">
+                `;
+                try {
+                    const summary = JSON.parse(pill.dataset.context || '{}');
+                    const groups = Array.isArray(summary.groups) ? summary.groups : [];
+                    groups.forEach(group => {
+                        const lines = Array.isArray(group.lines) ? group.lines : [];
+                        html += `
+                            <div style="margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid var(--border-color);">
+                                <div style="font-size:12px;"><strong>${escapePopoverHtml(group.title || group.id || 'Context')}</strong></div>
+                                <div style="color:var(--text-secondary); font-size:11px; margin-top:4px; line-height:1.5; white-space:pre-wrap;">
+                                    ${escapePopoverHtml(lines.join('\n') || '-')}
+                                </div>
+                            </div>
+                        `;
+                    });
+                } catch (e) {
+                    html += `<div style="color:var(--error-color)">Failed to parse effective context payload.</div>`;
+                }
+                html += `</div>`;
+            } else if (type === 'bubbles') {
                 html = `
                     <div class="popover-meta-row">
                         <span class="popover-meta-label">Category</span>

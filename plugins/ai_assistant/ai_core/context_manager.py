@@ -162,11 +162,16 @@ class ContextManager:
         self._append_state_line(lines, "depth_range", self._format_range(state.get("depth_range") or plot.get("depth_range")))
         self._append_state_line(lines, "track_count", state.get("track_count") or plot.get("track_count"))
         self._append_state_line(lines, "curve_count", state.get("curve_count") or plot.get("curve_count"))
+        self._append_state_line(lines, "has_unsaved_changes", self._format_bool(state.get("has_unsaved_changes")))
         table = state.get("table") if isinstance(state.get("table"), Mapping) else {}
         self._append_state_line(lines, "table_rows", table.get("row_count"))
         self._append_state_line(lines, "table_columns", table.get("column_count"))
         if table.get("visible_columns"):
             self._append_state_line(lines, "visible_columns", self._format_name_list(table.get("visible_columns")))
+        if table.get("selected_columns"):
+            self._append_state_line(lines, "selected_columns", self._format_name_list(table.get("selected_columns")))
+        if table.get("selected_rows"):
+            self._append_state_line(lines, "selected_rows", self._format_name_list(table.get("selected_rows")))
 
         selected_curves = state.get("selected_curves") or plot.get("selected_curves")
         if selected_curves:

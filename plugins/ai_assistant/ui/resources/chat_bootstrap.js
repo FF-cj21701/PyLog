@@ -177,6 +177,29 @@ const chatContainer = document.getElementById('chat-container');
             }
         }
 
+        function setEffectiveContextInfo(summaryData) {
+            const contextEl = document.getElementById('context-info');
+            const modelEl = document.getElementById('model-display');
+            const summary = summaryData || {};
+            const groups = Array.isArray(summary.groups) ? summary.groups : [];
+            const label = summary.label || (groups.length ? `${groups.length} context section(s)` : '');
+
+            if (!label || groups.length === 0) {
+                contextEl.style.display = 'none';
+                modelEl.style.display = 'block';
+                return;
+            }
+
+            contextEl.dataset.type = 'effective_context';
+            contextEl.dataset.name = label;
+            contextEl.dataset.context = JSON.stringify(summary);
+
+            const iconMarkup = '<svg class="tag-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M8 12h8"></path><path d="M12 8v8"></path></svg>';
+            contextEl.innerHTML = `${iconMarkup}<span>${label}</span>`;
+            contextEl.style.display = 'flex';
+            modelEl.style.display = 'none';
+        }
+
         function setInputEnabled(enabled) {
             input.disabled = !enabled;
             if (enabled) {

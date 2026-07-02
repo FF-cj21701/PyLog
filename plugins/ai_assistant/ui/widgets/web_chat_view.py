@@ -850,6 +850,12 @@ class WebChatView(QWebEngineView):
         js = f"setContextInfo({safe_text});"
         self._run_js(js)
 
+    def set_effective_context_info(self, summary):
+        """Show the effective prompt context summary in the toolbar bubble."""
+        safe_summary = json.dumps(summary or {})
+        js = f"setEffectiveContextInfo({safe_summary});"
+        self._run_js(js)
+
     def append_plan(self, plan_data):
         """兼容旧接口；默认计划展示已迁移到顶部任务计划进度卡。"""
         return

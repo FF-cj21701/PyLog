@@ -3,6 +3,23 @@
 - This changelog now uses bilingual titles and English body text for long-term encoding stability.
 - Some older entries were historically affected by mojibake. Those sections were normalized into readable English summaries while preserving dates and main themes.
 
+## [2026-07-02] - Effective Context Bubble and Data Viewer Selection Tools / 有效上下文气泡与Data Viewer选区工具
+
+- Unified the AI context bubble with the actual prompt context:
+  - `ChatService` now builds an effective context summary from the same runtime context used for prompts
+  - manual context, active workspace state, script state, task plan, recent tool results, and retrieved context are summarized consistently
+  - the toolbar bubble now uses a compact primary label such as `Data Viewer +1` while keeping full details in the popover
+- Fixed the chat send path so selected UI contexts are passed into `ChatService.start_chat(...)` instead of being shown only in the frontend.
+- Added live workspace context refresh for Data Viewer:
+  - table selection, header selection, edits, and active MDI window changes refresh the context bubble without waiting for message send
+  - updates are debounced to avoid excessive refreshes during drag selection
+- Formalized the Data Viewer state API with `get_workspace_state()` and made `WorkspaceStateCollector` prefer the public API before legacy fallbacks.
+- Added `tool_get_active_data_viewer_selection` so the agent can inspect selected Data Viewer rows/columns directly from the current table model:
+  - includes unsaved edits because it reads the active view model rather than database snapshots
+  - returns bounded row previews, selected row ranges, selected columns, truncation metadata, and numeric stats
+- Improved Data Viewer table selection behavior with lightweight virtual header selection, copy support, and stable context summaries for selected columns/rows.
+- Added regression coverage for effective context summaries, toolbar bubble rendering hooks, live Data Viewer context refresh, and active Data Viewer selection data extraction.
+
 ## [2026-07-01] - Plot / Window State Context Section / 绘图窗口状态上下文段
 
 - Added a structured Plot / Window State context section:

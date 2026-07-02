@@ -125,7 +125,7 @@ class MainWindow(QMainWindow):
         self.mdi_area.setTabsClosable(True)
         self.mdi_area.setTabsMovable(True)
         self.setCentralWidget(self.mdi_area)
-        self.mdi_area.subWindowActivated.connect(lambda *_: self._update_workspace_launchpad_visibility())
+        self.mdi_area.subWindowActivated.connect(self._on_mdi_subwindow_activated)
 
         self.workspace_launchpad = WorkspaceLaunchpadWidget(self.mdi_area.viewport())
         self.workspace_launchpad.action_drop_requested.connect(self.handle_launchpad_action_drop)
@@ -1005,6 +1005,7 @@ class MainWindow(QMainWindow):
         self._data_viewer_count += 1
 
         widget = DataViewerWidget()
+        widget.workspaceStateChanged.connect(self._refresh_ai_effective_context_info)
         sub = QMdiSubWindow()
         sub.setWidget(widget)
         sub.setAttribute(Qt.WA_DeleteOnClose)
@@ -1014,7 +1015,17 @@ class MainWindow(QMainWindow):
         self.mdi_area.addSubWindow(sub)
         sub.show()
         self._update_workspace_launchpad_visibility()
+        self._refresh_ai_effective_context_info()
         return widget
+
+    def _on_mdi_subwindow_activated(self, *_args):
+        self._update_workspace_launchpad_visibility()
+        self._refresh_ai_effective_context_info()
+
+    def _refresh_ai_effective_context_info(self):
+        ai_widget = getattr(getattr(self, "_ai_plugin", None), "ai_widget", None)
+        if ai_widget and hasattr(ai_widget, "refresh_effective_context_info"):
+            ai_widget.refresh_effective_context_info()
 
     def new_script_window(self):
         # Counter for unique titles

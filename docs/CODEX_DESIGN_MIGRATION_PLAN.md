@@ -308,6 +308,7 @@ Deliverables:
 - Move `ChatService.build_context_block` logic into it.
 - Add structured well, curve, database, plot/window, script, skill, and history context sections.
 - Add a lightweight workspace-state collector so active MDI plot/Data Viewer state can be summarized without making tools inspect UI widgets directly.
+- Add a compact conversation-summary section for durable goals, decisions, preferences, completed work, and open items without dumping raw chat history.
 
 Acceptance criteria:
 

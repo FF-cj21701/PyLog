@@ -39,6 +39,7 @@ class ContextManager:
             "max_items": MAX_RETRIEVED_CONTEXT_ITEMS,
             "drop_strategy": "relevance",
         },
+        "conversation_summary": {"priority": 70, "max_lines": 10, "drop_strategy": "summarize"},
         "raw_outputs": {"priority": 90, "max_lines": 4, "drop_strategy": "truncate"},
     }
 
@@ -61,6 +62,7 @@ class ContextManager:
         task_plan_lines = []
         tool_result_items = []
         retrieved_context_items = []
+        conversation_summary_lines = []
         for item in context_data:
             if not isinstance(item, Mapping):
                 continue
@@ -78,6 +80,9 @@ class ContextManager:
                 task_plan_lines.extend(self._format_task_plan(task_plan))
             tool_result_items.extend(self._extract_tool_result_items(item))
             retrieved_context_items.extend(self._extract_retrieved_context_items(item))
+            conversation_summary = self._extract_conversation_summary(item)
+            if conversation_summary:
+                conversation_summary_lines.extend(self._format_conversation_summary(conversation_summary))
 
         sections = []
         if selection_lines:
@@ -94,6 +99,8 @@ class ContextManager:
         retrieved_context_lines = self._format_retrieved_context(retrieved_context_items)
         if retrieved_context_lines:
             sections.append(self._make_section("retrieved_context", retrieved_context_lines))
+        if conversation_summary_lines:
+            sections.append(self._make_section("conversation_summary", conversation_summary_lines))
         return sections
 
     def compose_prompt(self, user_text: str, context_data: Optional[Iterable[Mapping[str, Any]]]) -> str:
@@ -241,6 +248,31 @@ class ContextManager:
         if notes:
             line += f" (notes: {self._truncate(notes)})"
         return line
+
+    def _extract_conversation_summary(self, item: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        if isinstance(item.get("conversation_summary"), Mapping):
+            return item.get("conversation_summary")
+        if item.get("type") in {"conversation_summary", "history_summary"}:
+            return item
+        return None
+
+    def _format_conversation_summary(self, summary: Mapping[str, Any]) -> List[str]:
+        lines = ["[Conversation Summary]"]
+        self._append_state_line(lines, "goal", self._first_text(summary.get("goal"), summary.get("current_goal")))
+        for key, label in (
+            ("decisions", "decisions"),
+            ("completed", "completed"),
+            ("user_preferences", "user_preferences"),
+            ("open_items", "open_items"),
+            ("notes", "notes"),
+        ):
+            value = summary.get(key)
+            if value:
+                self._append_state_line(lines, label, self._format_name_list(value, max_items=6))
+        updated_at = summary.get("updated_at")
+        if updated_at:
+            self._append_state_line(lines, "updated_at", updated_at)
+        return lines if len(lines) > 1 else []
 
     def _extract_tool_result_items(self, item: Mapping[str, Any]) -> List[Mapping[str, Any]]:
         item_type = item.get("type")

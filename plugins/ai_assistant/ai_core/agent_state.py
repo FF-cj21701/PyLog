@@ -35,6 +35,7 @@ class AgentState:
     last_error: Optional[str] = None
     failure_count: int = 0
     mode: str = "chat"
+    conversation_summary: Dict[str, Any] = field(default_factory=dict)
     dirty: bool = False
     verification_required: bool = False
     finish_requested: bool = False
@@ -337,6 +338,25 @@ class AgentState:
     def record_error(self, message: str) -> None:
         self.last_error = message
         self.failure_count += 1
+
+    def set_conversation_summary(self, summary: Optional[Dict[str, Any]]) -> None:
+        """Replace the compact long-lived conversation summary."""
+        self.conversation_summary = dict(summary or {})
+
+    def update_conversation_summary(self, **fields: Any) -> None:
+        """Merge summary fields while preserving existing list-style notes."""
+        for key, value in fields.items():
+            if value is None or value == "":
+                continue
+            if isinstance(value, list):
+                existing = self.conversation_summary.get(key)
+                merged = list(existing) if isinstance(existing, list) else []
+                for item in value:
+                    if item not in merged:
+                        merged.append(item)
+                self.conversation_summary[key] = merged
+                continue
+            self.conversation_summary[key] = value
 
     def can_finish(self) -> bool:
         """Return whether the task may legally terminate now."""

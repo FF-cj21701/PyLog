@@ -175,6 +175,42 @@ class ContextManagerTests(unittest.TestCase):
         self.assertIn("- current_step_id: implement", prompt)
         self.assertIn("[in_progress current] implement: Make the code change", prompt)
 
+    def test_chat_service_injects_conversation_summary(self):
+        service = ChatService.__new__(ChatService)
+        service.context_manager = ContextManager()
+        service.agent_state = AgentState()
+        service.agent_state.set_conversation_summary({
+            "goal": "Migrate Codex-style runtime into PyLog",
+            "decisions": ["Do not use Codex CLI as a backend"],
+            "open_items": ["Finish conversation summary section"],
+        })
+
+        prompt = service.compose_prompt("continue", [])
+
+        self.assertIn("[Conversation Summary]", prompt)
+        self.assertIn("- goal: Migrate Codex-style runtime into PyLog", prompt)
+        self.assertIn("- decisions: Do not use Codex CLI as a backend", prompt)
+        self.assertIn("- open_items: Finish conversation summary section", prompt)
+        self.assertIn("[User Message]\ncontinue", prompt)
+
+    def test_agent_state_conversation_summary_merges_and_survives_task_reset(self):
+        state = AgentState()
+        state.update_conversation_summary(
+            goal="Upgrade PyLog agent",
+            decisions=["Local-only runtime"],
+            open_items=["Conversation summary"],
+        )
+        state.update_conversation_summary(
+            decisions=["Local-only runtime", "Use structured sections"],
+            completed=["ContextManager boundary"],
+        )
+
+        state.start_task("new task")
+
+        self.assertEqual(state.conversation_summary["goal"], "Upgrade PyLog agent")
+        self.assertEqual(state.conversation_summary["decisions"], ["Local-only runtime", "Use structured sections"])
+        self.assertEqual(state.conversation_summary["completed"], ["ContextManager boundary"])
+
     def test_active_script_state_section_formats_editor_draft_state(self):
         context = ContextManager().build_context_block([
             {
@@ -662,6 +698,39 @@ class ContextManagerTests(unittest.TestCase):
         self.assertIn("tool_search_code; path: plugins/ai_assistant/ai_core/context_manager.py:42", context)
         self.assertIn("snippet: def build_sections(self, context_data):", context)
 
+    def test_conversation_summary_section_formats_long_lived_context(self):
+        context = ContextManager().build_context_block([
+            {
+                "type": "conversation_summary",
+                "goal": "Migrate Codex-style agent design into PyLog",
+                "decisions": ["No Codex CLI backend", "Use local-only capabilities"],
+                "completed": ["Active Script State", "Retrieved Context"],
+                "user_preferences": ["Use English for docs/comments"],
+                "open_items": ["Skills Summary", "Conversation Summary"],
+            }
+        ])
+
+        self.assertIn("[Conversation Summary]", context)
+        self.assertIn("- goal: Migrate Codex-style agent design into PyLog", context)
+        self.assertIn("- decisions: No Codex CLI backend, Use local-only capabilities", context)
+        self.assertIn("- completed: Active Script State, Retrieved Context", context)
+        self.assertIn("- user_preferences: Use English for docs/comments", context)
+        self.assertIn("- open_items: Skills Summary, Conversation Summary", context)
+
+    def test_conversation_summary_can_be_extracted_from_nested_payload(self):
+        context = ContextManager().build_context_block([
+            {
+                "conversation_summary": {
+                    "goal": "Keep agent context compact",
+                    "notes": ["Summarize history instead of dumping raw chat"],
+                }
+            }
+        ])
+
+        self.assertIn("[Conversation Summary]", context)
+        self.assertIn("- goal: Keep agent context compact", context)
+        self.assertIn("- notes: Summarize history instead of dumping raw chat", context)
+
     def test_retrieved_context_budget_keeps_high_score_items_and_reports_omitted(self):
         items = [
             {"source": "search", "path": f"file_{index}.py", "score": float(index), "summary": f"hit {index}"}
@@ -700,6 +769,7 @@ class ContextManagerTests(unittest.TestCase):
             {"type": "task_plan", "steps": [{"id": "verify", "title": "Verify", "status": "pending"}]},
             {"type": "tool_result", "tool_name": "tool_read_file", "ok": True, "message": "read"},
             {"type": "search_result", "path": "demo.py", "summary": "found demo"},
+            {"type": "conversation_summary", "goal": "Keep long-lived context compact"},
         ])
         priorities = {section.title: section.priority for section in sections}
 
@@ -718,6 +788,10 @@ class ContextManagerTests(unittest.TestCase):
             ContextManager.SECTION_POLICIES["recent_tool_results"]["priority"],
         )
         self.assertEqual(priorities["retrieved_context"], ContextManager.SECTION_POLICIES["retrieved_context"]["priority"])
+        self.assertEqual(
+            priorities["conversation_summary"],
+            ContextManager.SECTION_POLICIES["conversation_summary"]["priority"],
+        )
 
     def test_section_budget_preserves_high_priority_sections_before_truncating_recent_results(self):
         items = [{"tool_name": f"tool_{index}", "ok": True, "message": str(index)} for index in range(10)]

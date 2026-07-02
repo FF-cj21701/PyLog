@@ -247,6 +247,13 @@ class ChatService(QObject):
         if not agent_state:
             return merged
 
+        conversation_summary = getattr(agent_state, "conversation_summary", None)
+        if conversation_summary:
+            merged.append({
+                "type": "conversation_summary",
+                "conversation_summary": conversation_summary,
+            })
+
         current_plan = list(getattr(agent_state, "current_plan", []) or [])
         if current_plan:
             merged.append({

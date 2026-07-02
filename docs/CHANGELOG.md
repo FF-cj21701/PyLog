@@ -5,6 +5,11 @@
 
 ## [2026-07-02] - Effective Context Bubble and Data Viewer Selection Tools / 有效上下文气泡与Data Viewer选区工具
 
+- Added the first structured Conversation Summary context section:
+  - `AgentState` can store and merge long-lived conversation summary fields
+  - `ChatService` injects the summary automatically before each prompt
+  - `ContextManager` formats goal, decisions, completed work, user preferences, open items, notes, and update time with a lower-priority budget
+  - summaries survive `AgentState.start_task(...)` so a thread can retain durable decisions across task resets
 - Unified the AI context bubble with the actual prompt context:
   - `ChatService` now builds an effective context summary from the same runtime context used for prompts
   - manual context, active workspace state, script state, task plan, recent tool results, and retrieved context are summarized consistently

@@ -5,6 +5,7 @@ import sys
 import tempfile
 import math
 import sqlite3
+import time
 import numpy as np
 import unittest
 from unittest.mock import patch
@@ -2959,6 +2960,107 @@ class PlotDisplayRangeTests(unittest.TestCase):
 
 
 class RunPythonFileBehaviorTests(unittest.TestCase):
+    def test_script_job_manager_runs_short_script(self):
+        from plugins.ai_assistant.runtime.script_job_manager import ScriptJobManager
+
+        manager = ScriptJobManager(project_root=PROJECT_ROOT)
+
+        result = manager.run_script(code="print('hello from job')", execution_mode="quick", timeout_seconds=10)
+
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result.get("status"), "completed")
+        self.assertIn("hello from job", result.get("stdout", ""))
+        self.assertEqual(result.get("exit_code"), 0)
+        self.assertIn("duration_seconds", result)
+
+    def test_script_job_manager_times_out_stuck_script(self):
+        from plugins.ai_assistant.runtime.script_job_manager import ScriptJobManager
+
+        manager = ScriptJobManager(project_root=PROJECT_ROOT)
+
+        result = manager.run_script(code="while True:\n    pass\n", execution_mode="quick", timeout_seconds=1)
+
+        self.assertFalse(result.get("ok"), result)
+        self.assertEqual(result.get("status"), "timed_out")
+        self.assertTrue(result.get("timed_out"))
+        self.assertEqual(result.get("error"), "timeout")
+
+    def test_script_job_manager_background_job_can_be_queried(self):
+        from plugins.ai_assistant.runtime.script_job_manager import ScriptJobManager
+
+        manager = ScriptJobManager(project_root=PROJECT_ROOT)
+
+        result = manager.run_script(
+            code="import time\nprint('started')\ntime.sleep(0.2)\nprint('finished')",
+            execution_mode="background",
+            timeout_seconds=10,
+        )
+        self.assertEqual(result.get("status"), "running")
+        job_id = result.get("job_id")
+
+        deadline = time.time() + 5
+        status = result
+        while time.time() < deadline:
+            status = manager.get_job(job_id)
+            if status.get("status") != "running":
+                break
+            time.sleep(0.05)
+
+        self.assertTrue(status.get("ok"), status)
+        self.assertEqual(status.get("status"), "completed")
+        self.assertIn("finished", status.get("stdout", ""))
+
+    def test_script_job_manager_can_cancel_background_job(self):
+        from plugins.ai_assistant.runtime.script_job_manager import ScriptJobManager
+
+        manager = ScriptJobManager(project_root=PROJECT_ROOT)
+
+        result = manager.run_script(
+            code="import time\nwhile True:\n    time.sleep(1)\n",
+            execution_mode="background",
+            timeout_seconds=30,
+        )
+        stopped = manager.stop_job(result.get("job_id"))
+
+        self.assertFalse(stopped.get("ok"), stopped)
+        self.assertTrue(stopped.get("cancelled"))
+        self.assertEqual(stopped.get("status"), "cancelled")
+
+    def test_script_job_manager_times_out_background_job_on_query(self):
+        from plugins.ai_assistant.runtime.script_job_manager import ScriptJobManager
+
+        manager = ScriptJobManager(project_root=PROJECT_ROOT)
+
+        result = manager.run_script(
+            code="import time\nwhile True:\n    time.sleep(1)\n",
+            execution_mode="background",
+            timeout_seconds=1,
+        )
+        time.sleep(1.2)
+        status = manager.get_job(result.get("job_id"))
+
+        self.assertFalse(status.get("ok"), status)
+        self.assertTrue(status.get("timed_out"))
+        self.assertEqual(status.get("status"), "timed_out")
+
+    def test_script_runner_context_exposes_db_manager(self):
+        from plugins.ai_assistant.runtime.script_job_manager import ScriptJobManager
+
+        manager = ScriptJobManager(project_root=PROJECT_ROOT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "demo.db")
+            sqlite3.connect(db_path).close()
+
+            result = manager.run_script(
+                code="print(DBManager(db_path, ensure_schema=False).db_path)",
+                db_path=db_path,
+                execution_mode="quick",
+                timeout_seconds=10,
+            )
+
+        self.assertTrue(result.get("ok"), result)
+        self.assertIn("demo.db", result.get("stdout", ""))
+
     def test_run_detached_command_sets_utf8_python_env(self):
         from plugins.ai_assistant.tools.verify_tool import _run_detached_command
 

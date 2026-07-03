@@ -27,6 +27,14 @@ except ImportError:
         open_agent_page = None
 
 try:
+    from ..runtime.script_job_manager import get_script_job_manager
+except ImportError:
+    try:
+        from plugins.ai_assistant.runtime.script_job_manager import get_script_job_manager
+    except ImportError:
+        get_script_job_manager = None
+
+try:
     from scripts.ui.widgets.html_preview_widget import HtmlPreviewWidget, is_html_previewable
 except ImportError:
     HtmlPreviewWidget = None
@@ -485,6 +493,11 @@ class ToolExecutor(QObject):
                 editor_id = code.get("editor_id")
                 raw_code = code.get("code")
                 script_path = code.get("script_path") or script_path
+                execution_mode = code.get("execution_mode") or "quick"
+                timeout_seconds = code.get("timeout_seconds")
+            else:
+                execution_mode = "quick"
+                timeout_seconds = None
 
             if raw_code:
                 exec_code = raw_code
@@ -522,6 +535,40 @@ class ToolExecutor(QObject):
             
             if not exec_code:
                 result = {"error": "No active script code or path to run"}
+            elif execution_mode != "legacy_in_process":
+                if not get_script_job_manager:
+                    result = {"ok": False, "error": "ScriptJobManager is unavailable"}
+                else:
+                    db_path = ""
+                    wells = []
+                    if self.main_window:
+                        if hasattr(self.main_window, "db_path") and self.main_window.db_path:
+                            db_path = self.main_window.db_path
+                        elif hasattr(self.main_window, "db") and self.main_window.db and hasattr(self.main_window.db, "db_path"):
+                            db_path = self.main_window.db.db_path
+                        if hasattr(self.main_window, "get_all_well_info"):
+                            try:
+                                wells = self.main_window.get_all_well_info()
+                            except Exception:
+                                wells = []
+                    manager = get_script_job_manager(PathResolver.get_project_root() if PathResolver else None)
+                    result = manager.run_script(
+                        code=exec_code,
+                        script_path=script_path,
+                        db_path=db_path,
+                        wells=wells,
+                        execution_mode=execution_mode,
+                        timeout_seconds=timeout_seconds,
+                    )
+                    output = result.get("stdout") or result.get("terminal") or ""
+                    hist_header = f">>> [Run Script: {script_path if script_path else 'Direct Code' if code else 'MDI'}]\n"
+                    self.terminal_history.append(f"{hist_header}{output}")
+                    if len(self.terminal_history) > 100:
+                        self.terminal_history = self.terminal_history[-100:]
+                    result.setdefault("executed", True)
+                    result.setdefault("display_type", "terminal")
+                    result.setdefault("terminal_mode", "python")
+                    result.setdefault("terminal", (result.get("stdout") or result.get("stderr") or "").strip() or result.get("summary"))
             else:
                 # Inject current db_path state to avoid main-window state drift.
                 if self.main_window:

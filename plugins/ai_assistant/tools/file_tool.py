@@ -54,6 +54,14 @@ try:
 except ImportError:
     is_html_previewable = None
 
+try:
+    from ..runtime.script_job_manager import get_script_job_manager
+except ImportError:
+    try:
+        from plugins.ai_assistant.runtime.script_job_manager import get_script_job_manager
+    except ImportError:
+        get_script_job_manager = None
+
 
 def _normalize_document_path(filepath):
     if filepath is None:
@@ -659,6 +667,16 @@ class RunScriptTool(BaseTool):
                 "type": "string",
                 "description": "Optional: editor id to run from an open script tab",
                 "nullable": True
+            },
+            "execution_mode": {
+                "type": "string",
+                "description": "Execution mode: quick, background, long, or legacy_in_process. Defaults to quick.",
+                "nullable": True
+            },
+            "timeout_seconds": {
+                "type": "integer",
+                "description": "Optional timeout for quick/long execution.",
+                "nullable": True
             }
         }, metadata={
             "argument_rules": [
@@ -675,13 +693,15 @@ class RunScriptTool(BaseTool):
                 "run python code",
                 "run editor code",
                 "script execution",
+                "background script",
+                "long running script",
             ],
-            "usage_hint": "Provide at least one of raw code, script_path, or editor_id so the runtime knows what to execute.",
+            "usage_hint": "Provide code, script_path, or editor_id. Defaults to quick background-process execution; use background for long tasks and tool_get_script_job/tool_stop_script to monitor or cancel.",
         })
         self.main_window = main_window
         self.tool_executor = tool_executor
 
-    def execute(self, code=None, script_path=None, editor_id=None):
+    def execute(self, code=None, script_path=None, editor_id=None, execution_mode=None, timeout_seconds=None):
         if not self.main_window or not self.tool_executor:
             return {"error": "no main window"}
 
@@ -698,12 +718,73 @@ class RunScriptTool(BaseTool):
                 loop.quit()
 
         self.tool_executor.tool_executed.connect(on_tool_executed)
-        payload = {"code": code, "editor_id": editor_id, "script_path": script_path}
+        payload = {
+            "code": code,
+            "editor_id": editor_id,
+            "script_path": script_path,
+            "execution_mode": execution_mode or "quick",
+            "timeout_seconds": timeout_seconds,
+        }
         self.tool_executor.execute_run_script.emit(payload, script_path)
 
         loop.exec()
 
         return _attach_script_state(result, self.tool_executor, editor_id=editor_id or result.get("editor_id"), script_path=script_path)
+
+
+@register_tool
+class GetScriptJobTool(BaseTool):
+    def __init__(self, main_window=None, tool_executor=None):
+        super().__init__(
+            "tool_get_script_job",
+            "Inspect a background script job by job_id and return its latest status and output.",
+            {
+                "job_id": {
+                    "type": "string",
+                    "description": "Script job id returned by tool_run_script.",
+                }
+            },
+            metadata={
+                "required_args": ["job_id"],
+                "capability_tags": ["script_execution", "job_status"],
+                "domain_tags": ["script"],
+                "keywords": ["script job", "check script", "background script status", "get script output"],
+                "usage_hint": "Use after tool_run_script(execution_mode='background') to inspect completion, stdout, stderr, or errors.",
+            },
+        )
+
+    def execute(self, job_id=None):
+        if not get_script_job_manager:
+            return {"ok": False, "error": "ScriptJobManager is unavailable"}
+        return get_script_job_manager(PathResolver.get_project_root() if PathResolver else None).get_job(job_id)
+
+
+@register_tool
+class StopScriptTool(BaseTool):
+    def __init__(self, main_window=None, tool_executor=None):
+        super().__init__(
+            "tool_stop_script",
+            "Stop a running background script job by job_id.",
+            {
+                "job_id": {
+                    "type": "string",
+                    "description": "Script job id returned by tool_run_script.",
+                }
+            },
+            metadata={
+                "side_effect_level": "execution",
+                "required_args": ["job_id"],
+                "capability_tags": ["script_execution", "job_control"],
+                "domain_tags": ["script"],
+                "keywords": ["stop script", "cancel script", "kill script job", "background script"],
+                "usage_hint": "Use when a background script is no longer needed or appears stuck.",
+            },
+        )
+
+    def execute(self, job_id=None):
+        if not get_script_job_manager:
+            return {"ok": False, "error": "ScriptJobManager is unavailable"}
+        return get_script_job_manager(PathResolver.get_project_root() if PathResolver else None).stop_job(job_id)
 
 @register_tool
 class SaveScriptTool(BaseTool):

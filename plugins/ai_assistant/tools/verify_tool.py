@@ -6,8 +6,6 @@ import sys
 import importlib
 from tempfile import NamedTemporaryFile
 from pathlib import Path
-from PySide6.QtCore import QEventLoop
-import json
 
 try:
     import tomllib
@@ -35,6 +33,14 @@ except ImportError:
             PathResolver = importlib.import_module("paths").PathResolver
         except ImportError:
             PathResolver = None
+
+try:
+    from ..runtime.script_job_manager import get_script_job_manager
+except ImportError:
+    try:
+        from plugins.ai_assistant.runtime.script_job_manager import get_script_job_manager
+    except ImportError:
+        get_script_job_manager = None
 
 try:
     from ..ai_core.shell_executor import ControlledShellExecutor
@@ -438,7 +444,7 @@ class RunPythonFileTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
             "tool_run_python_file",
-            "Run a Python file with the current Python interpreter and capture structured output. For PyLog scripts (plots, analysis), it will run in-process to ensure UI visibility.",
+            "Run a Python file with the current Python interpreter and capture structured output. PyLog scripts run in a managed child process by default so they can time out or be cancelled.",
             {
                 "filepath": {
                     "type": "string",
@@ -466,7 +472,7 @@ class RunPythonFileTool(BaseTool):
                     "python execution",
                     "verify script output",
                 ],
-                "usage_hint": "Use to execute a Python file and capture structured verification output. PyLog GUI scripts will draw within the app.",
+                "usage_hint": "Use to execute a Python file and capture structured verification output. PyLog scripts run out-of-process; use plot-spec tools for UI plotting.",
             }
         )
         self.main_window = main_window
@@ -479,48 +485,22 @@ class RunPythonFileTool(BaseTool):
         target = _resolve_path(filepath)
         normalized = _normalize_relative_path(target)
         
-        # Check if this is a PyLog script that should run in-process for UI interaction
-        if _is_script_target(normalized) and self.tool_executor:
-            loop = QEventLoop()
-            result = {"error": "In-process execution failed"}
-
-            def on_tool_executed(result_str):
-                nonlocal result
-                try:
-                    result = json.loads(result_str)
-                except Exception as e:
-                    result = {"error": f"Failed to parse in-process result: {e}"}
-                finally:
-                    loop.quit()
-
-            try:
-                self.tool_executor.tool_executed.connect(on_tool_executed)
-                payload = {"script_path": target}
-                self.tool_executor.execute_run_script.emit(payload, target)
-                loop.exec()
-            finally:
-                try:
-                    self.tool_executor.tool_executed.disconnect(on_tool_executed)
-                except Exception:
-                    pass
-
-            # Map in-process result to verification format
-            if result.get("ok"):
-                return {
-                    "ok": True,
-                    "stdout": result.get("terminal", ""),
-                    "stderr": "",
-                    "summary": f"PyLog script executed successfully in-process: {normalized}",
-                    "strategy": "in_process"
-                }
-            else:
-                return {
-                    "ok": False,
-                    "stdout": result.get("terminal", ""),
-                    "stderr": result.get("error", "Unknown error"),
-                    "summary": f"PyLog script execution failed in-process: {normalized}",
-                    "strategy": "in_process"
-                }
+        if _is_script_target(normalized) and get_script_job_manager:
+            manager = get_script_job_manager(_project_root())
+            result = manager.run_script(
+                script_path=target,
+                cwd=cwd or _project_root(),
+                execution_mode="quick",
+                timeout_seconds=60,
+            )
+            result["target_type"] = "script"
+            result["strategy"] = "managed_child_process"
+            result["summary"] = (
+                f"PyLog script executed successfully in managed child process: {normalized}"
+                if result.get("ok")
+                else f"PyLog script execution failed in managed child process: {normalized}"
+            )
+            return result
 
         # Original out-of-process execution for non-PyLog scripts or when no executor is available
         if _looks_like_interactive_plot_script(target):

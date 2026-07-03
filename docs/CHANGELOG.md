@@ -5,6 +5,12 @@
 
 ## [2026-07-02] - Effective Context Bubble and Data Viewer Selection Tools / 有效上下文气泡与Data Viewer选区工具
 
+- Added the first managed background script execution boundary:
+  - `tool_run_script` now defaults to running scripts in a managed child process instead of direct main-thread `exec(...)`
+  - script jobs return structured `job_id`, status, stdout/stderr, duration, timeout, and cancellation fields
+  - new `tool_get_script_job` and `tool_stop_script` tools can inspect or cancel background script jobs
+  - PyLog script execution through `tool_run_python_file` now uses the managed child process path for script targets
+  - the legacy in-process script path remains available only through `execution_mode="legacy_in_process"`
 - Completed Phase 7 verification-loop hardening:
   - successful verification now records the verified target
   - finish blockers remain active when a successful verification does not cover all modified files

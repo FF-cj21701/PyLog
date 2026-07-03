@@ -159,6 +159,28 @@ class ContextManagerTests(unittest.TestCase):
         self.assertIn("[Active Script State]", prompt)
         self.assertIn("- tool_verify_target: failed; Verification failed; error: missing import", prompt)
 
+    def test_chat_service_injects_verification_repair_context_after_failure(self):
+        service = ChatService.__new__(ChatService)
+        service.context_manager = ContextManager()
+        service.agent_state = AgentState()
+        service.verification_coordinator = VerificationCoordinator()
+        service.agent_state.mark_file_modified("plugins/ai_assistant/ai_core/policy.py")
+        service.agent_state.record_verification({
+            "ok": False,
+            "tool_name": "tool_verify_target",
+            "summary": "Verification failed",
+            "error": "missing import",
+        }, target="plugins/ai_assistant/ai_core/policy.py")
+
+        prompt = service.compose_prompt("continue", [])
+
+        self.assertIn("[Verification Repair]", prompt)
+        self.assertLess(prompt.index("[Verification Repair]"), prompt.index("[Recent Tool Results]"))
+        self.assertIn("- status: failed", prompt)
+        self.assertIn("- modified_files: plugins/ai_assistant/ai_core/policy.py", prompt)
+        self.assertIn("- recommended_tool: tool_verify_target", prompt)
+        self.assertIn("- tool_verify_target: failed; Verification failed; error: missing import", prompt)
+
     def test_chat_service_injects_current_task_plan(self):
         service = ChatService.__new__(ChatService)
         service.context_manager = ContextManager()
@@ -1733,6 +1755,48 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
         self.assertTrue(self.state.verification_required)
         self.assertFalse(self.state.can_finish())
         self.assertFalse(self.state.last_verification["covers_modified_files"])
+
+    def test_repair_guidance_describes_incomplete_verification_coverage(self):
+        verify_tool = DummyTool(
+            name="tool_verify_target",
+            side_effect_level="execution",
+            is_verification_tool=True,
+        )
+        self.state.mark_file_modified("scripts/example.py")
+        self.state.mark_file_modified("scripts/helper.py")
+
+        self.policy.after_tool_call(
+            self.state,
+            verify_tool.name,
+            {"filepath": "scripts/example.py"},
+            {"ok": True, "summary": "verified one file"},
+            tool=verify_tool,
+        )
+
+        repair = self.coordinator.get_repair_guidance(self.state)
+
+        self.assertIsNotNone(repair)
+        self.assertEqual(repair["status"], "coverage_incomplete")
+        self.assertEqual(repair["failed_tool"], "last_verification")
+        self.assertIn("scripts/helper.py", repair["modified_files"])
+        self.assertIn("project-level verification", repair["recommended_action"])
+
+    def test_repair_guidance_describes_failed_verification(self):
+        self.state.mark_file_modified("plugins/ai_assistant/ai_core/policy.py")
+        self.state.record_verification({
+            "ok": False,
+            "tool_name": "tool_verify_target",
+            "summary": "Verification failed",
+            "error": "SyntaxError",
+        }, target="plugins/ai_assistant/ai_core/policy.py")
+
+        repair = self.coordinator.get_repair_guidance(self.state)
+
+        self.assertIsNotNone(repair)
+        self.assertEqual(repair["status"], "failed")
+        self.assertEqual(repair["failed_tool"], "tool_verify_target")
+        self.assertEqual(repair["recommended_tool"], "tool_verify_target")
+        self.assertIn("patch the relevant modified file", repair["recommended_action"])
 
     def test_read_tool_marks_file_as_read_even_when_tool_object_is_present(self):
         read_tool = DummyTool(

@@ -11,6 +11,7 @@
   - finish-block messages explain when the last successful verification targeted the wrong file or scope
   - automatic verification recommendations are now structured by change category, including script, UI/template, Python source, and multi-file project-scope changes
   - `tool_run_test_command` accepts focused pytest arguments such as `pytest tests/test_chat_ui_template_regressions.py -q`
+  - failed or incomplete verification now injects a `[Verification Repair]` context section with the failed tool, target, modified files, and recommended next verification step
 - Moved skill inventory from always-embedded system prompt content into a structured Skills Summary context section:
   - `SkillService` now exposes structured enabled-skill summaries
   - `ChatService` injects enabled skills and disabled-skill state through runtime context

@@ -273,6 +273,10 @@ class ChatService(QObject):
                 "plan_source": getattr(agent_state, "current_plan_source", None),
             })
 
+        verification_repair = self._collect_verification_repair_context(agent_state)
+        if verification_repair:
+            merged.append(verification_repair)
+
         tool_steps = list(getattr(agent_state, "tool_steps", []) or [])
         if tool_steps:
             merged.append({
@@ -289,6 +293,15 @@ class ChatService(QObject):
             })
 
         return merged
+
+    def _collect_verification_repair_context(self, agent_state):
+        coordinator = getattr(self, "verification_coordinator", None)
+        if not coordinator:
+            return None
+        try:
+            return coordinator.get_repair_guidance(agent_state)
+        except Exception:
+            return None
 
     def _collect_workspace_state(self):
         collector = getattr(self, "workspace_state_collector", None)

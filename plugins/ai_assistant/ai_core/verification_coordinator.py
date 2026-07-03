@@ -105,6 +105,55 @@ class VerificationCoordinator:
             "reason": strategy.get("reason") or "auto-verify modified project target before finish",
         }
 
+    def get_repair_guidance(self, state) -> Optional[Dict[str, object]]:
+        """Describe the next repair step after a failed or incomplete verification."""
+        if not state:
+            return None
+        last_verification = getattr(state, "last_verification", None) or {}
+        if not last_verification:
+            return None
+
+        failed = last_verification.get("ok") is False
+        incomplete_coverage = (
+            last_verification.get("ok") is True
+            and last_verification.get("covers_modified_files") is False
+        )
+        if not failed and not incomplete_coverage:
+            return None
+
+        strategy = self.get_verification_strategy(state)
+        modified_files = [path.replace("\\", "/") for path in sorted(getattr(state, "files_modified", set()))]
+        failed_tool = last_verification.get("tool_name") or last_verification.get("tool")
+        if not failed_tool or failed_tool == "unknown_tool":
+            failed_tool = "last_verification"
+        target = last_verification.get("target") or last_verification.get("filepath") or last_verification.get("file_path")
+        summary = last_verification.get("summary") or last_verification.get("message")
+        error = last_verification.get("error") or last_verification.get("stderr")
+
+        if incomplete_coverage:
+            action = (
+                "The last verification passed but did not cover every modified file. "
+                "Run project-level verification or verify the full modified-file scope before finishing."
+            )
+        else:
+            action = (
+                "Inspect the failed verification output, patch the relevant modified file(s), "
+                "then rerun the recommended verification before finishing."
+            )
+
+        return {
+            "type": "verification_repair",
+            "status": "coverage_incomplete" if incomplete_coverage else "failed",
+            "failed_tool": failed_tool,
+            "target": target,
+            "summary": summary,
+            "error": error,
+            "modified_files": modified_files,
+            "recommended_tool": strategy.get("tool_name"),
+            "recommended_args": strategy.get("args") or {},
+            "recommended_action": action,
+        }
+
     def _project_strategy(self, *, category: str, modified_files: List[str], reason: str) -> Dict[str, object]:
         files = ", ".join(modified_files) if modified_files else "modified files"
         return {

@@ -25,6 +25,7 @@ class ContextManager:
     SECTION_POLICIES = {
         "selection": {"priority": 10, "max_lines": None, "drop_strategy": "keep"},
         "active_script_state": {"priority": 20, "max_lines": 12, "drop_strategy": "keep"},
+        "verification_repair": {"priority": 22, "max_lines": 10, "drop_strategy": "keep"},
         "plot_window_state": {"priority": 23, "max_lines": 12, "drop_strategy": "summarize"},
         "skills_summary": {"priority": 24, "max_lines": 10, "max_items": 8, "drop_strategy": "summarize"},
         "task_plan": {"priority": 25, "max_lines": 12, "drop_strategy": "summarize"},
@@ -59,6 +60,7 @@ class ContextManager:
 
         selection_lines = []
         script_state_lines = []
+        verification_repair_lines = []
         plot_window_lines = []
         skills_summary_items = []
         skills_summary_meta = {}
@@ -78,6 +80,9 @@ class ContextManager:
             plot_window_state = self._extract_plot_window_state(item)
             if plot_window_state:
                 plot_window_lines.extend(self._format_plot_window_state(plot_window_state))
+            verification_repair = self._extract_verification_repair(item)
+            if verification_repair:
+                verification_repair_lines.extend(self._format_verification_repair(verification_repair))
             skills_summary = self._extract_skills_summary(item)
             if skills_summary:
                 skills_summary_meta.update({
@@ -102,6 +107,8 @@ class ContextManager:
             sections.append(self._make_section("selection", selection_lines))
         if script_state_lines:
             sections.append(self._make_section("active_script_state", script_state_lines))
+        if verification_repair_lines:
+            sections.append(self._make_section("verification_repair", verification_repair_lines))
         if plot_window_lines:
             sections.append(self._make_section("plot_window_state", plot_window_lines))
         skills_summary_lines = self._format_skills_summary(skills_summary_items, skills_summary_meta)
@@ -223,6 +230,33 @@ class ContextManager:
                 parts.append(f"depth_range: {depth_range}")
             return "; ".join(parts)
         return f"- track {index}: {self._truncate(track)}" if track else ""
+
+    def _extract_verification_repair(self, item: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        if isinstance(item.get("verification_repair"), Mapping):
+            return item.get("verification_repair")
+        if item.get("type") in {"verification_repair", "repair_guidance"}:
+            return item
+        return None
+
+    def _format_verification_repair(self, repair: Mapping[str, Any]) -> List[str]:
+        lines = ["[Verification Repair]"]
+        self._append_state_line(lines, "status", repair.get("status"))
+        self._append_state_line(lines, "failed_tool", repair.get("failed_tool"))
+        self._append_state_line(lines, "target", repair.get("target"))
+        self._append_state_line(lines, "summary", repair.get("summary"))
+        self._append_state_line(lines, "error", repair.get("error"))
+        modified_files = repair.get("modified_files")
+        if isinstance(modified_files, list) and modified_files:
+            self._append_state_line(lines, "modified_files", ", ".join(str(item) for item in modified_files[:4]))
+            if len(modified_files) > 4:
+                self._append_state_line(lines, "omitted_modified_files", len(modified_files) - 4)
+        self._append_state_line(lines, "recommended_tool", repair.get("recommended_tool"))
+        recommended_args = repair.get("recommended_args")
+        if isinstance(recommended_args, Mapping) and recommended_args:
+            args_text = ", ".join(f"{key}={value}" for key, value in sorted(recommended_args.items()))
+            self._append_state_line(lines, "recommended_args", args_text)
+        self._append_state_line(lines, "recommended_action", repair.get("recommended_action"))
+        return lines if len(lines) > 1 else []
 
     def _extract_skills_summary(self, item: Mapping[str, Any]) -> Mapping[str, Any] | None:
         if isinstance(item.get("skills_summary"), Mapping):

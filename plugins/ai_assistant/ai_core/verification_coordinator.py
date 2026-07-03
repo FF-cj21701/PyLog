@@ -6,6 +6,8 @@ from typing import Dict, List, Optional
 class VerificationCoordinator:
     """Selects verification actions for changed targets without enforcing policy."""
 
+    UNRESOLVED_FAILURE_THRESHOLD = 2
+
     def get_finish_block_message(self, state) -> str:
         recommendation = self.get_verification_recommendation(state)
         coverage_note = self._verification_coverage_note(state)
@@ -153,6 +155,64 @@ class VerificationCoordinator:
             "recommended_args": strategy.get("args") or {},
             "recommended_action": action,
         }
+
+    def should_report_unresolved_failure(self, state) -> bool:
+        if not state:
+            return False
+        if not getattr(state, "dirty", False) or not getattr(state, "verification_required", False):
+            return False
+        last_verification = getattr(state, "last_verification", None) or {}
+        has_failed_verification = (
+            last_verification.get("ok") is False
+            or (
+                last_verification.get("ok") is True
+                and last_verification.get("covers_modified_files") is False
+            )
+        )
+        if not has_failed_verification:
+            return False
+        return int(getattr(state, "failure_count", 0) or 0) >= self.UNRESOLVED_FAILURE_THRESHOLD
+
+    def get_unresolved_failure_report(self, state) -> Optional[str]:
+        """Build a final report when verification remains unresolved after repair attempts."""
+        if not self.should_report_unresolved_failure(state):
+            return None
+
+        repair = self.get_repair_guidance(state) or {}
+        last_verification = getattr(state, "last_verification", None) or {}
+        modified_files = repair.get("modified_files") or [
+            path.replace("\\", "/")
+            for path in sorted(getattr(state, "files_modified", set()))
+        ]
+        failed_tool = repair.get("failed_tool") or last_verification.get("tool_name") or "last_verification"
+        summary = repair.get("summary") or last_verification.get("summary") or "Verification did not pass."
+        error = repair.get("error") or last_verification.get("error") or getattr(state, "last_error", None)
+        recommended_tool = repair.get("recommended_tool")
+        recommended_args = repair.get("recommended_args") or {}
+        recommended_action = repair.get("recommended_action") or self.get_verification_recommendation(state)
+
+        lines = [
+            "Unresolved verification failure.",
+            "",
+            "I could not safely mark this task complete because verification is still failing or incomplete.",
+            f"- failed_tool: {failed_tool}",
+            f"- failure_count: {getattr(state, 'failure_count', 0)}",
+        ]
+        if modified_files:
+            lines.append(f"- modified_files: {', '.join(str(path) for path in modified_files[:6])}")
+            if len(modified_files) > 6:
+                lines.append(f"- omitted_modified_files: {len(modified_files) - 6}")
+        if summary:
+            lines.append(f"- summary: {summary}")
+        if error:
+            lines.append(f"- error: {error}")
+        if recommended_tool:
+            lines.append(f"- recommended_tool: {recommended_tool}")
+        if recommended_args:
+            args_text = ", ".join(f"{key}={value}" for key, value in sorted(recommended_args.items()))
+            lines.append(f"- recommended_args: {args_text}")
+        lines.append(f"- next_step: {recommended_action}")
+        return "\n".join(lines)
 
     def _project_strategy(self, *, category: str, modified_files: List[str], reason: str) -> Dict[str, object]:
         files = ", ".join(modified_files) if modified_files else "modified files"

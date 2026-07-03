@@ -1798,6 +1798,37 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
         self.assertEqual(repair["recommended_tool"], "tool_verify_target")
         self.assertIn("patch the relevant modified file", repair["recommended_action"])
 
+    def test_unresolved_failure_report_waits_for_repeated_failures(self):
+        self.state.mark_file_modified("plugins/ai_assistant/ai_core/policy.py")
+        self.state.record_verification({
+            "ok": False,
+            "tool_name": "tool_verify_target",
+            "summary": "Verification failed",
+            "error": "SyntaxError",
+        }, target="plugins/ai_assistant/ai_core/policy.py")
+
+        report = self.coordinator.get_unresolved_failure_report(self.state)
+
+        self.assertIsNone(report)
+
+    def test_unresolved_failure_report_summarizes_repeated_failed_verification(self):
+        self.state.mark_file_modified("plugins/ai_assistant/ai_core/policy.py")
+        self.state.record_verification({
+            "ok": False,
+            "tool_name": "tool_verify_target",
+            "summary": "Verification failed",
+            "error": "SyntaxError",
+        }, target="plugins/ai_assistant/ai_core/policy.py")
+        self.state.record_error("second failed repair attempt")
+
+        report = self.coordinator.get_unresolved_failure_report(self.state)
+
+        self.assertIsNotNone(report)
+        self.assertIn("Unresolved verification failure", report)
+        self.assertIn("plugins/ai_assistant/ai_core/policy.py", report)
+        self.assertIn("SyntaxError", report)
+        self.assertIn("recommended_tool: tool_verify_target", report)
+
     def test_read_tool_marks_file_as_read_even_when_tool_object_is_present(self):
         read_tool = DummyTool(
             name="tool_read_file",
@@ -1863,6 +1894,16 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
 
 
 class FinishOutputBehaviorTests(unittest.TestCase):
+    def test_failed_finish_tool_result_is_not_treated_as_successful_finish(self):
+        self.assertFalse(AsyncAIWorker._tool_result_succeeded(
+            '{"ok": false, "tool_name": "tool_finish", "error": "verification failed"}'
+        ))
+
+    def test_successful_finish_tool_result_is_treated_as_successful_finish(self):
+        self.assertTrue(AsyncAIWorker._tool_result_succeeded(
+            '{"ok": true, "tool_name": "tool_finish", "content": "done"}'
+        ))
+
     def test_finish_final_answer_is_not_suppressed_when_no_visible_response_exists(self):
         output = AsyncAIWorker._extract_finish_visible_output(
             '{"ok": true, "final_answer": "Visible final response"}',

@@ -325,6 +325,19 @@ class AsyncAIWorker(QObject):
                 return candidate
         return None
 
+    @staticmethod
+    def _tool_result_succeeded(serialized_result) -> bool:
+        try:
+            result_obj = json.loads(serialized_result) if isinstance(serialized_result, str) else serialized_result
+            return bool(normalize_tool_result("tool_finish", result_obj).ok)
+        except Exception:
+            return False
+
+    def _unresolved_failure_report(self):
+        if not self.verification_coordinator or not self.agent_state:
+            return None
+        return self.verification_coordinator.get_unresolved_failure_report(self.agent_state)
+
     async def _run_tool(self, tool_name, args, apply_policy=True):
         """Execute a single tool with policy checks and task-progress bookkeeping."""
         if self.agent_state:
@@ -594,6 +607,9 @@ class AsyncAIWorker(QObject):
 
             if not tool_calls_dict:
                 print("No tool calls, finishing...")
+                unresolved_report = self._unresolved_failure_report()
+                if unresolved_report:
+                    return unresolved_report
                 return final_response
 
             print(f"Tool calls detected: {list(tool_calls_dict.keys())}")
@@ -623,12 +639,13 @@ class AsyncAIWorker(QObject):
                 result = await self._execute_tool(mock_tool_call)
 
                 if tool_name == "tool_finish":
-                    finish_called = True
-                    finish_result = self._extract_finish_visible_output(
-                        result,
-                        suppress_summary=suppress_finish_summary,
-                        has_visible_response=has_visible_response,
-                    )
+                    if self._tool_result_succeeded(result):
+                        finish_called = True
+                        finish_result = self._extract_finish_visible_output(
+                            result,
+                            suppress_summary=suppress_finish_summary,
+                            has_visible_response=has_visible_response,
+                        )
 
                 messages.append(
                     {
@@ -649,6 +666,9 @@ class AsyncAIWorker(QObject):
 
             self.round_finished.emit()
 
+        unresolved_report = self._unresolved_failure_report()
+        if unresolved_report:
+            return unresolved_report
         return final_response
 
     async def run_async(self):

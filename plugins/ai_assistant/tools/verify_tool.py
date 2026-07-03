@@ -1,4 +1,5 @@
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -267,12 +268,19 @@ def _command_exists(name):
 
 
 def _resolve_test_command(normalized):
-    if normalized == "pytest":
+    try:
+        parts = shlex.split(normalized)
+    except ValueError:
+        return None
+    if not parts:
+        return None
+    if parts[0] == "pytest":
+        args = parts[1:]
         if _command_exists("pytest"):
-            return ["pytest"]
-        return [sys.executable, "-m", "pytest"]
-    if normalized == "python -m pytest":
-        return [sys.executable, "-m", "pytest"]
+            return ["pytest", *args]
+        return [sys.executable, "-m", "pytest", *args]
+    if parts[:3] == ["python", "-m", "pytest"]:
+        return [sys.executable, "-m", "pytest", *parts[3:]]
     return None
 
 

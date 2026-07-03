@@ -2181,6 +2181,22 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         self.assertIn("plot well", PlotTool().spec.keywords)
         self.assertIn("list wells", ListWellsTool().spec.keywords)
 
+    def test_run_test_command_accepts_pytest_arguments(self):
+        from plugins.ai_assistant.tools.verify_tool import RunTestCommandTool
+
+        with patch("plugins.ai_assistant.tools.verify_tool._command_exists", return_value=True):
+            with patch("plugins.ai_assistant.tools.verify_tool._run_command") as run_command:
+                run_command.return_value = {"ok": True, "summary": "passed"}
+
+                result = RunTestCommandTool().execute(
+                    command="pytest tests/test_chat_ui_template_regressions.py -q"
+                )
+
+        self.assertTrue(result["ok"])
+        run_command.assert_called_once()
+        command_args = run_command.call_args.args[0]
+        self.assertEqual(command_args, ["pytest", "tests/test_chat_ui_template_regressions.py", "-q"])
+
     def test_second_tier_tools_expose_retrieval_keywords(self):
         self.assertIn("read file", ReadFileTool().spec.keywords)
         self.assertIn("search in file", SearchInFileTool().spec.keywords)

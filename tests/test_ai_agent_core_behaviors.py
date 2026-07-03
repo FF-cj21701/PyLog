@@ -511,6 +511,31 @@ class ContextManagerTests(unittest.TestCase):
         self.assertIn("- selected_columns: GR", workspace_group["lines"])
         self.assertIn("- selected_rows: 1111~2222", workspace_group["lines"])
 
+    def test_effective_context_summary_hides_background_skills_summary(self):
+        class DummySkillService:
+            def get_skill_summaries(self, disabled_list=None):
+                return [
+                    {
+                        "id": "pylog-scripting",
+                        "title": "PyLog Scripting",
+                        "description": "Write scripts using pylog_api.",
+                    }
+                ]
+
+        service = ChatService.__new__(ChatService)
+        service.context_manager = ContextManager()
+        service.workspace_state_collector = WorkspaceStateCollector()
+        service.main_window = None
+        service.agent_state = AgentState()
+        service.skill_service = DummySkillService()
+        service._get_disabled_skills = lambda: []
+
+        summary = service.build_effective_context_summary([])
+        prompt = service.compose_prompt("hello", [])
+
+        self.assertEqual(summary, {"label": "", "groups": []})
+        self.assertIn("[Skills Summary]", prompt)
+
     def test_workspace_state_collector_returns_none_without_active_subwindow(self):
         class DummyMdiArea:
             def activeSubWindow(self):
@@ -1578,6 +1603,50 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
         self.assertIsNotNone(request)
         self.assertEqual(request["tool_name"], "tool_verify_target")
         self.assertEqual(request["args"]["filepath"], "scripts_user/ai_example.py")
+
+    def test_verification_strategy_describes_single_script_target(self):
+        self.state.mark_file_modified("scripts_user/ai_example.py")
+
+        strategy = self.coordinator.get_verification_strategy(self.state)
+
+        self.assertEqual(strategy["scope"], "file")
+        self.assertEqual(strategy["category"], "script")
+        self.assertEqual(strategy["tool_name"], "tool_verify_target")
+        self.assertEqual(strategy["args"]["filepath"], "scripts_user/ai_example.py")
+        self.assertIn("run_execution=true", strategy["message"])
+
+    def test_auto_verification_request_uses_project_scope_for_multiple_files(self):
+        self.state.mark_file_modified("scripts/example.py")
+        self.state.mark_file_modified("plugins/ai_assistant/ai_core/policy.py")
+
+        request = self.policy.get_auto_verification_request(self.state)
+
+        self.assertIsNotNone(request)
+        self.assertEqual(request["tool_name"], "tool_run_test_command")
+        self.assertEqual(request["args"], {})
+        self.assertIn("multiple modified files", request["reason"])
+
+    def test_ui_template_verification_strategy_prefers_ui_regressions(self):
+        self.state.mark_file_modified("plugins/ai_assistant/ui/resources/editor_template.html")
+
+        strategy = self.coordinator.get_verification_strategy(self.state)
+
+        self.assertEqual(strategy["scope"], "project")
+        self.assertEqual(strategy["category"], "ui")
+        self.assertEqual(strategy["tool_name"], "tool_run_test_command")
+        self.assertIn("tests/test_chat_ui_template_regressions.py", strategy["args"]["command"])
+        self.assertIn("chat UI regression suite", strategy["message"])
+
+    def test_python_source_verification_strategy_prefers_target_then_pytest(self):
+        self.state.mark_file_modified("plugins/ai_assistant/ai_core/policy.py")
+
+        strategy = self.coordinator.get_verification_strategy(self.state)
+
+        self.assertEqual(strategy["scope"], "file")
+        self.assertEqual(strategy["category"], "python_source")
+        self.assertEqual(strategy["tool_name"], "tool_verify_target")
+        self.assertEqual(strategy["args"]["filepath"], "plugins/ai_assistant/ai_core/policy.py")
+        self.assertIn("nearest focused pytest", strategy["message"])
 
     def test_successful_verification_clears_finish_block(self):
         verify_tool = DummyTool(

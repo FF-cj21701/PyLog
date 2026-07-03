@@ -198,6 +198,8 @@ class ChatService(QObject):
         sections = self.context_manager.build_sections(runtime_context)
         groups = []
         for section in sorted(sections, key=lambda item: item.priority):
+            if section.title == "skills_summary":
+                continue
             section_has_header = bool(section.lines and str(section.lines[0]).startswith("["))
             source_lines = section.lines[1:] if section_has_header else section.lines
             body_lines = [str(line) for line in source_lines if str(line).strip()]

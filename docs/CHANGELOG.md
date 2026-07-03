@@ -11,6 +11,9 @@
   - new `tool_get_script_job` and `tool_stop_script` tools can inspect or cancel background script jobs
   - PyLog script execution through `tool_run_python_file` now uses the managed child process path for script targets
   - the legacy in-process script path remains available only through `execution_mode="legacy_in_process"`
+- Smoothed task-plan progress after script execution:
+  - `tool_run_script` now maps to the script plan's `run` step instead of `script_edit`
+  - successful execution auto-advances earlier open plan steps so the model does not need cleanup-only `tool_update_task_plan` calls after visible completion
 - Completed Phase 7 verification-loop hardening:
   - successful verification now records the verified target
   - finish blockers remain active when a successful verification does not cover all modified files

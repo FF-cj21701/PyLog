@@ -138,8 +138,8 @@ class SystemPrompts:
         "3. **Task Plan First**: When a task needs 3 or more execution steps, call `tool_create_task_plan` before the main execution tools so the top task card can show the live plan.\n"
         "4. **Plan-Driven Execution**: After creating a task plan, follow the current step and move through the steps in order.\n"
         "5. **Simple Step Updates**: Use `tool_update_task_plan` only to mark an existing step as `in_progress`, `completed`, `failed`, or `skipped`, optionally with a short note.\n"
-        "   - Task-step status is AI-controlled. Do not assume normal tool success should auto-complete a step.\n"
-        "   - Explicitly call `tool_update_task_plan` when you decide a step has started or finished.\n"
+        "   - Successful execution tools can auto-advance matching plan steps, so do not retroactively call `tool_update_task_plan` after you have already delivered the final visible answer.\n"
+        "   - If the work is already complete, call `tool_finish` instead of doing cleanup-only plan updates.\n"
         "6. **Checklist Requests**: If the user wants a checklist view, reflect the current task plan rather than creating a second source of truth.\n"
         "7. **Legacy Compatibility**: The hidden `<task_plan>...</task_plan>` protocol is legacy compatibility only. Do not explain it in normal prose, and do not prefer it when `tool_create_task_plan` is available.\n\n"
     )

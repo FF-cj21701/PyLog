@@ -166,9 +166,20 @@ class TaskStateMachine:
         if not step:
             return
 
+        self._complete_prior_open_steps(step_id, tool_name)
         self.agent_state.mark_plan_step_completed(str(step.get("id")))
 
         if step.get("kind") in {"implement", "script_edit", "run"}:
             verify_step = self.agent_state.get_plan_step("verify")
             if verify_step and verify_step.get("status") == "pending":
                 self.agent_state.mark_plan_step_in_progress(str(verify_step.get("id")), force=True)
+
+    def _complete_prior_open_steps(self, target_step_id: str, tool_name: str) -> None:
+        for step in self.agent_state.current_plan:
+            if step.get("id") == target_step_id:
+                return
+            if step.get("status") in {"pending", "in_progress"}:
+                self.agent_state.mark_plan_step_completed(
+                    str(step.get("id")),
+                    notes=f"Auto-advanced after {tool_name} succeeded",
+                )

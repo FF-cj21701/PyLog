@@ -243,6 +243,13 @@ def find_plan_step_id_for_tool(plan_steps: Iterable[Dict[str, object]], tool_nam
             return str(steps[index].get("id") or "")
         return None
 
+    def step_id_for_kind(*kinds: str) -> Optional[str]:
+        kind_set = set(kinds)
+        for step in steps:
+            if step.get("kind") in kind_set or step.get("id") in kind_set:
+                return str(step.get("id") or "")
+        return None
+
     if tool_name == "tool_finish":
         return step_id_at(len(steps) - 1)
 
@@ -255,6 +262,9 @@ def find_plan_step_id_for_tool(plan_steps: Iterable[Dict[str, object]], tool_nam
 
     if side_effect_level == "read" or capability_tags & {"inspection", "search", "navigation"}:
         return step_id_at(0)
+
+    if tool_name == "tool_run_script" or capability_tags & {"script_execution", "python_execution"}:
+        return step_id_for_kind("run") or step_id_at(min(1, len(steps) - 1))
 
     if side_effect_level in {"write", "data_mutation", "script_write", "execution"}:
         return step_id_at(min(1, len(steps) - 1))

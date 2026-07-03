@@ -1379,6 +1379,27 @@ class TaskStateMachineTests(unittest.TestCase):
             ["inspect", "implement", "verify", "complete"],
         )
 
+    def test_run_script_auto_advances_script_plan_without_manual_cleanup_updates(self):
+        self.machine.start_task("Write a PyLog script to print hello and run it")
+        tool = DummyTool(
+            name="tool_run_script",
+            side_effect_level="execution",
+            capability_tags=["script_execution", "python_execution"],
+        )
+
+        self.machine.after_tool_call(
+            tool.name,
+            {"code": "print('hello')"},
+            {"ok": True, "stdout": "hello"},
+            tool=tool,
+        )
+
+        self.assertEqual(self.state.get_plan_step("inspect")["status"], "completed")
+        self.assertEqual(self.state.get_plan_step("script_edit")["status"], "completed")
+        self.assertEqual(self.state.get_plan_step("run")["status"], "completed")
+        self.assertEqual(self.state.get_plan_step("verify")["status"], "in_progress")
+        self.assertEqual(self.state.current_plan_step_id, self.state.get_plan_step("verify")["id"])
+
     def test_geoscience_lookup_tool_maps_to_inspect_not_analyze(self):
         self.machine.start_task("Inspect well curves and analyze them")
         self.state.update_task_plan(
@@ -1449,6 +1470,21 @@ class TaskPlannerTests(unittest.TestCase):
             [step.kind for step in plan.steps],
             ["inspect", "script_edit", "run", "verify", "complete"],
         )
+
+    def test_run_script_tool_maps_to_run_step(self):
+        from plugins.ai_assistant.ai_core.task_plan import find_plan_step_id_for_tool
+
+        planner = TaskPlanner()
+        plan = planner.create_plan("Write a PyLog script to load well curves and plot them")
+        tool = DummyTool(
+            name="tool_run_script",
+            side_effect_level="execution",
+            capability_tags=["script_execution"],
+        )
+
+        step_id = find_plan_step_id_for_tool(plan.to_dict_list(), "tool_run_script", tool=tool)
+
+        self.assertEqual(step_id, "run")
 
     def test_model_plan_overrides_default_titles(self):
         planner = TaskPlanner()

@@ -343,18 +343,28 @@ Acceptance criteria:
 
 ### Phase 7: Verification Loop Completion
 
+Status: **Completed.** Phase 7 now closes the write -> verify -> repair/report loop with target-aware verification, structured recommendations, repair context, and unresolved-failure reporting.
+
 Deliverables:
 
-- Strengthen finish blocking after mutations.
-- Ensure successful verification covers all modified files before clearing the finish blocker.
-- Improve automatic verification recommendations.
-- Add clear unresolved-failure reporting.
+- Completed: strengthen finish blocking after mutations.
+- Completed: ensure successful verification covers all modified files before clearing the finish blocker.
+- Completed: improve automatic verification recommendations.
+- Completed: add clear unresolved-failure reporting.
+
+Implemented details:
+
+- Successful verification records the verified target and only clears the finish blocker when it covers all modified files.
+- `VerificationCoordinator` provides structured verification strategies for script, UI/template, Python source, multi-file, and project-scope changes.
+- Failed or incomplete verification injects `[Verification Repair]` context so the next turn can repair before retrying verification.
+- Repeated unresolved verification failures produce an explicit report instead of allowing a failed `tool_finish` to end the loop as if the task completed.
+- `tool_run_test_command` supports focused pytest arguments such as `pytest tests/test_chat_ui_template_regressions.py -q`.
 
 Acceptance criteria:
 
-- Agent cannot finish silently after modifying files without verification.
-- Verification success clears the finish blocker.
-- Verification failure leads to repair attempts or an explicit unresolved report.
+- Met: Agent cannot finish silently after modifying files without verification.
+- Met: Verification success clears the finish blocker only when it covers the modified files.
+- Met: Verification failure leads to repair attempts or an explicit unresolved report.
 
 ## 7. Suggested File-Level Landing Zones
 

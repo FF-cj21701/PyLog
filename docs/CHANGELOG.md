@@ -5,7 +5,7 @@
 
 ## [2026-07-02] - Effective Context Bubble and Data Viewer Selection Tools / 有效上下文气泡与Data Viewer选区工具
 
-- Started Phase 7 verification-loop hardening:
+- Completed Phase 7 verification-loop hardening:
   - successful verification now records the verified target
   - finish blockers remain active when a successful verification does not cover all modified files
   - finish-block messages explain when the last successful verification targeted the wrong file or scope

@@ -12,6 +12,11 @@ from ..ai_core.config import AIConfig
 from ..ai_core.memory import MemoryManager
 from ..services.chat_service import ChatService
 from .review_registry import get_review_record, open_review_page
+
+try:
+    from ..runtime.ui_action_executor import UiActionExecutor
+except ImportError:
+    UiActionExecutor = None
 from .widgets.settings_dialog import AISettingsDialog
 from .widgets.web_chat_view import WebChatView
 from PySide6.QtCore import QObject, Signal
@@ -451,6 +456,10 @@ class AIAssistantWidget(QWidget):
 
         action_id = payload.get("action")
         card_payload = payload.get("payload") or {}
+        if action_id in {"review_ui_actions", "replay_failed_ui_actions"}:
+            self._handle_ui_action_card_action(action_id, card_payload)
+            return
+
         script_path = card_payload.get("script_path") or payload.get("script_path")
         if action_id != "review" or not script_path:
             return
@@ -467,6 +476,31 @@ class AIAssistantWidget(QWidget):
                 return
 
         self.append_system_message(f"Review is unavailable because no saved review record was found for {script_path}.")
+
+    def _handle_ui_action_card_action(self, action_id, card_payload):
+        actions = card_payload.get("ui_actions") or []
+        results = card_payload.get("ui_action_results") or []
+        if action_id == "review_ui_actions":
+            lines = [f"UI action review: {len(actions)} action(s)."]
+            for index, action in enumerate(actions):
+                result = results[index] if index < len(results) and isinstance(results[index], dict) else {}
+                status = "ok" if result.get("ok") else "failed" if result else "pending"
+                action_type = action.get("type") if isinstance(action, dict) else "invalid"
+                detail = result.get("summary") or result.get("error") or ""
+                lines.append(f"{index + 1}. {action_type}: {status}" + (f" - {detail}" if detail else ""))
+            self.append_system_message("\n".join(lines))
+            return
+
+        if not UiActionExecutor:
+            self.append_system_message("Replay is unavailable because the UI action executor could not be loaded.")
+            return
+        replay_results = UiActionExecutor(main_window=self.window()).execute_many(actions)
+        succeeded = len([item for item in replay_results if item.get("ok")])
+        failed = len(replay_results) - succeeded
+        self.append_system_message(
+            f"Replayed {len(replay_results)} UI action(s): {succeeded} succeeded"
+            + (f", {failed} failed." if failed else ".")
+        )
 
     def append_user_message(self, text):
         self.chat_view.append_message("user", text)

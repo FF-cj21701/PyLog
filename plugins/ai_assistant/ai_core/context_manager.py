@@ -604,6 +604,18 @@ class ContextManager:
         if previewed is not None:
             parts.append(f"previewed: {self._format_bool(previewed)}")
 
+        ui_action_summary = item.get("ui_action_summary") or result_map.get("ui_action_summary")
+        if ui_action_summary:
+            parts.append(f"ui_actions: {self._truncate(str(ui_action_summary))}")
+
+        ui_action_results = item.get("ui_action_results") or result_map.get("ui_action_results")
+        if isinstance(ui_action_results, list) and ui_action_results:
+            failed = [result for result in ui_action_results if isinstance(result, Mapping) and not result.get("ok")]
+            if failed:
+                first_failed = failed[0]
+                error_text = self._first_text(first_failed.get("error"), first_failed.get("summary"))
+                parts.append(f"ui_action_failed: {self._truncate(error_text)}")
+
         script_state = item.get("script_state") or result_map.get("script_state")
         if isinstance(script_state, Mapping):
             state_path = script_state.get("script_path")

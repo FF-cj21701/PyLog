@@ -33,6 +33,9 @@ class ScriptJob:
     error: Optional[str] = None
     completed_at: Optional[float] = None
     result_payload: Dict[str, Any] = field(default_factory=dict)
+    ui_actions: list[Dict[str, Any]] = field(default_factory=list)
+    ui_action_results: list[Dict[str, Any]] = field(default_factory=list)
+    ui_actions_executed: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         now = self.completed_at or time.time()
@@ -51,7 +54,15 @@ class ScriptJob:
             "summary": self._summary(ok),
             "background": self.status == "running",
             "command": " ".join(self.command),
+            "ui_actions": self.ui_actions,
+            "ui_action_results": self.ui_action_results,
+            "ui_actions_executed": self.ui_actions_executed,
+            "ui_action_review_available": bool(self.ui_actions),
+            "ui_action_summary": self._ui_action_summary(),
         }
+        cards = self._ui_action_cards()
+        if cards:
+            payload["cards"] = cards
         if self.error:
             payload["error"] = self.error
         if self.result_payload:
@@ -69,6 +80,55 @@ class ScriptJob:
             return f"Script job {self.job_id} completed successfully"
         return f"Script job {self.job_id} failed"
 
+    def _ui_action_summary(self) -> str:
+        if not self.ui_actions:
+            return ""
+        total = len(self.ui_actions)
+        if not self.ui_actions_executed:
+            return f"{total} UI action(s) pending"
+        succeeded = len([item for item in self.ui_action_results if item.get("ok")])
+        failed = len(self.ui_action_results) - succeeded
+        parts = [f"{succeeded} UI action(s) succeeded"]
+        if failed:
+            parts.append(f"{failed} failed")
+        return ", ".join(parts)
+
+    def _ui_action_cards(self) -> list[Dict[str, Any]]:
+        if not self.ui_actions:
+            return []
+        failed_actions = [
+            self.ui_actions[index]
+            for index, result in enumerate(self.ui_action_results)
+            if index < len(self.ui_actions) and not result.get("ok")
+        ]
+        card = {
+            "type": "ui_action_review",
+            "title": "UI Actions",
+            "subtitle": self._ui_action_summary(),
+            "path": self.job_id,
+            "actions": [
+                {
+                    "id": "review_ui_actions",
+                    "label": "Review UI Actions",
+                    "payload": {
+                        "job_id": self.job_id,
+                        "ui_actions": self.ui_actions,
+                        "ui_action_results": self.ui_action_results,
+                    },
+                }
+            ],
+        }
+        if failed_actions:
+            card["actions"].append({
+                "id": "replay_failed_ui_actions",
+                "label": "Replay Failed Actions",
+                "payload": {
+                    "job_id": self.job_id,
+                    "ui_actions": failed_actions,
+                },
+            })
+        return [card]
+
 
 class ScriptJobManager:
     QUICK_TIMEOUT_SECONDS = 60
@@ -79,6 +139,10 @@ class ScriptJobManager:
         self.project_root = Path(project_root or self._default_project_root()).resolve()
         self.runner_path = self.project_root / "plugins" / "ai_assistant" / "runtime" / "script_runner.py"
         self.jobs: Dict[str, ScriptJob] = {}
+        self.ui_action_executor = None
+
+    def set_ui_action_executor(self, executor) -> None:
+        self.ui_action_executor = executor
 
     def run_script(
         self,
@@ -111,6 +175,7 @@ class ScriptJobManager:
         if not job:
             return {"ok": False, "error": f"Script job not found: {job_id}", "job_id": job_id}
         self._refresh_job(job)
+        self._execute_ui_actions_if_ready(job)
         return job.to_dict()
 
     def stop_job(self, job_id: str) -> Dict[str, Any]:
@@ -195,6 +260,7 @@ class ScriptJobManager:
             self._terminate(job)
             stdout, stderr = job.process.communicate()
             self._finish_job(job, stdout, stderr, -1)
+        self._execute_ui_actions_if_ready(job)
         return job.to_dict()
 
     def _refresh_job(self, job: ScriptJob) -> None:
@@ -210,6 +276,7 @@ class ScriptJobManager:
             return
         stdout, stderr = job.process.communicate()
         self._finish_job(job, stdout, stderr, job.process.returncode)
+        self._execute_ui_actions_if_ready(job)
 
     def _finish_job(self, job: ScriptJob, stdout: str, stderr: str, exit_code: Optional[int]) -> None:
         runner_payload, cleaned_stdout = self._extract_runner_payload(stdout or "")
@@ -223,6 +290,7 @@ class ScriptJobManager:
             job.stderr = "\n".join(part for part in [runner_payload.get("stderr"), job.stderr] if part) or ""
             job.exit_code = runner_payload.get("exit_code", job.exit_code)
             job.error = runner_payload.get("error")
+            job.ui_actions = self._normalize_ui_actions(runner_payload.get("ui_actions"))
         if job.cancelled:
             job.status = "cancelled"
         elif job.timed_out:
@@ -233,6 +301,49 @@ class ScriptJobManager:
         else:
             job.status = "failed"
             job.error = job.error or job.stderr or f"Script exited with code {job.exit_code}"
+
+    def _execute_ui_actions_if_ready(self, job: ScriptJob) -> None:
+        if job.status == "running" or job.ui_actions_executed or not job.ui_actions:
+            return
+        job.ui_actions_executed = True
+        if job.status != "completed":
+            job.ui_action_results = [
+                {
+                    "ok": False,
+                    "type": action.get("type") if isinstance(action, dict) else "invalid",
+                    "error": f"Skipped UI action because script job status is {job.status}",
+                }
+                for action in job.ui_actions
+            ]
+            return
+
+        executor = self.ui_action_executor
+        if executor is None:
+            job.ui_action_results = [
+                {
+                    "ok": False,
+                    "type": action.get("type") if isinstance(action, dict) else "invalid",
+                    "error": "UI action executor is unavailable",
+                }
+                for action in job.ui_actions
+            ]
+            return
+        try:
+            job.ui_action_results = executor.execute_many(job.ui_actions)
+        except Exception as exc:
+            job.ui_action_results = [{"ok": False, "type": "ui_actions", "error": str(exc)}]
+
+    @staticmethod
+    def _normalize_ui_actions(actions: Any) -> list[Dict[str, Any]]:
+        if not isinstance(actions, list):
+            return []
+        normalized = []
+        for action in actions:
+            if isinstance(action, dict):
+                normalized.append(action)
+            else:
+                normalized.append({"type": "invalid", "value": str(action)})
+        return normalized
 
     def _terminate(self, job: ScriptJob) -> None:
         if job.process.poll() is not None:

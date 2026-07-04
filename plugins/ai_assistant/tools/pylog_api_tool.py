@@ -523,20 +523,40 @@ class ApplyCurveStyleTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
             "apply_curve_style",
-            "Apply curve style settings to a plot curve",
+            (
+                "Apply style settings to a plot curve. For 1D curves, settings may include title, color, "
+                "line_width, line_style, log, invert_x, min, max, fill_mode, fill_color, fill_alpha, and visible. "
+                "For 2D/image curves, settings may include cmap, invert, null_color, min, and max."
+            ),
             {
                 "window_id": {"type": "string", "description": "Plot window title"},
                 "track": {"type": ["string", "number"], "description": "Track name or index"},
                 "curve": {"type": ["string", "number"], "description": "Curve name/title or index"},
-                "settings": {"type": "object", "description": "Curve style settings"},
+                "settings": {
+                    "type": "object",
+                    "description": (
+                        "Curve style settings. 1D fields: title, color, line_width, line_style, log, invert_x, "
+                        "min, max, fill_mode, fill_color, fill_alpha, visible. Image fields: cmap "
+                        "(Thermal/Heated/BWR/Bone/Terrain/Gray/Viridis/Plasma/Inferno/Magma), invert, "
+                        "null_color (Auto/White/Black), min, max."
+                    ),
+                },
             },
             metadata={
                 "required_args": ["window_id", "track", "curve", "settings"],
-                "capability_tags": ["plot_style", "curve_style"],
+                "capability_tags": ["plot_style", "curve_style", "image_style", "colormap"],
                 "domain_tags": ["geoscience", "pylog"],
                 "keywords": ["curve style", "change curve color", "style curve", "曲线样式"],
             },
         )
+        self.metadata["usage_hint"] = (
+            "For image curves, pass settings such as {'cmap': 'Viridis', 'invert': False, "
+            "'null_color': 'Auto', 'min': 0, 'max': 120} to change colormap and display range."
+        )
+        self.metadata["keywords"] = list(dict.fromkeys(
+            list(self.metadata.get("keywords") or [])
+            + ["image style", "colormap", "cmap", "null color", "invert colormap"]
+        ))
         self.main_window = main_window
         self.tool_executor = tool_executor
 
@@ -560,6 +580,122 @@ class ApplyCurveStyleTool(BaseTool):
             return _wrap_api_result("apply_curve_style", result, "applied", "data")
         except Exception as e:
             return _api_error("apply_curve_style", e)
+
+
+@register_tool
+class ApplyImageStyleTool(BaseTool):
+    def __init__(self, main_window=None, tool_executor=None):
+        super().__init__(
+            "apply_image_style",
+            (
+                "Apply image/2D curve display settings to a plot curve. Use this for colormap, "
+                "color scale range, null color, and colormap inversion changes."
+            ),
+            {
+                "window_id": {"type": "string", "description": "Plot window title"},
+                "track": {"type": ["string", "number"], "description": "Track name or index"},
+                "curve": {"type": ["string", "number"], "description": "Image curve name/title or index"},
+                "cmap": {
+                    "type": "string",
+                    "nullable": True,
+                    "description": "Colormap name, for example Thermal, Heated, BWR, Bone, Terrain, Gray, Viridis, Plasma, Inferno, or Magma.",
+                },
+                "invert": {
+                    "type": "boolean",
+                    "nullable": True,
+                    "description": "Whether to invert the selected colormap.",
+                },
+                "null_color": {
+                    "type": "string",
+                    "nullable": True,
+                    "description": "Color used for null/invalid pixels, for example Auto, White, or Black.",
+                },
+                "min": {
+                    "type": ["number", "string"],
+                    "nullable": True,
+                    "description": "Lower display scale limit for the image curve.",
+                },
+                "max": {
+                    "type": ["number", "string"],
+                    "nullable": True,
+                    "description": "Upper display scale limit for the image curve.",
+                },
+                "settings": {
+                    "type": "object",
+                    "nullable": True,
+                    "description": "Optional additional image display settings. Explicit arguments override matching keys here.",
+                },
+            },
+            metadata={
+                "required_args": ["window_id", "track", "curve"],
+                "capability_tags": ["plot_style", "image_style", "colormap"],
+                "domain_tags": ["geoscience", "pylog"],
+                "keywords": [
+                    "image style",
+                    "colormap",
+                    "cmap",
+                    "change image color map",
+                    "image curve display",
+                    "null color",
+                    "invert colormap",
+                ],
+                "usage_hint": (
+                    "Prefer this tool over apply_curve_style when modifying 2D/image curves. "
+                    "Example: {'window_id': 'Demo Plot', 'track': 0, 'curve': 'FMI', "
+                    "'cmap': 'Viridis', 'invert': False, 'null_color': 'Auto', 'min': 0, 'max': 120}."
+                ),
+            },
+        )
+        self.main_window = main_window
+        self.tool_executor = tool_executor
+
+    def execute(
+        self,
+        window_id=None,
+        track=None,
+        curve=None,
+        cmap=None,
+        invert=None,
+        null_color=None,
+        min=None,
+        max=None,
+        settings=None,
+    ):
+        if window_id is None or track is None or curve is None:
+            return _api_error("apply_image_style", "window_id, track and curve are required")
+
+        style_settings = dict(settings or {}) if isinstance(settings, dict) else {}
+        explicit_settings = {
+            "cmap": cmap,
+            "invert": invert,
+            "null_color": null_color,
+            "min": min,
+            "max": max,
+        }
+        style_settings.update({key: value for key, value in explicit_settings.items() if value is not None})
+        if not style_settings:
+            return _api_error(
+                "apply_image_style",
+                "At least one image style setting is required: cmap, invert, null_color, min, max, or settings",
+            )
+
+        try:
+            if self.tool_executor:
+                result = _run_executor_request(
+                    self.tool_executor,
+                    "execute_apply_curve_style",
+                    json.dumps({
+                        "window_id": window_id,
+                        "track": track,
+                        "curve": curve,
+                        "settings": style_settings,
+                    }),
+                )
+                return _wrap_api_result("apply_image_style", result, "applied", "data")
+            result = pylog_api.apply_curve_style(window_id, track, curve, style_settings)
+            return _wrap_api_result("apply_image_style", result, "applied", "data")
+        except Exception as e:
+            return _api_error("apply_image_style", e)
 
 
 @register_tool

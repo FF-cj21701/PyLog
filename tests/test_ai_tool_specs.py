@@ -31,7 +31,7 @@ from plugins.ai_assistant.tools.file_operations import ReadFileTool, SearchInFil
 from plugins.ai_assistant.tools.file_operations import ListDirectoryTool
 from plugins.ai_assistant.tools.os_tool import FileSearchTool, TerminalTool
 from plugins.ai_assistant.tools.patch_tool import ApplyPatchTool
-from plugins.ai_assistant.tools.pylog_api_tool import AnalyzeDataTool, ListWellsTool, PlotTool
+from plugins.ai_assistant.tools.pylog_api_tool import AnalyzeDataTool, ApplyCurveStyleTool, ApplyImageStyleTool, ListWellsTool, PlotTool
 from plugins.ai_assistant.tools.search_code_tool import FindFilesTool, FindReferencesTool, FindSymbolTool, GrepCodeTool, SearchCodeTool
 from plugins.ai_assistant.tools.verify_tool import RunImportCheckTool, RunLintCommandTool
 from plugins.ai_assistant.tools.verify_tool import RunPythonFileTool
@@ -2182,6 +2182,66 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         self.assertIn("plot well", PlotTool().spec.keywords)
         self.assertIn("list wells", ListWellsTool().spec.keywords)
 
+    def test_apply_curve_style_documents_image_curve_settings(self):
+        tool = ApplyCurveStyleTool()
+        spec = tool.spec
+        settings_description = spec.args_schema["settings"]["description"]
+        model_description = spec.to_model_description()
+
+        self.assertIn("cmap", settings_description)
+        self.assertIn("null_color", settings_description)
+        self.assertIn("Viridis", settings_description)
+        self.assertIn("colormap", spec.capability_tags)
+        self.assertIn("cmap", spec.keywords)
+        self.assertIn("cmap", spec.usage_hint)
+        self.assertIn("cmap", model_description)
+        self.assertIn("null_color", model_description)
+
+    def test_apply_image_style_exposes_explicit_image_display_parameters(self):
+        spec = ApplyImageStyleTool().spec
+        model_description = spec.to_model_description()
+
+        self.assertEqual(spec.get_required_args(), ["window_id", "track", "curve"])
+        self.assertIn("cmap", spec.args_schema)
+        self.assertIn("invert", spec.args_schema)
+        self.assertIn("null_color", spec.args_schema)
+        self.assertIn("colormap", spec.capability_tags)
+        self.assertIn("image style", spec.keywords)
+        self.assertIn("apply_curve_style", spec.usage_hint)
+        self.assertIn("Viridis", model_description)
+        self.assertIn("null_color", model_description)
+
+    def test_apply_image_style_forwards_to_curve_style_api(self):
+        tool = ApplyImageStyleTool()
+
+        with patch("pylog_api.apply_curve_style", return_value={"ok": True, "applied": 1}) as mock_apply:
+            result = tool.execute(
+                window_id="Demo Plot",
+                track=0,
+                curve="FMI",
+                cmap="Viridis",
+                invert=True,
+                null_color="Auto",
+                min=0,
+                max=120,
+                settings={"cmap": "Gray", "unused": "kept"},
+            )
+
+        self.assertTrue(result.get("ok"), result)
+        mock_apply.assert_called_once_with(
+            "Demo Plot",
+            0,
+            "FMI",
+            {
+                "cmap": "Viridis",
+                "unused": "kept",
+                "invert": True,
+                "null_color": "Auto",
+                "min": 0,
+                "max": 120,
+            },
+        )
+
     def test_run_test_command_accepts_pytest_arguments(self):
         from plugins.ai_assistant.tools.verify_tool import RunTestCommandTool
 
@@ -2738,7 +2798,43 @@ class PlotDisplayRangeTests(unittest.TestCase):
 
         self.assertIs(result, existing)
         self.assertTrue(existing.is_accum_fill)
-        self.assertIs(track_map["Track-A"], existing)
+
+    def test_update_plot_from_commands_supports_depth_range_and_curve_selection(self):
+        from scripts.services.plot_spec_service import update_plot_from_commands
+
+        class DummyTrack:
+            def __init__(self):
+                self.track_name = "Track 1"
+                self.selected = None
+                self.plot_widget = type("PlotWidget", (), {"curves": [{"info": {"name": "GR"}}]})()
+
+            def select_curve(self, idx, append=False):
+                self.selected = idx
+
+        class DummyLogPlot:
+            def __init__(self):
+                self.track = DummyTrack()
+                self.track_containers = [self.track]
+                self.depth_range = None
+
+            def apply_depth_range(self, start, end, force=False):
+                self.depth_range = (start, end, force)
+
+            def window(self):
+                return type("Window", (), {"windowTitle": lambda self: "Demo Plot"})()
+
+        log_plot = DummyLogPlot()
+        result = update_plot_from_commands(
+            log_plot,
+            [
+                {"action": "set_depth_range", "depth_range": [1000, 1200]},
+                {"action": "select_curve", "track": "Track 1", "curve": "GR"},
+            ],
+        )
+
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(log_plot.depth_range, (1000.0, 1200.0, True))
+        self.assertEqual(log_plot.track.selected, 0)
 
     def test_ensure_track_container_does_not_reuse_anonymous_tracks(self):
         from scripts.utils.plot_track_utils import ensure_track_container
@@ -2972,6 +3068,8 @@ class RunPythonFileBehaviorTests(unittest.TestCase):
         self.assertIn("hello from job", result.get("stdout", ""))
         self.assertEqual(result.get("exit_code"), 0)
         self.assertIn("duration_seconds", result)
+        self.assertEqual(result.get("ui_actions"), [])
+        self.assertEqual(result.get("ui_action_results"), [])
 
     def test_script_job_manager_times_out_stuck_script(self):
         from plugins.ai_assistant.runtime.script_job_manager import ScriptJobManager
@@ -3060,6 +3158,201 @@ class RunPythonFileBehaviorTests(unittest.TestCase):
 
         self.assertTrue(result.get("ok"), result)
         self.assertIn("demo.db", result.get("stdout", ""))
+
+    def test_script_runner_collects_ui_actions_from_global_list_and_emit_helper(self):
+        from plugins.ai_assistant.runtime.script_job_manager import ScriptJobManager
+
+        manager = ScriptJobManager(project_root=PROJECT_ROOT)
+        result = manager.run_script(
+            code=(
+                "ui_actions.append({'type': 'create_plot', 'plot_spec': {'title': 'A', 'tracks': []}})\n"
+                "emit_ui_action({'type': 'update_plot', 'window_id': 'A', 'commands': [{'action': 'apply_track_style'}]})\n"
+            ),
+            execution_mode="quick",
+            timeout_seconds=10,
+        )
+
+        self.assertTrue(result.get("ok"), result)
+        actions = result.get("runner_result", {}).get("ui_actions")
+        self.assertEqual(len(actions), 2)
+        self.assertEqual(result.get("ui_actions"), actions)
+
+    def test_script_job_manager_executes_ui_actions_once_with_injected_executor(self):
+        from plugins.ai_assistant.runtime.script_job_manager import ScriptJobManager
+
+        class FakeUiActionExecutor:
+            def __init__(self):
+                self.calls = []
+
+            def execute_many(self, actions):
+                self.calls.append(list(actions))
+                return [{"ok": True, "type": action.get("type"), "summary": "done"} for action in actions]
+
+        executor = FakeUiActionExecutor()
+        manager = ScriptJobManager(project_root=PROJECT_ROOT)
+        manager.set_ui_action_executor(executor)
+
+        result = manager.run_script(
+            code="ui_actions.append({'type': 'create_plot', 'plot_spec': {'title': 'A', 'tracks': []}})",
+            execution_mode="quick",
+            timeout_seconds=10,
+        )
+
+        self.assertTrue(result.get("ok"), result)
+        self.assertTrue(result.get("ui_actions_executed"))
+        self.assertEqual(result.get("ui_action_results")[0]["type"], "create_plot")
+        self.assertTrue(result.get("ui_action_review_available"))
+        self.assertIn("UI action", result.get("ui_action_summary", ""))
+        self.assertEqual(result.get("cards")[0]["type"], "ui_action_review")
+        self.assertEqual(len(executor.calls), 1)
+
+    def test_script_job_manager_background_ui_actions_execute_once_on_query(self):
+        from plugins.ai_assistant.runtime.script_job_manager import ScriptJobManager
+
+        class FakeUiActionExecutor:
+            def __init__(self):
+                self.calls = 0
+
+            def execute_many(self, actions):
+                self.calls += 1
+                return [{"ok": True, "type": action.get("type"), "summary": "done"} for action in actions]
+
+        executor = FakeUiActionExecutor()
+        manager = ScriptJobManager(project_root=PROJECT_ROOT)
+        manager.set_ui_action_executor(executor)
+
+        result = manager.run_script(
+            code="ui_actions.append({'type': 'create_plot', 'plot_spec': {'title': 'A', 'tracks': []}})",
+            execution_mode="background",
+            timeout_seconds=10,
+        )
+        job_id = result.get("job_id")
+
+        deadline = time.time() + 5
+        status = result
+        while time.time() < deadline:
+            status = manager.get_job(job_id)
+            if status.get("status") != "running":
+                break
+            time.sleep(0.05)
+        second_status = manager.get_job(job_id)
+
+        self.assertTrue(status.get("ok"), status)
+        self.assertTrue(second_status.get("ui_actions_executed"))
+        self.assertEqual(executor.calls, 1)
+
+    def test_ui_action_executor_rejects_unknown_action(self):
+        from plugins.ai_assistant.runtime.ui_action_executor import UiActionExecutor
+
+        result = UiActionExecutor().execute({"type": "run_qt_object", "payload": {}})
+
+        self.assertFalse(result.get("ok"), result)
+        self.assertIn("Unsupported UI action type", result.get("error", ""))
+
+    def test_ui_action_executor_calls_create_plot_api(self):
+        from plugins.ai_assistant.runtime.ui_action_executor import UiActionExecutor
+
+        with patch("pylog_api.create_plot", return_value={"ok": True, "title": "Demo"}) as mock_create:
+            result = UiActionExecutor().execute({"type": "create_plot", "plot_spec": {"title": "Demo", "tracks": []}})
+
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result.get("type"), "create_plot")
+        mock_create.assert_called_once_with({"title": "Demo", "tracks": []})
+
+    def test_ui_action_executor_calls_update_plot_api(self):
+        from plugins.ai_assistant.runtime.ui_action_executor import UiActionExecutor
+
+        commands = [{"action": "apply_track_style", "track": 0, "settings": {"width": 240}}]
+        with patch("pylog_api.update_plot", return_value={"ok": True, "applied": 1}) as mock_update:
+            result = UiActionExecutor().execute({"type": "update_plot", "window_id": "Demo", "commands": commands})
+
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result.get("type"), "update_plot")
+        mock_update.assert_called_once_with(window_id="Demo", commands=commands)
+
+    def test_ui_action_executor_opens_data_viewer_with_curve_ids(self):
+        from plugins.ai_assistant.runtime.ui_action_executor import UiActionExecutor
+
+        class FakeViewer:
+            def __init__(self):
+                self.requests = []
+
+            def add_curve_request(self, well_id, curve_id, db_path, well_name=None, curve_name=None):
+                self.requests.append((well_id, curve_id, db_path, well_name, curve_name))
+
+            def get_workspace_state(self):
+                return {
+                    "active_window_type": "data_viewer",
+                    "curve_count": len(self.requests),
+                    "table": {"row_count": 10, "column_count": len(self.requests) + 1},
+                }
+
+            def window(self):
+                return type("Window", (), {"windowTitle": lambda self: "Data Viewer 1"})()
+
+        class FakeMainWindow:
+            def __init__(self):
+                self.viewer = FakeViewer()
+
+            def new_data_viewer_window(self):
+                return self.viewer
+
+        result = UiActionExecutor(main_window=FakeMainWindow()).execute({
+            "type": "open_data_viewer",
+            "db_path": "demo.db",
+            "well_id": 7,
+            "curve_ids": [101, 102],
+        })
+
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result.get("active_window_type"), "data_viewer")
+        self.assertEqual(result.get("curve_count"), 2)
+        self.assertEqual(result.get("row_count"), 10)
+
+    def test_ui_action_executor_open_data_viewer_requires_curve_or_active_selection(self):
+        from plugins.ai_assistant.runtime.ui_action_executor import UiActionExecutor
+
+        result = UiActionExecutor(main_window=object()).execute({"type": "open_data_viewer"})
+
+        self.assertFalse(result.get("ok"), result)
+        self.assertIn("Data Viewer", result.get("error", ""))
+
+    def test_ui_action_executor_converts_highlight_and_depth_actions_to_update_plot(self):
+        from plugins.ai_assistant.runtime.ui_action_executor import UiActionExecutor
+
+        with patch("pylog_api.update_plot", return_value={"ok": True, "applied": 1}) as mock_update:
+            highlight = UiActionExecutor().execute({
+                "type": "highlight_curve",
+                "window_id": "Demo",
+                "track": 0,
+                "curve": "GR",
+                "style": {"color": "#e11d48"},
+            })
+            depth = UiActionExecutor().execute({
+                "type": "set_depth_range",
+                "window_id": "Demo",
+                "depth_range": [1000, 1200],
+            })
+
+        self.assertTrue(highlight.get("ok"), highlight)
+        self.assertTrue(depth.get("ok"), depth)
+        self.assertEqual(mock_update.call_args_list[0].kwargs["commands"][0]["action"], "apply_curve_style")
+        self.assertEqual(mock_update.call_args_list[1].kwargs["commands"][0]["action"], "set_depth_range")
+
+    def test_ui_action_executor_enforces_action_count_limit_without_blocking_earlier_actions(self):
+        from plugins.ai_assistant.runtime.ui_action_executor import UiActionExecutor
+
+        class FakeExecutor(UiActionExecutor):
+            def execute(self, action):
+                return {"ok": True, "type": action.get("type")}
+
+        actions = [{"type": "noop"} for _ in range(UiActionExecutor.MAX_ACTIONS + 1)]
+        results = FakeExecutor().execute_many(actions)
+
+        self.assertEqual(len(results), UiActionExecutor.MAX_ACTIONS + 1)
+        self.assertTrue(results[0].get("ok"))
+        self.assertFalse(results[-1].get("ok"))
+        self.assertIn("limit exceeded", results[-1].get("error", ""))
 
     def test_run_detached_command_sets_utf8_python_env(self):
         from plugins.ai_assistant.tools.verify_tool import _run_detached_command

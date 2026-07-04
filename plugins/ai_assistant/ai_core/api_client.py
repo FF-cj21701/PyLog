@@ -316,14 +316,93 @@ class AsyncAIWorker(QObject):
             result_obj = json.loads(serialized_result)
             normalized = normalize_tool_result("tool_finish", result_obj)
             if normalized.ok:
-                candidate = tool_result_content(normalized, fallback_to_summary=False)
+                candidate = AsyncAIWorker._finish_answer_from_payload(normalized.to_dict())
                 if candidate and (not suppress_summary or not has_visible_response):
                     return candidate
         except Exception:
-            candidate = tool_result_content(serialized_result, fallback_to_summary=False)
+            candidate = ""
             if candidate and (not suppress_summary or not has_visible_response):
                 return candidate
         return None
+
+    @staticmethod
+    def _finish_answer_from_payload(payload) -> str:
+        """Extract only explicit final-answer text from tool_finish payloads."""
+        if not isinstance(payload, dict):
+            return ""
+        for key in ("final_answer", "content"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                text = value.strip()
+                if text.lower() not in {"done", "finished", "complete", "completed", "ok", "success"}:
+                    return text
+        return ""
+
+    @staticmethod
+    def _summarize_external_tool_result(tool_name, serialized_result) -> str:
+        """Create a concise user-facing fallback from the latest meaningful tool result."""
+        if tool_name in {"tool_finish", "tool_update_task_plan", "tool_get_task_plan"}:
+            return ""
+        try:
+            payload = json.loads(serialized_result) if isinstance(serialized_result, str) else serialized_result
+        except Exception:
+            payload = serialized_result
+        if not isinstance(payload, dict):
+            return ""
+
+        ok = bool(payload.get("ok", True)) and not payload.get("error")
+        if tool_name in {"tool_run_script", "tool_get_script_job", "tool_run_python_file"}:
+            return AsyncAIWorker._summarize_script_result(payload, ok=ok)
+
+        content = tool_result_content(payload, fallback_to_summary=False)
+        summary = tool_result_summary(payload)
+        if content and content != summary:
+            return f"{summary}\n\n{content}" if summary else content
+        return summary or ""
+
+    @staticmethod
+    def _summarize_script_result(payload, *, ok: bool) -> str:
+        script_path = payload.get("script_path") or payload.get("filepath")
+        script_name = script_path.split("/")[-1].split("\\")[-1] if script_path else "script"
+        stdout = (payload.get("stdout") or payload.get("terminal") or "").strip()
+        stderr = (payload.get("stderr") or "").strip()
+        exit_code = payload.get("exit_code")
+        duration = payload.get("duration_seconds")
+
+        lines = []
+        if ok:
+            lines.append(f"脚本 `{script_name}` 已成功运行。")
+        else:
+            lines.append(f"脚本 `{script_name}` 运行失败。")
+        if stdout:
+            lines.append(f"输出结果:\n```text\n{stdout}\n```")
+        if stderr:
+            lines.append(f"错误输出:\n```text\n{stderr}\n```")
+        meta = []
+        if exit_code is not None:
+            meta.append(f"退出码: {exit_code}")
+        if duration is not None:
+            meta.append(f"耗时: {duration} 秒")
+        if meta:
+            lines.append("，".join(meta) + "。")
+        return "\n\n".join(lines)
+
+    @staticmethod
+    def _is_low_value_final_response(text: str) -> bool:
+        normalized = " ".join((text or "").strip().lower().split())
+        if not normalized:
+            return True
+        low_value_markers = (
+            "task completed successfully",
+            "task finished successfully",
+            "all steps are completed",
+            "let me now finish",
+            "now i can mark",
+            "i need to mark",
+            "the task is done",
+        )
+        return any(marker in normalized for marker in low_value_markers)
+
 
     @staticmethod
     def _tool_result_succeeded(serialized_result) -> bool:
@@ -586,6 +665,7 @@ class AsyncAIWorker(QObject):
 
         iteration = 0
         final_response = ""
+        latest_external_tool_summary = ""
 
         while iteration < self.max_rounds:
             iteration += 1
@@ -637,6 +717,9 @@ class AsyncAIWorker(QObject):
                 )
 
                 result = await self._execute_tool(mock_tool_call)
+                external_summary = self._summarize_external_tool_result(tool_name, result)
+                if external_summary:
+                    latest_external_tool_summary = external_summary
 
                 if tool_name == "tool_finish":
                     if self._tool_result_succeeded(result):
@@ -657,7 +740,13 @@ class AsyncAIWorker(QObject):
 
             if finish_called:
                 print("tool_finish called, exiting loop.")
-                return finish_result if finish_result else final_response
+                if finish_result:
+                    return finish_result
+                if final_response and not self._is_low_value_final_response(final_response):
+                    return final_response
+                if latest_external_tool_summary:
+                    return latest_external_tool_summary
+                return final_response
 
             if self.execution_policy:
                 guidance = self.execution_policy.finish_guidance(self.agent_state)

@@ -428,6 +428,27 @@ def update_plot_from_commands(log_widget: LogWidget, commands: Iterable[Dict[str
                 continue
             log_widget.remove_track(track)
             applied += 1
+        elif action == "set_depth_range":
+            depth_range = command.get("depth_range")
+            if not isinstance(depth_range, (list, tuple)) or len(depth_range) != 2:
+                errors.append("set_depth_range requires depth_range [min, max]")
+                continue
+            try:
+                log_widget.apply_depth_range(float(depth_range[0]), float(depth_range[1]), force=True)
+                applied += 1
+            except Exception as exc:
+                errors.append(f"Failed to set depth range: {exc}")
+        elif action == "select_curve":
+            track = _resolve_track_ref(log_widget, command.get("track"))
+            if track is None:
+                errors.append(f"Track not found: {command.get('track')}")
+                continue
+            curve_idx = _resolve_curve_index(track, command.get("curve"))
+            if curve_idx is None:
+                errors.append(f"Curve not found: {command.get('curve')}")
+                continue
+            track.select_curve(curve_idx)
+            applied += 1
         else:
             errors.append(f"Unsupported action: {action}")
 

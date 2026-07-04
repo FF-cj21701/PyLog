@@ -674,6 +674,26 @@ class ContextManagerTests(unittest.TestCase):
         self.assertIn("[Recent Tool Results]", context)
         self.assertIn("- tool_read_file: ok; Read 20 lines; file_path: demo.py", context)
 
+    def test_recent_tool_results_include_ui_action_summary_and_failures(self):
+        context = ContextManager().build_context_block([
+            {
+                "type": "tool_result",
+                "tool_name": "tool_run_script",
+                "ok": True,
+                "result": {
+                    "summary": "Script completed",
+                    "ui_action_summary": "1 UI action(s) succeeded, 1 failed",
+                    "ui_action_results": [
+                        {"ok": True, "type": "create_plot"},
+                        {"ok": False, "type": "open_data_viewer", "error": "missing curves"},
+                    ],
+                },
+            }
+        ])
+
+        self.assertIn("ui_actions: 1 UI action(s) succeeded, 1 failed", context)
+        self.assertIn("ui_action_failed: missing curves", context)
+
     def test_recent_tool_results_use_stdout_fallback_and_truncate_long_text(self):
         long_stdout = "x" * (ContextManager.MAX_TOOL_FIELD_LENGTH + 20)
 
@@ -1967,6 +1987,29 @@ class FinishOutputBehaviorTests(unittest.TestCase):
 
         self.assertEqual(output, "Unified visible response")
 
+    def test_finish_generic_success_message_is_not_treated_as_visible_answer(self):
+        output = AsyncAIWorker._extract_finish_visible_output(
+            '{"ok": true, "message": "Task finished successfully.", "content": "", "summary": "Task finished successfully."}',
+            suppress_summary=False,
+            has_visible_response=False,
+        )
+
+        self.assertIsNone(output)
+
+    def test_script_result_summary_promotes_stdout_for_final_display(self):
+        output = AsyncAIWorker._summarize_external_tool_result(
+            "tool_run_script",
+            '{"ok": true, "script_path": "scripts_user/ai_well_curve_list.py", "stdout": "hello\\n", "exit_code": 0, "duration_seconds": 0.67}',
+        )
+
+        self.assertIn("`ai_well_curve_list.py`", output)
+        self.assertIn("hello", output)
+        self.assertIn("退出码: 0", output)
+
+    def test_low_value_finish_process_text_can_be_replaced_by_tool_summary(self):
+        self.assertTrue(AsyncAIWorker._is_low_value_final_response("All steps are completed. Let me now finish."))
+        self.assertFalse(AsyncAIWorker._is_low_value_final_response("脚本已成功运行，输出 hello。"))
+
 
 class WebChatViewResultConsumptionTests(unittest.TestCase):
     def test_normalize_tool_result_payload_promotes_summary_and_content(self):
@@ -1986,6 +2029,27 @@ class WebChatViewResultConsumptionTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["summary"], "Legacy success")
         self.assertEqual(payload["content"], "Legacy success")
+
+    def test_normalize_tool_result_payload_builds_ui_action_review_card(self):
+        payload = WebChatView._normalize_tool_result_payload(
+            {
+                "ok": True,
+                "job_id": "job-1",
+                "ui_actions": [{"type": "create_plot"}],
+                "ui_action_results": [{"ok": True, "type": "create_plot", "summary": "done"}],
+                "ui_action_summary": "1 UI action(s) succeeded",
+                "cards": [
+                    {
+                        "type": "ui_action_review",
+                        "title": "UI Actions",
+                        "path": "job-1",
+                        "actions": [{"id": "review_ui_actions", "label": "Review UI Actions", "payload": {}}],
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(payload["cards"][0]["type"], "ui_action_review")
 
     def test_file_change_cards_are_deferred_until_message_finalization(self):
         view = WebChatView.__new__(WebChatView)

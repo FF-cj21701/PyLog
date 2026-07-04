@@ -115,6 +115,35 @@ def _fetch_script_state(tool_executor, editor_id=None, script_path=None):
     return result if isinstance(result, dict) and result.get("ok") else None
 
 
+def _run_executor_json_request(tool_executor, signal_name, payload):
+    if not tool_executor:
+        return None
+
+    loop = QEventLoop()
+    result = None
+
+    def on_tool_executed(result_str):
+        nonlocal result
+        try:
+            result = json.loads(result_str)
+        except Exception:
+            result = {"ok": False, "error": result_str or "executor returned invalid JSON"}
+        finally:
+            loop.quit()
+
+    try:
+        tool_executor.tool_executed.connect(on_tool_executed)
+        getattr(tool_executor, signal_name).emit(payload)
+        loop.exec()
+    finally:
+        try:
+            tool_executor.tool_executed.disconnect(on_tool_executed)
+        except Exception:
+            pass
+
+    return result
+
+
 def _attach_script_state(result, tool_executor, editor_id=None, script_path=None):
     if not isinstance(result, dict):
         return result
@@ -752,10 +781,16 @@ class GetScriptJobTool(BaseTool):
                 "usage_hint": "Use after tool_run_script(execution_mode='background') to inspect completion, stdout, stderr, or errors.",
             },
         )
+        self.main_window = main_window
+        self.tool_executor = tool_executor
 
     def execute(self, job_id=None):
         if not get_script_job_manager:
             return {"ok": False, "error": "ScriptJobManager is unavailable"}
+        if getattr(self, "tool_executor", None):
+            result = _run_executor_json_request(self.tool_executor, "execute_get_script_job", {"job_id": job_id})
+            if result is not None:
+                return result
         return get_script_job_manager(PathResolver.get_project_root() if PathResolver else None).get_job(job_id)
 
 

@@ -3,6 +3,18 @@
 - This changelog now uses bilingual titles and English body text for long-term encoding stability.
 - Some older entries were historically affected by mojibake. Those sections were normalized into readable English summaries while preserving dates and main themes.
 
+## [2026-07-04] - Background Script UI Actions / 后台脚本UI动作
+
+- Added a whitelisted `ui_actions` bridge from managed background scripts back to the PyLog main process:
+  - scripts can append `ui_actions` or call `emit_ui_action(action)` to request UI work without touching Qt objects directly
+  - `create_plot` and `update_plot` actions are executed through the existing PyLog plotting APIs on the main-thread tool path
+  - `open_data_viewer` can open Data Viewer pages through the main PyLog window
+  - plot actions now include focused helpers such as `set_depth_range`, `select_curve`, `highlight_curve`, and `focus_window`
+  - script job results now include `ui_actions`, `ui_action_results`, and `ui_actions_executed`
+  - UI action review cards expose action payloads/results and allow replaying failed actions through the same whitelist
+- Clarified `apply_curve_style` tool metadata so image-curve display controls such as `cmap`, `invert`, `null_color`, `min`, and `max` are discoverable by the agent.
+- Added `apply_image_style` as an explicit image-curve styling tool that forwards colormap, null-color, inversion, and display-range changes through the existing curve-style API.
+
 ## [2026-07-02] - Effective Context Bubble and Data Viewer Selection Tools / 有效上下文气泡与Data Viewer选区工具
 
 - Added the first managed background script execution boundary:

@@ -35,6 +35,14 @@ except ImportError:
         get_script_job_manager = None
 
 try:
+    from ..runtime.ui_action_executor import UiActionExecutor
+except ImportError:
+    try:
+        from plugins.ai_assistant.runtime.ui_action_executor import UiActionExecutor
+    except ImportError:
+        UiActionExecutor = None
+
+try:
     from scripts.ui.widgets.html_preview_widget import HtmlPreviewWidget, is_html_previewable
 except ImportError:
     HtmlPreviewWidget = None
@@ -51,6 +59,7 @@ class ToolExecutor(QObject):
     execute_append_script_code = Signal(object)
     execute_preview_script_code = Signal(object, str) # payload(filepath/editor_id), code
     execute_run_script = Signal(object, object)  # (code, script_path)
+    execute_get_script_job = Signal(object)
     execute_save_script = Signal(object)
     execute_get_script_state = Signal(object)
     execute_open_agent_page = Signal(object)
@@ -83,6 +92,7 @@ class ToolExecutor(QObject):
         self.execute_append_script_code.connect(self._append_script_code)
         self.execute_preview_script_code.connect(self._preview_script_code)
         self.execute_run_script.connect(self._run_script)
+        self.execute_get_script_job.connect(self._get_script_job)
         self.execute_save_script.connect(self._save_script)
         self.execute_get_script_state.connect(self._get_script_state)
         self.execute_open_agent_page.connect(self._open_agent_page)
@@ -552,6 +562,8 @@ class ToolExecutor(QObject):
                             except Exception:
                                 wells = []
                     manager = get_script_job_manager(PathResolver.get_project_root() if PathResolver else None)
+                    if UiActionExecutor:
+                        manager.set_ui_action_executor(UiActionExecutor(main_window=self.main_window))
                     result = manager.run_script(
                         code=exec_code,
                         script_path=script_path,
@@ -631,6 +643,21 @@ class ToolExecutor(QObject):
         except Exception as e:
             result = {"error": str(e)}
         
+        self.tool_executed.emit(json.dumps(result))
+
+    @Slot(object)
+    def _get_script_job(self, payload):
+        try:
+            if not get_script_job_manager:
+                result = {"ok": False, "error": "ScriptJobManager is unavailable"}
+            else:
+                job_id = payload.get("job_id") if isinstance(payload, dict) else payload
+                manager = get_script_job_manager(PathResolver.get_project_root() if PathResolver else None)
+                if UiActionExecutor:
+                    manager.set_ui_action_executor(UiActionExecutor(main_window=self.main_window))
+                result = manager.get_job(job_id)
+        except Exception as e:
+            result = {"ok": False, "error": str(e)}
         self.tool_executed.emit(json.dumps(result))
     
     @Slot(object)

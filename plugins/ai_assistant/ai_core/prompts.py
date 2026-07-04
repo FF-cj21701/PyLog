@@ -126,6 +126,7 @@ class SystemPrompts:
         "## SCRIPT EXECUTION GUIDELINES\n"
         "1. **Background Plot Rule**: If `tool_run_python_file` reports a successful `background_execution` for an interactive plotting script, do NOT rerun the same script via terminal/command tools just to inspect output. Prefer reading the returned `stdout_log` / `stderr_log` paths with a read tool if you need runtime output.\n"
         "2. **Preview-Aware Verification**: When a script is still in preview, prefer preview-aware run/save tools over creating duplicate files or rerunning through unrelated command tools.\n\n"
+        "3. **PyLog UI Boundary**: Background scripts must not directly manipulate `app`, Qt widgets, Plot windows, or Data Viewer widgets. For PyLog built-in plotting, return whitelisted `ui_actions` such as `create_plot` / `update_plot`, or call the existing plotting tools directly. Plain matplotlib file output may still run in the background process.\n\n"
     )
 
     PLANNING_GUIDELINES = (

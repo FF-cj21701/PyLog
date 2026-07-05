@@ -749,6 +749,18 @@ class SettingsDialogPerformanceTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_ai_settings_dialog_includes_tools_panel(self):
+        from plugins.ai_assistant.ui.widgets.settings_dialog import AISettingsDialog
+
+        dlg = AISettingsDialog()
+
+        sidebar_names = [dlg.sidebar.item(i).text() for i in range(dlg.sidebar.count())]
+        self.assertIn("Tools", sidebar_names)
+        self.assertTrue(hasattr(dlg, "tools_tree"))
+        self.assertGreaterEqual(dlg.tools_tree.topLevelItemCount(), 1)
+        self.assertIn("Local tools:", dlg.tools_summary_label.text())
+        self.assertGreaterEqual(dlg.tools_tree.minimumHeight(), 420)
+
     def test_unified_settings_dialog_initializes(self):
         from scripts.ui.plot_dialogs import UnifiedSettingsDialog
 
@@ -2154,6 +2166,31 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         description = spec.to_model_description()
 
         self.assertIn("Keywords: html, web page, preview.", description)
+
+    def test_settings_tool_inventory_groups_local_tools_by_category(self):
+        from plugins.ai_assistant.ai_core.tool_spec import ToolSpec
+        from plugins.ai_assistant.ui.widgets.settings_dialog import build_local_tool_category_groups
+
+        groups = build_local_tool_category_groups([
+            ToolSpec(
+                name="apply_image_style",
+                description="Apply image colormap settings.",
+                args_schema={},
+                source="local",
+                capability_tags=["image_style", "colormap"],
+            ),
+            ToolSpec(
+                name="mcp_remote_search",
+                description="Remote search tool.",
+                args_schema={},
+                source="mcp",
+                capability_tags=["search"],
+            ),
+        ])
+
+        self.assertIn("Plot / Window", groups)
+        self.assertEqual([spec.name for spec in groups["Plot / Window"]], ["apply_image_style"])
+        self.assertNotIn("Search / Discovery", groups)
 
     def test_document_open_tools_expose_keywords_metadata(self):
         html_tool = OpenHtmlPreviewTool()

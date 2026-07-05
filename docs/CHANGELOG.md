@@ -14,6 +14,7 @@
   - UI action review cards expose action payloads/results and allow replaying failed actions through the same whitelist
 - Clarified `apply_curve_style` tool metadata so image-curve display controls such as `cmap`, `invert`, `null_color`, `min`, and `max` are discoverable by the agent.
 - Added `apply_image_style` as an explicit image-curve styling tool that forwards colormap, null-color, inversion, and display-range changes through the existing curve-style API.
+- Added a read-only Tools page to AI Assistant settings that groups built-in local tools by capability category.
 
 ## [2026-07-02] - Effective Context Bubble and Data Viewer Selection Tools / 有效上下文气泡与Data Viewer选区工具
 

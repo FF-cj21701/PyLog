@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import (QVBoxLayout, QFormLayout, QComboBox, QLineEdit, 
                                 QDialogButtonBox, QSpinBox, QTextEdit, QLabel, QPushButton, QHBoxLayout, 
-                               QFileDialog, QCheckBox, QListWidget, QWidget, QScrollArea, QFrame, QMessageBox, QInputDialog, QDialog)
+                               QFileDialog, QCheckBox, QListWidget, QWidget, QScrollArea, QFrame, QMessageBox, QInputDialog, QDialog,
+                               QTreeWidget, QTreeWidgetItem, QHeaderView, QSizePolicy)
 from PySide6.QtCore import QSettings, Qt
 from core.app_config import app_config
 from ...ai_core.config import AIConfig
@@ -62,6 +63,54 @@ def get_project_root():
             return curr
     # 回退到硬编码计算
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+
+
+TOOL_CATEGORY_RULES = [
+    ("Plot / Window", {"plotting", "plot_spec", "plot_style", "curve_style", "track_style", "image_style", "colormap"}),
+    ("Data / Wells", {"geoscience", "pylog", "well", "curve", "data"}),
+    ("Scripts", {"script", "python", "run script", "script editor"}),
+    ("Files / Workspace", {"file", "patch", "workspace", "document", "html"}),
+    ("Search / Discovery", {"search", "find", "inspect", "help", "locate"}),
+    ("Planning", {"task plan", "plan"}),
+    ("Verification", {"verify", "test", "pytest", "lint", "format", "import"}),
+    ("Skills", {"skill"}),
+]
+
+
+def _tool_text_blob(spec):
+    parts = [
+        getattr(spec, "name", ""),
+        getattr(spec, "description", ""),
+        getattr(spec, "usage_hint", ""),
+        " ".join(getattr(spec, "capability_tags", []) or []),
+        " ".join(getattr(spec, "domain_tags", []) or []),
+        " ".join(getattr(spec, "keywords", []) or []),
+    ]
+    return " ".join(str(part or "") for part in parts).lower()
+
+
+def categorize_local_tool_spec(spec):
+    """Return the settings-page category for a local tool spec."""
+    text = _tool_text_blob(spec)
+    for category, markers in TOOL_CATEGORY_RULES:
+        if any(marker in text for marker in markers):
+            return category
+    return "General"
+
+
+def build_local_tool_category_groups(specs):
+    groups = {}
+    for spec in specs or []:
+        if getattr(spec, "source", "local") != "local":
+            continue
+        category = categorize_local_tool_spec(spec)
+        groups.setdefault(category, []).append(spec)
+
+    for category in groups:
+        groups[category].sort(key=lambda item: getattr(item, "name", ""))
+
+    category_order = {name: index for index, (name, _markers) in enumerate(TOOL_CATEGORY_RULES)}
+    return dict(sorted(groups.items(), key=lambda item: (category_order.get(item[0], 999), item[0])))
 
 
 class LocalMCPServerDialog(QDialog):
@@ -154,11 +203,13 @@ class AISettingsDialog(SidebarSettingsDialog):
         self.connection_panel = self._create_connection_panel()
         self.behavior_panel = self._create_behavior_panel()
         self.extensions_panel = self._create_extensions_panel()
+        self.tools_panel = self._create_tools_panel()
         self.skills_panel = self._create_skills_panel()
         
         self.add_panel("Connection", self.connection_panel)
         self.add_panel("Behavior", self.behavior_panel)
         self.add_panel("Extensions", self.extensions_panel)
+        self.add_panel("Tools", self.tools_panel)
         self.add_panel("Expert Skills", self.skills_panel)
 
         # Apply unified styling to all created buttons
@@ -196,7 +247,7 @@ class AISettingsDialog(SidebarSettingsDialog):
             self.add_profile_btn, self.rename_profile_btn, self.del_profile_btn,
             self.fetch_models_btn, self.add_folder_btn, self.add_file_btn,
             self.remove_selected_btn, self.mcp_add_btn, self.mcp_test_btn, self.mcp_remove_btn,
-            self.refresh_skills_btn, self.create_skill_btn
+            self.refresh_tools_btn, self.refresh_skills_btn, self.create_skill_btn
         ]
         
         for btn in buttons:
@@ -376,6 +427,143 @@ class AISettingsDialog(SidebarSettingsDialog):
         
         layout.addStretch()
         return widget
+
+    def _create_tools_panel(self):
+        widget = QWidget()
+        widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        intro = QLabel(
+            "Read-only inventory of built-in local AI tools. External MCP tools are configured on the Extensions page."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self.tools_summary_label = QLabel("Local tools: not loaded")
+        self.tools_summary_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(self.tools_summary_label)
+
+        self.tools_tree = QTreeWidget()
+        self.tools_tree.setColumnCount(4)
+        self.tools_tree.setHeaderLabels(["Tool", "Description", "Tags", "Risk"])
+        self.tools_tree.setRootIsDecorated(True)
+        self.tools_tree.setAlternatingRowColors(False)
+        self.tools_tree.setUniformRowHeights(False)
+        self.tools_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.tools_tree.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.tools_tree.setMinimumHeight(420)
+        self._style_tools_tree()
+        header = self.tools_tree.header()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        layout.addWidget(self.tools_tree, 1)
+
+        self.refresh_tools_btn = QPushButton("Refresh Local Tools")
+        self.refresh_tools_btn.clicked.connect(self.refresh_local_tools)
+        layout.addWidget(self.refresh_tools_btn)
+
+        return widget
+
+    def _style_tools_tree(self):
+        c = lambda t: app_config.get_theme_color(t)
+        self.tools_tree.setStyleSheet(f"""
+            QTreeWidget {{
+                background-color: {c('dialog_bg')};
+                color: {c('text_main')};
+                border: 1px solid {c('border_std')};
+                border-radius: 8px;
+                outline: none;
+                alternate-background-color: {c('dialog_bg')};
+            }}
+            QTreeWidget::item {{
+                color: {c('text_main')};
+                padding: 6px 4px;
+                border-bottom: 1px solid {c('border_std')};
+            }}
+            QTreeWidget::item:hover {{
+                background-color: {c('input_bg')};
+            }}
+            QTreeWidget::item:selected {{
+                background-color: {c('input_bg')};
+                color: {c('text_main')};
+            }}
+            QHeaderView::section {{
+                background-color: {c('input_bg')};
+                color: {c('text_main')};
+                border: none;
+                border-right: 1px solid {c('border_std')};
+                border-bottom: 1px solid {c('border_std')};
+                padding: 6px 8px;
+                font-weight: bold;
+            }}
+        """)
+
+    def refresh_local_tools(self):
+        """Refresh the read-only local tool inventory shown in settings."""
+        if not hasattr(self, "tools_tree"):
+            return
+
+        self.tools_tree.clear()
+        try:
+            specs = self._load_local_tool_specs()
+            groups = build_local_tool_category_groups(specs)
+        except Exception as e:
+            self.tools_summary_label.setText("Local tools: failed to load")
+            self.tools_tree.addTopLevelItem(QTreeWidgetItem(["Error", str(e), "", ""]))
+            return
+
+        total = sum(len(items) for items in groups.values())
+        self.tools_summary_label.setText(f"Local tools: {total} across {len(groups)} categories")
+
+        if not groups:
+            self.tools_tree.addTopLevelItem(QTreeWidgetItem(["No local tools discovered", "", "", ""]))
+            return
+
+        for category, specs in groups.items():
+            parent = QTreeWidgetItem([f"{category} ({len(specs)})", "", "", ""])
+            parent.setFirstColumnSpanned(True)
+            self.tools_tree.addTopLevelItem(parent)
+            for spec in specs:
+                tags = self._format_tool_tags(spec)
+                description = self._compact_tool_description(getattr(spec, "description", ""))
+                child = QTreeWidgetItem([
+                    getattr(spec, "name", ""),
+                    description,
+                    tags,
+                    getattr(spec, "risk_level", "low"),
+                ])
+                tooltip = spec.to_model_description() if hasattr(spec, "to_model_description") else description
+                for col in range(4):
+                    child.setToolTip(col, tooltip)
+                parent.addChild(child)
+            parent.setExpanded(True)
+
+        for col in range(4):
+            self.tools_tree.resizeColumnToContents(col)
+
+    def _load_local_tool_specs(self):
+        from ...tools.registry import tool_registry
+
+        tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
+        tool_registry.discover(tools_dir)
+        specs = tool_registry.get_tool_specs()
+        return [spec for spec in specs if getattr(spec, "source", "local") == "local"]
+
+    def _format_tool_tags(self, spec):
+        tags = list(getattr(spec, "capability_tags", []) or [])
+        if not tags:
+            tags = list(getattr(spec, "domain_tags", []) or [])
+        return ", ".join(tags[:4])
+
+    def _compact_tool_description(self, text, max_len=140):
+        text = " ".join(str(text or "").split())
+        if len(text) <= max_len:
+            return text
+        return text[: max_len - 3].rstrip() + "..."
 
     def _create_skills_panel(self):
         widget = QWidget()
@@ -650,6 +838,9 @@ class AISettingsDialog(SidebarSettingsDialog):
                 self.mcp_list.addItem(name)
         except: pass
         
+        # Populate local tools UI
+        self.refresh_local_tools()
+
         # Populate skills UI
         self.refresh_skills()
 

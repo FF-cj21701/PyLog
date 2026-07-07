@@ -64,6 +64,11 @@ class _AgentPageHostMixin:
         template_path = os.path.abspath(template_path)
         with open(template_path, "r", encoding="utf-8") as handle:
             html = handle.read()
+        initial_theme_css = ThemeManager.get_web_theme_css(self._current_theme)
+        html = html.replace(
+            '<style id="dynamic-theme-vars"></style>',
+            f'<style id="dynamic-theme-vars">\n{initial_theme_css}\n</style>',
+        )
         base_url = QUrl.fromLocalFile(os.path.dirname(template_path) + "/")
         self.web_view.setHtml(html, baseUrl=base_url)
 

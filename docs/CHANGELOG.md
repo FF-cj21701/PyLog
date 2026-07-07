@@ -3,6 +3,10 @@
 - This changelog now uses bilingual titles and English body text for long-term encoding stability.
 - Some older entries were historically affected by mojibake. Those sections were normalized into readable English summaries while preserving dates and main themes.
 
+## [2026-07-05] - Web AI Settings Workspace Page / Web AI设置工作区页面
+
+- Reworked the AI settings entrypoint to open a reusable Web settings page in the central MDI workspace, replacing the legacy Qt AI settings dialog.
+
 ## [2026-07-04] - Background Script UI Actions / 后台脚本UI动作
 
 - Added a whitelisted `ui_actions` bridge from managed background scripts back to the PyLog main process:

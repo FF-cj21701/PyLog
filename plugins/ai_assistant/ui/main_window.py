@@ -17,7 +17,10 @@ try:
     from ..runtime.ui_action_executor import UiActionExecutor
 except ImportError:
     UiActionExecutor = None
-from .widgets.settings_dialog import AISettingsDialog
+try:
+    from .settings_page import open_ai_settings_page
+except ImportError:
+    open_ai_settings_page = None
 from .widgets.web_chat_view import WebChatView
 from PySide6.QtCore import QObject, Signal
 
@@ -150,11 +153,18 @@ class AIAssistantWidget(QWidget):
             self.append_system_message("Welcome! Please click 'Settings' to configure your AI Model API key.")
 
     def open_settings(self):
-        dlg = AISettingsDialog(self)
-        if dlg.exec():
-            self.append_system_message("Settings updated.")
-            self.update_model_chip()
-            self.memory.update_limit(self.config.get_max_history())
+        if open_ai_settings_page is None:
+            self.append_system_message("AI settings page is unavailable.")
+            return
+        try:
+            open_ai_settings_page(parent=self, on_saved=self._handle_settings_saved)
+        except Exception as e:
+            self.append_system_message(f"Failed to open AI settings page: {e}")
+
+    def _handle_settings_saved(self):
+        self.append_system_message("Settings updated.")
+        self.update_model_chip()
+        self.memory.update_limit(self.config.get_max_history())
 
     def update_model_chip(self):
         base_url = self.config.get_base_url()

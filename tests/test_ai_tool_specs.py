@@ -749,18 +749,6 @@ class SettingsDialogPerformanceTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_ai_settings_dialog_includes_tools_panel(self):
-        from plugins.ai_assistant.ui.widgets.settings_dialog import AISettingsDialog
-
-        dlg = AISettingsDialog()
-
-        sidebar_names = [dlg.sidebar.item(i).text() for i in range(dlg.sidebar.count())]
-        self.assertIn("Tools", sidebar_names)
-        self.assertTrue(hasattr(dlg, "tools_tree"))
-        self.assertGreaterEqual(dlg.tools_tree.topLevelItemCount(), 1)
-        self.assertIn("Local tools:", dlg.tools_summary_label.text())
-        self.assertGreaterEqual(dlg.tools_tree.minimumHeight(), 420)
-
     def test_unified_settings_dialog_initializes(self):
         from scripts.ui.plot_dialogs import UnifiedSettingsDialog
 
@@ -2098,7 +2086,24 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         self.assertIn("def _find_existing_mdi_page(main_window, page_id):", host_code)
         self.assertIn("def close_agent_page(page_id, parent=None):", host_code)
         self.assertIn("ThemeManager.get_web_theme_css(theme_name)", host_code)
+        self.assertIn("initial_theme_css = ThemeManager.get_web_theme_css(self._current_theme)", host_code)
+        self.assertIn('<style id="dynamic-theme-vars">\\n{initial_theme_css}\\n</style>', host_code)
         self.assertIn("if(window.setTheme) window.setTheme", host_code)
+
+    def test_web_theme_css_respects_requested_theme_case_insensitively(self):
+        from core.app_config import app_config
+        from scripts.ui.theme_manager import ThemeManager
+
+        previous_theme = app_config._theme_name
+        app_config._theme_name = "Light"
+        try:
+            css = ThemeManager.get_web_theme_css("dark")
+        finally:
+            app_config._theme_name = previous_theme
+
+        self.assertIn("--bg-primary: #1E1E1E;", css)
+        self.assertIn("--text-primary: #E1E1E1;", css)
+        self.assertNotIn("--bg-primary: #FFFFFF;", css)
 
     def test_review_action_opens_generic_agent_page(self):
         editor_path = os.path.join(
@@ -2153,6 +2158,161 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         self.assertIn("local HTML/web workspace page", update_tool.description)
         self.assertIn("local HTML/web workspace page", close_tool.description)
 
+    def test_ai_settings_entrypoint_opens_mdi_web_page(self):
+        from plugins.ai_assistant.ui import main_window as ai_main_window
+
+        class FakeMemory:
+            def update_limit(self, value):
+                self.value = value
+
+        class FakeConfig:
+            def get_max_history(self):
+                return 9
+
+        fake = type("FakeAssistant", (), {})()
+        fake.messages = []
+        fake.config = FakeConfig()
+        fake.memory = FakeMemory()
+        fake.append_system_message = lambda message: fake.messages.append(message)
+        fake.update_model_chip = lambda: fake.messages.append("model chip updated")
+        fake._handle_settings_saved = lambda: fake.messages.append("settings saved")
+
+        with patch.object(ai_main_window, "open_ai_settings_page") as mock_open:
+            ai_main_window.AIAssistantWidget.open_settings(fake)
+
+        mock_open.assert_called_once()
+        self.assertIs(mock_open.call_args.kwargs["parent"], fake)
+        self.assertIs(mock_open.call_args.kwargs["on_saved"], fake._handle_settings_saved)
+
+    def test_settings_page_bridge_payload_and_save_round_trip(self):
+        from PySide6.QtCore import QSettings
+        from core.app_config import app_config
+        from plugins.ai_assistant.ui.settings_page import SettingsBridge
+
+        settings = QSettings("PyLog", "AIAssistant")
+        backup = {
+            "profiles": settings.value("profiles", "[]"),
+            "current_profile": settings.value("current_profile", "Default"),
+            "max_rounds": settings.value("max_rounds", 5),
+            "max_history": settings.value("max_history", 10),
+            "path_whitelist": settings.value("path_whitelist", ""),
+            "folder_whitelist": settings.value("folder_whitelist", ""),
+            "mcp_enabled": settings.value("mcp_enabled", False),
+            "mcp_servers": settings.value("mcp_servers", "{}"),
+            "disabled_skills": settings.value("disabled_skills", []),
+            "auto_load": app_config.get_ai_auto_load(),
+        }
+
+        bridge = SettingsBridge()
+        try:
+            payload_response = json.loads(bridge.getSettingsPayload())
+            self.assertTrue(payload_response.get("ok"), payload_response)
+            payload = payload_response["payload"]
+            for key in ["profiles", "current_profile", "behavior", "whitelist", "mcp_servers", "tools", "skills", "theme"]:
+                self.assertIn(key, payload)
+
+            save_payload = {
+                "profiles": [{"name": "Codex Test", "provider": "Custom / Other", "api_key": "k", "base_url": "http://localhost/v1", "model": "m"}],
+                "current_profile": "Codex Test",
+                "behavior": {"max_rounds": 7, "max_history": 3, "auto_load": False, "mcp_enabled": False},
+                "whitelist": ["D:/tmp"],
+                "mcp_servers": {},
+                "disabled_skills": ["demo/disabled"],
+            }
+            save_response = json.loads(bridge.saveSettings(json.dumps(save_payload)))
+            self.assertTrue(save_response.get("ok"), save_response)
+            self.assertEqual(bridge.config.get_current_profile_name(), "Codex Test")
+            self.assertEqual(bridge.config.get_max_rounds(), 7)
+            self.assertEqual(bridge.config.get_max_history(), 3)
+            self.assertEqual(bridge.config.get_whitelist(), ["D:/tmp"])
+        finally:
+            settings.setValue("profiles", backup["profiles"])
+            settings.setValue("current_profile", backup["current_profile"])
+            settings.setValue("max_rounds", backup["max_rounds"])
+            settings.setValue("max_history", backup["max_history"])
+            settings.setValue("path_whitelist", backup["path_whitelist"])
+            settings.setValue("folder_whitelist", backup["folder_whitelist"])
+            settings.setValue("mcp_enabled", backup["mcp_enabled"])
+            settings.setValue("mcp_servers", backup["mcp_servers"])
+            settings.setValue("disabled_skills", backup["disabled_skills"])
+            app_config.set_ai_auto_load(backup["auto_load"])
+
+    def test_open_ai_settings_page_uses_reusable_mdi_agent_page(self):
+        from plugins.ai_assistant.ui import settings_page
+
+        with patch.object(settings_page, "open_agent_page", return_value="page") as mock_open:
+            result = settings_page.open_ai_settings_page(parent=None, on_saved=lambda: None)
+
+        self.assertEqual(result, "page")
+        self.assertEqual(mock_open.call_args.kwargs["page_id"], "ai_settings")
+        self.assertEqual(mock_open.call_args.kwargs["title"], "AI Settings")
+        self.assertEqual(mock_open.call_args.kwargs["template"], "settings_template.html")
+        self.assertEqual(mock_open.call_args.kwargs["mode"], "mdi")
+        self.assertIsInstance(mock_open.call_args.kwargs["bridge"], settings_page.SettingsBridge)
+
+    def test_settings_web_resources_expose_required_sections_and_bridge_calls(self):
+        resources_dir = os.path.join(PROJECT_ROOT, "plugins", "ai_assistant", "ui", "resources")
+        with open(os.path.join(resources_dir, "settings_template.html"), "r", encoding="utf-8") as handle:
+            template = handle.read()
+        with open(os.path.join(resources_dir, "settings_page.js"), "r", encoding="utf-8") as handle:
+            script = handle.read()
+        with open(os.path.join(resources_dir, "settings_styles.css"), "r", encoding="utf-8") as handle:
+            styles = handle.read()
+
+        self.assertNotRegex(template, r"\bonclick\s*=")
+        self.assertIn('data-panel="connection"', template)
+        self.assertIn('data-panel="behavior"', template)
+        self.assertIn('data-panel="extensions"', template)
+        self.assertIn('data-panel="tools"', template)
+        self.assertIn('data-panel="skills"', template)
+        self.assertIn('id="save-btn"', template)
+        self.assertIn('id="refresh-btn"', template)
+        self.assertIn("getSettingsPayload", script)
+        self.assertIn("saveSettings", script)
+        self.assertIn("new QWebChannel", script)
+        self.assertIn("tool-row-header", script)
+        self.assertIn("skill-summary", script)
+        self.assertIn("skill-editor", script)
+        self.assertIn("<summary>Edit instruction</summary>", script)
+        self.assertIn("<div>Tool</div>", script)
+        self.assertIn("<div>Description</div>", script)
+        self.assertIn("<div>Tags</div>", script)
+        self.assertIn("<div>Risk</div>", script)
+        self.assertIn('id="dynamic-theme-vars"', template)
+        self.assertLess(template.index('settings_styles.css'), template.index('id="dynamic-theme-vars"'))
+        self.assertIn('class="tools-panel fill-card"', template)
+        self.assertIn('class="skills-panel fill-card"', template)
+        self.assertNotIn('<div class="card fill-card">\n                    <div class="card-header tools-header">', template)
+        self.assertNotIn('<div class="card fill-card">\n                    <div class="card-header">\n                        <h2>Expert Skills</h2>', template)
+        self.assertIn(".tools-container", styles)
+        self.assertIn(".tools-panel", styles)
+        self.assertIn(".skills-panel", styles)
+        self.assertIn(".skill-summary", styles)
+        self.assertIn(".skill-editor summary", styles)
+        self.assertIn("padding: 34px 64px 32px 44px", styles)
+        self.assertIn("border: 1px solid var(--border-color)", styles)
+        self.assertIn(".tool-row-header", styles)
+        self.assertIn("background: transparent", styles)
+        self.assertIn("border-width: 1px 0 0", styles)
+        self.assertIn("overflow: auto", styles)
+        self.assertIn("overflow: visible", styles)
+        self.assertIn("@media (max-width: 1280px)", styles)
+        self.assertIn("grid-template-columns: 200px minmax(0, 1fr)", styles)
+        self.assertIn(".tool-row > :nth-child(4)", styles)
+        self.assertIn("display: none", styles)
+        self.assertNotIn("skills-container {\n    min-height: 0;\n    overflow: auto", styles)
+        self.assertNotIn("list-box,\n.skills-container {\n    min-height: 0;\n    overflow: auto", styles)
+        self.assertIn("grid-template-columns: minmax(180px, 0.8fr)", styles)
+        self.assertIn("Runtime values are injected by ThemeManager.get_web_theme_css()", styles)
+        self.assertIn("#panel-extensions .two-column", styles)
+        self.assertIn("grid-template-columns: minmax(0, 1fr)", styles)
+        self.assertNotIn("repeat(2, minmax(320px, 1fr))", styles)
+        self.assertNotIn("color-mix", styles)
+        self.assertIn("-webkit-line-clamp: 2", styles)
+        self.assertIn(".risk-pill", styles)
+        self.assertIn("var(--text-primary)", styles)
+        self.assertIn("color: var(--bg-primary)", styles)
+
     def test_tool_spec_keywords_flow_into_model_description(self):
         from plugins.ai_assistant.ai_core.tool_spec import ToolSpec
 
@@ -2169,7 +2329,7 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
 
     def test_settings_tool_inventory_groups_local_tools_by_category(self):
         from plugins.ai_assistant.ai_core.tool_spec import ToolSpec
-        from plugins.ai_assistant.ui.widgets.settings_dialog import build_local_tool_category_groups
+        from plugins.ai_assistant.ui.settings_page import build_local_tool_category_groups
 
         groups = build_local_tool_category_groups([
             ToolSpec(

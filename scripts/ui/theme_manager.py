@@ -644,35 +644,40 @@ class ThemeManager:
     @classmethod
     def get_web_theme_vars(cls, theme_name=None):
         """Get a dictionary of theme tokens for web views."""
-        if theme_name is None:
-            theme_name = app_config.get_theme_name()
-        
-        c = lambda t: app_config.get_theme_color(t)
-        
-        # Standardized mapping between AppConfig and Web CSS variables
-        return {
-            "--bg-primary": c("bg_pure"),
-            "--bg-secondary": c("bg_app"),
-            "--bg-tertiary": c("bg_header"),
-            "--bg-dim": c("bg_dim"),
-            "--text-primary": c("text_main"),
-            "--text-secondary": c("text_dim"),
-            "--border-color": c("border_std"),
-            "--border-light": c("border_dark"),
-            "--accent-color": c("accent"),
-            "--primary-color": c("primary"),
-            "--info-bg": c("accent_light"),
-            "--success-color": c("success"),
-            "--danger-color": c("danger"),
-            "--warning-color": c("warning"),
-            
-            # Artistic Style Tokens (Manga focus)
-            "--wc-user": c("wc_user"),
-            "--wc-pill": c("wc_pill"),
-            "--wc-gold": c("wc_gold"),
-            "--border-ink": c("border_ink"),
-            "--shadow-hard": c("shadow_hard"),
-        }
+        normalized_theme = cls._normalize_theme_name(theme_name)
+
+        def build_vars():
+            c = lambda t: app_config.get_theme_color(t)
+
+            # Standardized mapping between AppConfig and Web CSS variables
+            return {
+                "--bg-primary": c("bg_pure"),
+                "--bg-secondary": c("bg_app"),
+                "--bg-tertiary": c("bg_header"),
+                "--bg-dim": c("bg_dim"),
+                "--text-primary": c("text_main"),
+                "--text-secondary": c("text_dim"),
+                "--border-color": c("border_std"),
+                "--border-light": c("border_dark"),
+                "--accent-color": c("accent"),
+                "--primary-color": c("primary"),
+                "--info-bg": c("accent_light"),
+                "--success-color": c("success"),
+                "--danger-color": c("danger"),
+                "--warning-color": c("warning"),
+
+                # Artistic Style Tokens (Manga focus)
+                "--wc-user": c("wc_user"),
+                "--wc-pill": c("wc_pill"),
+                "--wc-gold": c("wc_gold"),
+                "--border-ink": c("border_ink"),
+                "--shadow-hard": c("shadow_hard"),
+            }
+
+        if normalized_theme:
+            with app_config.theme_context(normalized_theme):
+                return build_vars()
+        return build_vars()
 
     @classmethod
     def get_web_theme_css(cls, theme_name=None):
@@ -683,3 +688,18 @@ class ThemeManager:
             css_lines.append(f"    {key}: {val};")
         css_lines.append("}")
         return "\n".join(css_lines)
+
+    @staticmethod
+    def _normalize_theme_name(theme_name=None):
+        """Normalize user-facing theme names for AppConfig lookups."""
+        if theme_name is None:
+            return None
+        value = str(theme_name).strip().lower()
+        mapping = {
+            "light": "Light",
+            "dark": "Dark",
+            "midnight sakura": "Sakura",
+            "sakura": "Sakura",
+            "manga": "Manga",
+        }
+        return mapping.get(value, theme_name)

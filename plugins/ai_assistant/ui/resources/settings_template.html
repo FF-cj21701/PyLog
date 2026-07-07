@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Settings</title>
+    <link rel="stylesheet" href="settings_styles.css">
+    <style id="dynamic-theme-vars"></style>
+    <script src="qwebchannel.js"></script>
+</head>
+<body>
+    <div class="settings-shell">
+        <aside class="settings-sidebar" id="settings-sidebar">
+            <div class="sidebar-title">AI Settings</div>
+            <button class="nav-item active" data-panel="connection">Connection</button>
+            <button class="nav-item" data-panel="behavior">Behavior</button>
+            <button class="nav-item" data-panel="extensions">Extensions</button>
+            <button class="nav-item" data-panel="tools">Tools</button>
+            <button class="nav-item" data-panel="skills">Expert Skills</button>
+        </aside>
+
+        <main class="settings-main">
+            <header class="settings-header">
+                <div class="title-block">
+                    <h1 id="panel-title">Connection</h1>
+                    <p id="panel-subtitle">Configure AI provider profiles.</p>
+                </div>
+                <div class="header-actions">
+                    <span class="status-text" id="status-text"></span>
+                    <button class="secondary-btn" id="refresh-btn">Refresh</button>
+                    <button class="primary-btn" id="save-btn">Save</button>
+                    <button class="secondary-btn" id="close-btn">Close</button>
+                </div>
+            </header>
+
+            <section class="panel active" id="panel-connection">
+                <div class="card">
+                    <div class="section-row">
+                        <label>Active Profile</label>
+                        <select id="profile-select"></select>
+                        <button class="secondary-btn" id="profile-add-btn">New</button>
+                        <button class="secondary-btn" id="profile-rename-btn">Rename</button>
+                        <button class="danger-btn" id="profile-delete-btn">Delete</button>
+                    </div>
+                    <div class="form-grid">
+                        <label>API Key</label>
+                        <input id="api-key-input" type="password" autocomplete="off" placeholder="sk-...">
+                        <label>Base URL</label>
+                        <input id="base-url-input" type="text" placeholder="https://api.example.com/v1">
+                        <label>Model Name</label>
+                        <div class="inline-field">
+                            <input id="model-input" type="text" placeholder="model-name">
+                            <button class="secondary-btn" id="fetch-models-btn">Auto Fetch</button>
+                        </div>
+                    </div>
+                    <div class="model-list" id="model-list"></div>
+                </div>
+            </section>
+
+            <section class="panel" id="panel-behavior">
+                <div class="card form-grid">
+                    <label>Max Chat Rounds</label>
+                    <input id="max-rounds-input" type="number" min="1" max="100">
+                    <label>Max History Rounds</label>
+                    <input id="max-history-input" type="number" min="1" max="100">
+                    <label>Auto-load AI Assistant</label>
+                    <input id="auto-load-input" type="checkbox">
+                    <label>Enable optional local MCP tools</label>
+                    <input id="mcp-enabled-input" type="checkbox">
+                </div>
+            </section>
+
+            <section class="panel" id="panel-extensions">
+                <div class="two-column">
+                    <div class="card list-card">
+                        <div class="card-header">
+                            <h2>Path Whitelist</h2>
+                            <div>
+                                <button class="secondary-btn" id="add-folder-btn">Add Folder</button>
+                                <button class="secondary-btn" id="add-file-btn">Add File</button>
+                            </div>
+                        </div>
+                        <div class="list-box" id="whitelist-list"></div>
+                    </div>
+                    <div class="card list-card">
+                        <div class="card-header">
+                            <h2>Local MCP Servers</h2>
+                            <button class="secondary-btn" id="add-mcp-btn">Add Server</button>
+                        </div>
+                        <div class="list-box" id="mcp-list"></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel" id="panel-tools">
+                <div class="tools-panel fill-card">
+                    <div class="card-header tools-header">
+                        <div>
+                            <h2 id="tools-summary">Local tools</h2>
+                            <p class="section-hint">Search by name, tag, keyword, or description.</p>
+                        </div>
+                        <input class="search-input" id="tools-search" type="search" placeholder="Search tools...">
+                    </div>
+                    <div class="tools-container" id="tools-container"></div>
+                </div>
+            </section>
+
+            <section class="panel" id="panel-skills">
+                <div class="skills-panel fill-card">
+                    <div class="skills-toolbar">
+                        <p class="section-hint">Enable, inspect, or edit project-local skill instructions.</p>
+                        <button class="secondary-btn" id="create-skill-btn">Create Skill</button>
+                    </div>
+                    <div class="skills-container" id="skills-container"></div>
+                </div>
+            </section>
+        </main>
+    </div>
+    <script src="settings_page.js"></script>
+</body>
+</html>

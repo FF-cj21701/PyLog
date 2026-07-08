@@ -12,6 +12,7 @@ from ..ai_core.api_client import AsyncAIWorker
 from ..ai_core.config import AIConfig
 from ..ai_core.mcp_integration import parse_mcp_args_input, test_mcp_server_connection
 from ..ai_core.prompts import SystemPrompts
+from ..common.paths import PathResolver
 from ..services.skill_service import SkillService
 from .widgets.agent_page_host import AgentPageBridge, close_agent_page, open_agent_page
 
@@ -232,6 +233,7 @@ class SettingsBridge(AgentPageBridge):
                 "max_history": self.config.get_max_history(),
                 "auto_load": app_config.get_ai_auto_load(),
                 "mcp_enabled": self.config.get_mcp_enabled(),
+                "workspace_scope": PathResolver.get_ai_workspace_scope(),
             },
             "whitelist": self.config.get_whitelist(),
             "mcp_servers": self.config.get_mcp_servers(),
@@ -262,6 +264,11 @@ class SettingsBridge(AgentPageBridge):
             app_config.set_ai_auto_load(bool(behavior.get("auto_load")))
         if "mcp_enabled" in behavior:
             self.config.set_mcp_enabled(bool(behavior.get("mcp_enabled")))
+        if "workspace_scope" in behavior:
+            scope = str(behavior.get("workspace_scope") or "project").strip().lower()
+            if scope not in {"project", "scripts_user"}:
+                scope = "project"
+            self.settings.setValue("workspace_scope", scope)
 
         whitelist = payload.get("whitelist")
         if isinstance(whitelist, list):

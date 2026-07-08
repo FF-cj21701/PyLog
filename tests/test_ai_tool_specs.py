@@ -2237,6 +2237,7 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
             "mcp_enabled": settings.value("mcp_enabled", False),
             "mcp_servers": settings.value("mcp_servers", "{}"),
             "disabled_skills": settings.value("disabled_skills", []),
+            "workspace_scope": settings.value("workspace_scope", "project"),
             "auto_load": app_config.get_ai_auto_load(),
         }
 
@@ -2247,11 +2248,12 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
             payload = payload_response["payload"]
             for key in ["profiles", "current_profile", "behavior", "whitelist", "mcp_servers", "tools", "skills", "theme"]:
                 self.assertIn(key, payload)
+            self.assertIn(payload["behavior"].get("workspace_scope"), {"project", "scripts_user"})
 
             save_payload = {
                 "profiles": [{"name": "Codex Test", "provider": "Custom / Other", "api_key": "k", "base_url": "http://localhost/v1", "model": "m"}],
                 "current_profile": "Codex Test",
-                "behavior": {"max_rounds": 7, "max_history": 3, "auto_load": False, "mcp_enabled": False},
+                "behavior": {"max_rounds": 7, "max_history": 3, "auto_load": False, "mcp_enabled": False, "workspace_scope": "scripts_user"},
                 "whitelist": ["D:/tmp"],
                 "mcp_servers": {},
                 "disabled_skills": ["demo/disabled"],
@@ -2262,6 +2264,7 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
             self.assertEqual(bridge.config.get_max_rounds(), 7)
             self.assertEqual(bridge.config.get_max_history(), 3)
             self.assertEqual(bridge.config.get_whitelist(), ["D:/tmp"])
+            self.assertEqual(settings.value("workspace_scope", "project"), "scripts_user")
         finally:
             settings.setValue("profiles", backup["profiles"])
             settings.setValue("current_profile", backup["current_profile"])
@@ -2272,6 +2275,7 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
             settings.setValue("mcp_enabled", backup["mcp_enabled"])
             settings.setValue("mcp_servers", backup["mcp_servers"])
             settings.setValue("disabled_skills", backup["disabled_skills"])
+            settings.setValue("workspace_scope", backup["workspace_scope"])
             app_config.set_ai_auto_load(backup["auto_load"])
 
     def test_open_ai_settings_page_uses_reusable_mdi_agent_page(self):
@@ -2304,8 +2308,13 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         self.assertIn('data-panel="skills"', template)
         self.assertIn('id="save-btn"', template)
         self.assertIn('id="refresh-btn"', template)
+        self.assertIn('id="workspace-scope-select"', template)
+        self.assertIn('value="scripts_user"', template)
         self.assertIn("getSettingsPayload", script)
         self.assertIn("saveSettings", script)
+        self.assertIn("workspace_scope", script)
+        self.assertIn("enhanceSettingsSelects", script)
+        self.assertIn("custom-select-menu", script)
         self.assertIn("new QWebChannel", script)
         self.assertIn("tool-row-header", script)
         self.assertIn("skill-summary", script)
@@ -2326,7 +2335,10 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         self.assertIn(".skills-panel", styles)
         self.assertIn(".skill-summary", styles)
         self.assertIn(".skill-editor summary", styles)
-        self.assertIn("padding: 34px 64px 32px 44px", styles)
+        self.assertIn(".native-select-hidden", styles)
+        self.assertIn(".custom-select-menu", styles)
+        self.assertIn("right: 0", styles)
+        self.assertIn("padding: clamp(22px, 3vw, 34px)", styles)
         self.assertIn("border: 1px solid var(--border-color)", styles)
         self.assertIn(".tool-row-header", styles)
         self.assertIn("background: transparent", styles)
@@ -2334,7 +2346,14 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         self.assertIn("overflow: auto", styles)
         self.assertIn("overflow: visible", styles)
         self.assertIn("@media (max-width: 1280px)", styles)
-        self.assertIn("grid-template-columns: 200px minmax(0, 1fr)", styles)
+        self.assertIn("@media (max-width: 1180px)", styles)
+        self.assertIn("@media (max-width: 820px)", styles)
+        self.assertIn("@media (max-width: 520px)", styles)
+        self.assertIn("grid-template-columns: clamp(168px, 20vw, 232px) minmax(0, 1fr)", styles)
+        self.assertIn("grid-template-columns: 1fr 1fr 1fr", styles)
+        self.assertIn("flex-direction: column", styles)
+        self.assertIn("flex-wrap: nowrap", styles)
+        self.assertIn("overflow-x: auto", styles)
         self.assertIn(".tool-row > :nth-child(4)", styles)
         self.assertIn("display: none", styles)
         self.assertNotIn("skills-container {\n    min-height: 0;\n    overflow: auto", styles)
@@ -2342,6 +2361,8 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         self.assertIn("grid-template-columns: minmax(180px, 0.8fr)", styles)
         self.assertIn("Runtime values are injected by ThemeManager.get_web_theme_css()", styles)
         self.assertIn("#panel-extensions .two-column", styles)
+        self.assertIn("flex: 0 0 auto", styles)
+        self.assertIn("min-height: auto", styles)
         self.assertIn("grid-template-columns: minmax(0, 1fr)", styles)
         self.assertNotIn("repeat(2, minmax(320px, 1fr))", styles)
         self.assertNotIn("color-mix", styles)
@@ -2491,6 +2512,44 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         run_command.assert_called_once()
         command_args = run_command.call_args.args[0]
         self.assertEqual(command_args, ["pytest", "tests/test_chat_ui_template_regressions.py", "-q"])
+
+    def test_scripts_user_workspace_blocks_default_run_test_command(self):
+        from plugins.ai_assistant.tools.verify_tool import RunTestCommandTool
+
+        with patch("plugins.ai_assistant.tools.verify_tool._is_scripts_user_workspace", return_value=True):
+            with patch("plugins.ai_assistant.tools.verify_tool._run_command") as run_command:
+                result = RunTestCommandTool().execute()
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["blocked"])
+        self.assertEqual(result["workspace_scope"], "scripts_user")
+        run_command.assert_not_called()
+
+    def test_scripts_user_workspace_blocks_bare_pytest(self):
+        from plugins.ai_assistant.tools.verify_tool import RunTestCommandTool
+
+        with patch("plugins.ai_assistant.tools.verify_tool._is_scripts_user_workspace", return_value=True):
+            with patch("plugins.ai_assistant.tools.verify_tool._run_command") as run_command:
+                result = RunTestCommandTool().execute(command="pytest")
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["blocked"])
+        self.assertIn("bare pytest", result["error"])
+        run_command.assert_not_called()
+
+    def test_scripts_user_workspace_allows_focused_pytest(self):
+        from plugins.ai_assistant.tools.verify_tool import RunTestCommandTool
+
+        with patch("plugins.ai_assistant.tools.verify_tool._is_scripts_user_workspace", return_value=True):
+            with patch("plugins.ai_assistant.tools.verify_tool._command_exists", return_value=True):
+                with patch("plugins.ai_assistant.tools.verify_tool._run_command") as run_command:
+                    run_command.return_value = {"ok": True, "summary": "passed"}
+
+                    result = RunTestCommandTool().execute(command="pytest tests/test_ai_tool_specs.py -q")
+
+        self.assertTrue(result["ok"])
+        run_command.assert_called_once()
+        self.assertEqual(run_command.call_args.args[0], ["pytest", "tests/test_ai_tool_specs.py", "-q"])
 
     def test_second_tier_tools_expose_retrieval_keywords(self):
         self.assertIn("read file", ReadFileTool().spec.keywords)

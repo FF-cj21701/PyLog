@@ -57,6 +57,23 @@ def _project_root():
     return os.getcwd()
 
 
+def _is_scripts_user_workspace():
+    if not PathResolver or not hasattr(PathResolver, "is_scripts_user_workspace"):
+        return False
+    try:
+        return bool(PathResolver.is_scripts_user_workspace())
+    except Exception:
+        return False
+
+
+def _workspace_command_root(cwd=None):
+    if cwd:
+        return cwd
+    if _is_scripts_user_workspace() and PathResolver:
+        return PathResolver.get_scripts_user_dir()
+    return _project_root()
+
+
 def _read_text(path):
     try:
         return Path(path).read_text(encoding="utf-8")
@@ -79,7 +96,7 @@ def _load_pyproject(root):
 
 
 def detect_project_commands(cwd=None):
-    root = cwd or _project_root()
+    root = _workspace_command_root(cwd)
     pyproject = _load_pyproject(root)
     requirements = _read_text(Path(root, "requirements.txt"))
     package_json = _read_text(Path(root, "package.json"))
@@ -142,6 +159,7 @@ def detect_project_commands(cwd=None):
         "project_root": root,
         "detected_commands": commands,
         "evidence": evidence,
+        "workspace_scope": "scripts_user" if _is_scripts_user_workspace() else "project",
         "project_type": "python" if any(e in evidence for e in ["requirements.txt", "pyproject.toml", "pytest.ini", "tests/"]) else "unknown",
     }
 
@@ -327,6 +345,24 @@ def _is_script_target(filepath):
     ) and normalized.endswith(".py")
 
 
+def _is_scripts_user_target(filepath):
+    normalized = str(filepath or "").replace("\\", "/").lower()
+    if not normalized:
+        return False
+    return (
+        "/scripts_user/" in normalized
+        or normalized.startswith("scripts_user/")
+    ) and normalized.endswith(".py")
+
+
+def _is_bare_pytest_command(normalized):
+    try:
+        parts = shlex.split(str(normalized or "").strip())
+    except ValueError:
+        return False
+    return parts == ["pytest"] or parts == ["python", "-m", "pytest"]
+
+
 def verify_target(filepath=None, cwd=None, run_execution=False):
     if filepath:
         resolved = _resolve_path(filepath)
@@ -338,6 +374,17 @@ def verify_target(filepath=None, cwd=None, run_execution=False):
                 "filepath": normalized or filepath,
                 "summary": f"Target file does not exist: {filepath}",
                 "error": f"Target file does not exist: {filepath}",
+            }
+
+        if _is_scripts_user_workspace() and not _is_scripts_user_target(normalized or resolved):
+            return {
+                "ok": False,
+                "target_type": "blocked",
+                "filepath": normalized or filepath,
+                "workspace_scope": "scripts_user",
+                "blocked": True,
+                "summary": "scripts_user workspace only allows verification of scripts_user Python files.",
+                "error": "scripts_user workspace only allows verification of scripts_user Python files.",
             }
 
         if _is_script_target(normalized or resolved):
@@ -392,6 +439,21 @@ def verify_target(filepath=None, cwd=None, run_execution=False):
                 "summary": f"Script import check passed for {normalized}",
                 "recommended_next_tool": "run_python_file",
             }
+
+    if _is_scripts_user_workspace():
+        detected = detect_project_commands(cwd=cwd)
+        return {
+            "ok": False,
+            "target_type": "workspace",
+            "strategy": "scripts_user",
+            "project_root": detected["project_root"],
+            "detected_commands": detected["detected_commands"],
+            "workspace_scope": "scripts_user",
+            "blocked": True,
+            "summary": "scripts_user workspace requires a scripts_user Python filepath for verification.",
+            "error": "scripts_user workspace requires a scripts_user Python filepath for verification.",
+            "recommended_next_tool": "verify_target",
+        }
 
     detected = detect_project_commands(cwd=cwd)
     command = detected["detected_commands"].get("test")
@@ -650,8 +712,28 @@ class RunTestCommandTool(BaseTool):
         )
 
     def execute(self, command=None, cwd=None):
+        if _is_scripts_user_workspace() and not command:
+            detected = detect_project_commands(cwd=cwd)
+            return {
+                "ok": False,
+                "blocked": True,
+                "workspace_scope": "scripts_user",
+                "detected_commands": detected.get("detected_commands", {}),
+                "summary": "scripts_user workspace blocks default project test execution. Pass a focused pytest command explicitly or verify a scripts_user file.",
+                "error": "scripts_user workspace blocks default project test execution.",
+                "recommended_next_tool": "verify_target",
+            }
         detected = detect_project_commands(cwd=cwd)
         normalized = (command or detected["detected_commands"].get("test") or "pytest").strip()
+        if _is_scripts_user_workspace() and _is_bare_pytest_command(normalized):
+            return {
+                "ok": False,
+                "blocked": True,
+                "workspace_scope": "scripts_user",
+                "summary": "scripts_user workspace blocks bare pytest. Use a focused pytest target or verify a scripts_user file.",
+                "error": "scripts_user workspace blocks bare pytest.",
+                "recommended_next_tool": "verify_target",
+            }
         resolved_command = _resolve_test_command(normalized)
         if not resolved_command:
             return {"ok": False, "error": f"Unsupported test command: {normalized}"}

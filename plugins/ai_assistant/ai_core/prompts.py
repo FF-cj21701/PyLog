@@ -78,6 +78,25 @@ class SystemPrompts:
         except Exception:
             return "- Unable to retrieve whitelist"
 
+    @staticmethod
+    def _get_workspace_scope_info():
+        """Return AI workspace scope guidance for verification behavior."""
+        try:
+            try:
+                from ..common.paths import PathResolver
+            except ImportError:
+                from plugins.ai_assistant.common.paths import PathResolver
+
+            scope = PathResolver.get_ai_workspace_scope()
+            if scope == "scripts_user":
+                return (
+                    "- Current AI workspace scope: scripts_user\n"
+                    "- Use script-level verification for scripts_user files. Do not run project-level pytest unless the user explicitly requests it."
+                )
+            return "- Current AI workspace scope: project"
+        except Exception:
+            return "- Current AI workspace scope: project"
+
     SCRIPTING_GUIDELINES = (
         "## SCRIPTING RULES & ANTI-HALLUCINATION\n"
         "1. **Consult Skill First**: Whenever you write a script for PyLog, you MUST first consult the `pylog-scripting` skill using `read_skill(name='pylog-scripting')` for standard templates and API patterns.\n"
@@ -165,6 +184,7 @@ class SystemPrompts:
     def get_default_chat_prompt(cls):
         """Build the default chat system prompt."""
         whitelist_info = cls._get_whitelist_info()
+        workspace_scope_info = cls._get_workspace_scope_info()
 
         return (
             "You are AI Assistant, a highly capable AI specifically designed for well log data analysis within the ALIVE (Agent for Log Interactive Visualization & Execution) software environment.\n\n"
@@ -176,6 +196,8 @@ class SystemPrompts:
             + "## FILE ACCESS PERMISSIONS\n"
             + "File tools can only access files within:\n"
             + f"{whitelist_info}\n\n"
+            + "## AI WORKSPACE SCOPE\n"
+            + f"{workspace_scope_info}\n\n"
             + cls.GEOSCIENCE_SKILL_GUIDELINES
             + cls.SCRIPTING_GUIDELINES
             + "## CORE API SUMMARY (Search for more via `get_help`)\n"

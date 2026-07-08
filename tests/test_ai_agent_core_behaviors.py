@@ -1658,11 +1658,19 @@ class TaskPlanVisibilityTests(unittest.TestCase):
 
 class FinishAndVerificationPolicyTests(unittest.TestCase):
     def setUp(self):
+        self.workspace_scope_patch = patch(
+            "plugins.ai_assistant.ai_core.verification_coordinator.PathResolver.is_scripts_user_workspace",
+            return_value=False,
+        )
+        self.workspace_scope_patch.start()
         self.coordinator = VerificationCoordinator()
         self.policy = ExecutionPolicy(verification_coordinator=self.coordinator)
         self.state = AgentState()
         self.state.start_task("change code")
         self.state.set_task_state("executing", "test setup")
+
+    def tearDown(self):
+        self.workspace_scope_patch.stop()
 
     def test_finish_is_blocked_when_verification_required(self):
         self.state.mark_file_modified("scripts/example.py")
@@ -1703,6 +1711,35 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
         self.assertEqual(request["tool_name"], "run_test_command")
         self.assertEqual(request["args"], {})
         self.assertIn("multiple modified files", request["reason"])
+
+    def test_scripts_user_workspace_avoids_project_test_auto_verification(self):
+        self.state.mark_file_modified("scripts_user/ai_example.py")
+        self.state.mark_file_modified("scripts_user/ai_helper.py")
+
+        with patch(
+            "plugins.ai_assistant.ai_core.verification_coordinator.PathResolver.is_scripts_user_workspace",
+            return_value=True,
+        ):
+            request = self.policy.get_auto_verification_request(self.state)
+
+        self.assertIsNotNone(request)
+        self.assertEqual(request["tool_name"], "verify_target")
+        self.assertEqual(request["args"]["filepath"], "scripts_user/ai_example.py")
+        self.assertIn("scripts_user", request["reason"])
+
+    def test_scripts_user_workspace_strategy_warns_against_project_pytest(self):
+        self.state.mark_file_modified("scripts_user/ai_example.py")
+        self.state.mark_file_modified("scripts_user/ai_helper.py")
+
+        with patch(
+            "plugins.ai_assistant.ai_core.verification_coordinator.PathResolver.is_scripts_user_workspace",
+            return_value=True,
+        ):
+            strategy = self.coordinator.get_verification_strategy(self.state)
+
+        self.assertEqual(strategy["tool_name"], "verify_target")
+        self.assertEqual(strategy["category"], "scripts_user")
+        self.assertIn("Do not run project-level pytest", strategy["message"])
 
     def test_ui_template_verification_strategy_prefers_ui_regressions(self):
         self.state.mark_file_modified("plugins/ai_assistant/ui/resources/editor_template.html")

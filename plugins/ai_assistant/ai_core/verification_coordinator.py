@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
+try:
+    from ..common.paths import PathResolver
+except ImportError:
+    try:
+        from plugins.ai_assistant.common.paths import PathResolver
+    except ImportError:
+        PathResolver = None
+
 
 class VerificationCoordinator:
     """Selects verification actions for changed targets without enforcing policy."""
@@ -27,6 +35,38 @@ class VerificationCoordinator:
         script_targets = [path for path in normalized_files if self._is_script_target(path)]
         ui_targets = [path for path in normalized_files if self._is_ui_target(path)]
         python_targets = [path for path in normalized_files if self._is_python_source_target(path)]
+
+        if self._is_scripts_user_workspace():
+            scripts_user_targets = [path for path in normalized_files if self._is_scripts_user_target(path)]
+            if scripts_user_targets:
+                target = scripts_user_targets[0]
+                return {
+                    "scope": "file",
+                    "category": "scripts_user",
+                    "tool_name": "verify_target",
+                    "args": {"filepath": target},
+                    "reason": f"verify changed scripts_user file `{target}` before finish",
+                    "message": (
+                        "scripts_user workspace is limited to script-level verification. "
+                        f"Run `verify_target(filepath='{target}')`, then if needed "
+                        f"`verify_target(filepath='{target}', run_execution=true)`. "
+                        "Do not run project-level pytest unless the user explicitly requests it."
+                    ),
+                }
+            if normalized_files:
+                target = normalized_files[0]
+                return {
+                    "scope": "file",
+                    "category": "scripts_user_blocked",
+                    "tool_name": "verify_target",
+                    "args": {"filepath": target},
+                    "reason": f"verify changed file `{target}` within scripts_user workspace boundaries",
+                    "message": (
+                        "scripts_user workspace blocks project-level pytest. "
+                        f"Verify a scripts_user Python file with `verify_target(filepath='{target}')`, "
+                        "or ask the user before running broader project tests."
+                    ),
+                }
 
         if len(normalized_files) > 1:
             return self._project_strategy(
@@ -231,6 +271,15 @@ class VerificationCoordinator:
         }
 
     @staticmethod
+    def _is_scripts_user_workspace() -> bool:
+        if not PathResolver or not hasattr(PathResolver, "is_scripts_user_workspace"):
+            return False
+        try:
+            return bool(PathResolver.is_scripts_user_workspace())
+        except Exception:
+            return False
+
+    @staticmethod
     def _is_script_target(filepath: str) -> bool:
         normalized = str(filepath or "").replace("\\", "/").lower()
         if not normalized:
@@ -240,6 +289,16 @@ class VerificationCoordinator:
             or normalized.startswith("scripts_user/")
             or "/scripts/" in normalized
             or normalized.startswith("scripts/")
+        ) and normalized.endswith(".py")
+
+    @staticmethod
+    def _is_scripts_user_target(filepath: str) -> bool:
+        normalized = str(filepath or "").replace("\\", "/").lower()
+        if not normalized:
+            return False
+        return (
+            "/scripts_user/" in normalized
+            or normalized.startswith("scripts_user/")
         ) and normalized.endswith(".py")
 
     @staticmethod

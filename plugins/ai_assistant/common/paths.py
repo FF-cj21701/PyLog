@@ -62,6 +62,19 @@ class PathResolver:
         return os.path.join(root, "scripts_user")
 
     @staticmethod
+    def get_ai_workspace_scope():
+        """Return the configured AI workspace scope."""
+        settings = QSettings("PyLog", "AIAssistant")
+        scope = str(settings.value("workspace_scope", "project") or "project").strip().lower()
+        if scope in {"scripts", "scripts_user", "user_scripts"}:
+            return "scripts_user"
+        return "project"
+
+    @staticmethod
+    def is_scripts_user_workspace():
+        return PathResolver.get_ai_workspace_scope() == "scripts_user"
+
+    @staticmethod
     def clear_cache():
         """Force a re-discovery on next call."""
         PathResolver._cached_root = None

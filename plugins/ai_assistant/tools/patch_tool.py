@@ -127,7 +127,7 @@ def _preview_script_patch(tool_executor, script_path, new_code):
 class ApplyPatchTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_apply_patch",
+            "apply_patch",
             "Apply a structured patch to a file. Prefer this over raw overwrite for code changes.",
             {
                 "filepath": {
@@ -169,7 +169,7 @@ class ApplyPatchTool(BaseTool):
                     "modify hunks",
                     "patch code",
                 ],
-                "usage_hint": "If the target path is unknown, locate it first with tool_find_files or tool_search_code before applying hunks.",
+                "usage_hint": "If the target path is unknown, locate it first with find_files or search_code before applying hunks.",
             }
         )
         self.main_window = main_window

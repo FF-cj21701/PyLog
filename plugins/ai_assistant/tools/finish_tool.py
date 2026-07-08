@@ -35,7 +35,7 @@ class FinishTool(BaseTool):
 
     def __init__(self):
         super().__init__(
-            "tool_finish",
+            "finish",
             "Signal that the task is complete. Prefer using this as a control signal, not a second full reply.",
             {
                 "final_answer": {

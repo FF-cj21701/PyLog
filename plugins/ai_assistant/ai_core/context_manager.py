@@ -271,7 +271,7 @@ class ContextManager:
 
         max_items = int(self._section_policy("skills_summary").get("max_items") or 8)
         lines = ["[Skills Summary]"]
-        self._append_state_line(lines, "use_tool", "tool_read_skill(name='<skill_id>') before applying detailed skill guidance")
+        self._append_state_line(lines, "use_tool", "read_skill(name='<skill_id>') before applying detailed skill guidance")
         total_count = meta.get("total_count") if meta.get("total_count") is not None else len(skills)
         self._append_state_line(lines, "enabled_count", total_count)
 

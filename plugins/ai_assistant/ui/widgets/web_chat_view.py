@@ -507,7 +507,7 @@ class WebChatView(QWebEngineView):
         return [card]
 
     def _is_finish_stage_active(self):
-        return any((tool or {}).get("name") == "tool_finish" for tool in self._current_message_tools)
+        return any((tool or {}).get("name") == "finish" for tool in self._current_message_tools)
 
     def _sync_current_message_to_ui(self, summary=None):
         safe_content = json.dumps(self._current_message_content)
@@ -737,11 +737,19 @@ class WebChatView(QWebEngineView):
         
         self._sync_current_message_to_ui(summary=summary)
 
-    def finalize_current_message(self):
+    def finalize_current_message(self, callback=None):
         """完成当前消息，准备下一轮对话。"""
         self._publish_pending_cards()
-        self._run_js("setLastAiMessageState('finalized');")
-        self._has_active_ai_message = False
+        def _after_finalize(result=None):
+            self._has_active_ai_message = False
+            if callback:
+                callback(result)
+
+        if getattr(self, "_is_ready", False):
+            self._run_js("setLastAiMessageState('finalized');", callback=_after_finalize)
+        else:
+            self._run_js("setLastAiMessageState('finalized');")
+            _after_finalize()
 
     def clear_current_message_state(self):
         """清除当前消息状态，用于开始新消息。"""

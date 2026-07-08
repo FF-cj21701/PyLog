@@ -8,7 +8,7 @@ class AgentEventType:
     MESSAGE_DELTA = "message_delta"
     REASONING_DELTA = "reasoning_delta"
     TOOL_STARTED = "tool_started"
-    TOOL_FINISHED = "tool_finished"
+    TOOL_FINISHED = "finished"
     ROUND_FINISHED = "round_finished"
     TASK_PROGRESS = "task_progress"
     SYSTEM_MESSAGE = "system_message"
@@ -44,7 +44,7 @@ class AgentEvent:
         )
 
     @classmethod
-    def tool_finished(cls, tool_name: str, status: str, result: str) -> "AgentEvent":
+    def finished(cls, tool_name: str, status: str, result: str) -> "AgentEvent":
         return cls(
             type=AgentEventType.TOOL_FINISHED,
             content=result or "",

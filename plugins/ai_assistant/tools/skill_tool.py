@@ -36,7 +36,7 @@ class ReadSkillTool(BaseTool):
     """Tool for the AI to read specialized geoscience skills from the project."""
     
     def __init__(self, main_window=None, tool_executor=None, ui_bridge=None):
-        name = "tool_read_skill"
+        name = "read_skill"
         description = (
             "Read a specialized geoscience skill's documentation. "
             "Use this when you need expert knowledge on LAS/DLIS files, rock physics, "
@@ -45,7 +45,7 @@ class ReadSkillTool(BaseTool):
         args_schema = {
             "name": {
                 "type": "string",
-                "description": "The path or name of the skill to read (e.g., 'lasio', 'workflows/well-log-evaluation'). Use tool_read_skill with an empty name to see the full list of path-based IDs."
+                "description": "The path or name of the skill to read (e.g., 'lasio', 'workflows/well-log-evaluation'). Use read_skill with an empty name to see the full list of path-based IDs."
             }
         }
         super().__init__(name, description, args_schema)

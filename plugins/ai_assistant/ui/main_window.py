@@ -330,12 +330,12 @@ class AIAssistantWidget(QWidget):
     def handle_chat_finished(self, full_content):
         """处理完成状态，此时将正文区彻底裁剪为最终结果，让早前被 stash 的步骤自然暴露在 details 里"""
         self._flush_stream_updates()
-        # 如果最后一步使用了 tool_finish 且内容是琐碎的（如 "ok"），则优先使用之前流式积累的内容作为总结
+        # 如果最后一步使用了 finish 且内容是琐碎的（如 "ok"），则优先使用之前流式积累的内容作为总结
         accumulated_content = self._streaming_content
         self._streaming_content = full_content
 
         current_tools = getattr(self.chat_view, "_current_message_tools", []) or []
-        finish_used = any((t or {}).get("name") == "tool_finish" for t in current_tools)
+        finish_used = any((t or {}).get("name") == "finish" for t in current_tools)
         normalized_full = (full_content or "").strip().lower()
         trivial_finish_texts = {"done", "finished", "complete", "completed", "ok", "success", "task finished successfully."}
         should_ignore_finish = finish_used and (normalized_full in trivial_finish_texts or not normalized_full)
@@ -347,14 +347,15 @@ class AIAssistantWidget(QWidget):
         else:
             self.chat_view.update_last_message(full_content, self._streaming_reasoning)
 
-        self.chat_view.finalize_current_message()
-
         self.memory.add_ai_message(full_content)
-        self.chat_view.set_input_enabled(True)
-        self._pending_mode = "chat"
-        self.update_model_chip()
-        self._is_sending = False
-        self.chat_view.set_sending_state(False)  # 切换回发送按钮
+        def _complete_turn(_result=None):
+            self.chat_view.set_input_enabled(True)
+            self._pending_mode = "chat"
+            self.update_model_chip()
+            self._is_sending = False
+            self.chat_view.set_sending_state(False)  # 切换回发送按钮
+
+        self.chat_view.finalize_current_message(callback=_complete_turn)
 
     def handle_script_generated(self, code):
         self._flush_stream_updates()
@@ -399,9 +400,9 @@ class AIAssistantWidget(QWidget):
         self._flush_stream_updates()
 
         # Keep the final-answer draft in the main answer area when the agent is
-        # transitioning into tool_finish. Other tool transitions only stash
+        # transitioning into finish. Other tool transitions only stash
         # visible assistant text; details are populated after the full run ends.
-        is_finish_tool = tool_name == "tool_finish"
+        is_finish_tool = tool_name == "finish"
         if not is_finish_tool and self._streaming_content and self._streaming_content.strip():
             self._stash_current_streaming_content()
 

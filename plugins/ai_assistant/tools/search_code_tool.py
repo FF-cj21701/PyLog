@@ -298,7 +298,7 @@ def _find_text_references(filepath, rel_path, symbol):
 @register_tool
 class SearchCodeTool(BaseTool):
     def __init__(self, main_window=None):
-        super().__init__("tool_search_code", "Search for code patterns, functions, or keywords across the codebase. Use this to understand project structure, find existing implementations, or locate specific code.", {
+        super().__init__("search_code", "Search for code patterns, functions, or keywords across the codebase. Use this to understand project structure, find existing implementations, or locate specific code.", {
             "query": {
                 "type": "string",
                 "description": "Search query - can be a function name, class name, keyword, or code pattern"
@@ -376,7 +376,7 @@ class SearchCodeTool(BaseTool):
 @register_tool
 class FindFilesTool(BaseTool):
     def __init__(self, main_window=None):
-        super().__init__("tool_find_files", "Find files by name pattern using glob patterns. Use this to locate specific files or groups of files in the project.", {
+        super().__init__("find_files", "Find files by name pattern using glob patterns. Use this to locate specific files or groups of files in the project.", {
             "pattern": {
                 "type": "string",
                 "description": "Glob pattern to match files (e.g., '*.py', 'plugins/**/*.py', 'scripts_user/*.py')"
@@ -445,7 +445,7 @@ class FindFilesTool(BaseTool):
 @register_tool
 class GrepCodeTool(BaseTool):
     def __init__(self, main_window=None):
-        super().__init__("tool_grep_code", "Search for code using regex patterns. More powerful than simple text search. Use this for finding specific code patterns, function definitions, or complex matches.", {
+        super().__init__("grep_code", "Search for code using regex patterns. More powerful than simple text search. Use this for finding specific code patterns, function definitions, or complex matches.", {
             "pattern": {
                 "type": "string",
                 "description": "Regular expression pattern to search for (e.g., 'def\\s+\\w+', 'class\\s+\\w+')"
@@ -521,7 +521,7 @@ class GrepCodeTool(BaseTool):
 @register_tool
 class FindSymbolTool(BaseTool):
     def __init__(self, main_window=None):
-        super().__init__("tool_find_symbol", "Find symbol definitions in the codebase. Best for locating Python classes, functions, methods, async functions, and top-level variables.", {
+        super().__init__("find_symbol", "Find symbol definitions in the codebase. Best for locating Python classes, functions, methods, async functions, and top-level variables.", {
             "symbol": {
                 "type": "string",
                 "description": "Exact symbol name to find."
@@ -585,7 +585,7 @@ class FindSymbolTool(BaseTool):
 @register_tool
 class FindReferencesTool(BaseTool):
     def __init__(self, main_window=None):
-        super().__init__("tool_find_references", "Find references to a symbol across the codebase. For Python files, it classifies reference types such as import, call, inherit, attribute_access, and definition; for other code files it falls back to text matching.", {
+        super().__init__("find_references", "Find references to a symbol across the codebase. For Python files, it classifies reference types such as import, call, inherit, attribute_access, and definition; for other code files it falls back to text matching.", {
             "symbol": {
                 "type": "string",
                 "description": "Exact symbol name to find references for."
@@ -612,7 +612,7 @@ class FindReferencesTool(BaseTool):
                 "call sites",
                 "where used",
             ],
-            "usage_hint": "Use after tool_find_symbol to understand call sites and impact before changing code.",
+            "usage_hint": "Use after find_symbol to understand call sites and impact before changing code.",
         })
         self.main_window = main_window
 

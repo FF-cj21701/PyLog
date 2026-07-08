@@ -311,10 +311,10 @@ class AsyncAIWorker(QObject):
 
     @staticmethod
     def _extract_finish_visible_output(serialized_result, *, suppress_summary, has_visible_response):
-        """Return visible text contributed by tool_finish, if any."""
+        """Return visible text contributed by finish, if any."""
         try:
             result_obj = json.loads(serialized_result)
-            normalized = normalize_tool_result("tool_finish", result_obj)
+            normalized = normalize_tool_result("finish", result_obj)
             if normalized.ok:
                 candidate = AsyncAIWorker._finish_answer_from_payload(normalized.to_dict())
                 if candidate and (not suppress_summary or not has_visible_response):
@@ -327,7 +327,7 @@ class AsyncAIWorker(QObject):
 
     @staticmethod
     def _finish_answer_from_payload(payload) -> str:
-        """Extract only explicit final-answer text from tool_finish payloads."""
+        """Extract only explicit final-answer text from finish payloads."""
         if not isinstance(payload, dict):
             return ""
         for key in ("final_answer", "content"):
@@ -341,7 +341,7 @@ class AsyncAIWorker(QObject):
     @staticmethod
     def _summarize_external_tool_result(tool_name, serialized_result) -> str:
         """Create a concise user-facing fallback from the latest meaningful tool result."""
-        if tool_name in {"tool_finish", "tool_update_task_plan", "tool_get_task_plan"}:
+        if tool_name in {"finish", "update_task_plan", "get_task_plan"}:
             return ""
         try:
             payload = json.loads(serialized_result) if isinstance(serialized_result, str) else serialized_result
@@ -351,7 +351,7 @@ class AsyncAIWorker(QObject):
             return ""
 
         ok = bool(payload.get("ok", True)) and not payload.get("error")
-        if tool_name in {"tool_run_script", "tool_get_script_job", "tool_run_python_file"}:
+        if tool_name in {"run_script", "get_script_job", "run_python_file"}:
             return AsyncAIWorker._summarize_script_result(payload, ok=ok)
 
         content = tool_result_content(payload, fallback_to_summary=False)
@@ -408,7 +408,7 @@ class AsyncAIWorker(QObject):
     def _tool_result_succeeded(serialized_result) -> bool:
         try:
             result_obj = json.loads(serialized_result) if isinstance(serialized_result, str) else serialized_result
-            return bool(normalize_tool_result("tool_finish", result_obj).ok)
+            return bool(normalize_tool_result("finish", result_obj).ok)
         except Exception:
             return False
 
@@ -433,7 +433,7 @@ class AsyncAIWorker(QObject):
                 if self.agent_state:
                     self.agent_state.record_error(policy_error)
                     self.agent_state.record_tool_result(tool_name, "failed", error=policy_error)
-                if self.task_state_machine and tool_name == "tool_finish":
+                if self.task_state_machine and tool_name == "finish":
                     self.task_state_machine.on_finish_blocked(policy_error)
                 error_result = error_tool_result(tool_name, policy_error)
                 self.tool_call_finished.emit(tool_name, "error", serialize_tool_result(error_result))
@@ -493,7 +493,7 @@ class AsyncAIWorker(QObject):
             tool = self._find_tool(tool_name)
             policy_error = self.execution_policy.before_tool_call(self.agent_state, tool_name, args, tool=tool)
             if policy_error:
-                if tool_name == "tool_finish":
+                if tool_name == "finish":
                     if self.task_state_machine:
                         self.task_state_machine.on_finish_blocked(policy_error)
                     auto_request = (
@@ -659,7 +659,7 @@ class AsyncAIWorker(QObject):
         return tool_calls
 
     async def _run_react_loop(self, messages, tool_configs):
-        """Run the streaming ReAct loop until tool_finish or max rounds."""
+        """Run the streaming ReAct loop until finish or max rounds."""
         from openai.types.chat import ChatCompletionMessageToolCall
         from openai.types.chat.chat_completion_message_tool_call import Function
 
@@ -721,7 +721,7 @@ class AsyncAIWorker(QObject):
                 if external_summary:
                     latest_external_tool_summary = external_summary
 
-                if tool_name == "tool_finish":
+                if tool_name == "finish":
                     if self._tool_result_succeeded(result):
                         finish_called = True
                         finish_result = self._extract_finish_visible_output(
@@ -739,7 +739,7 @@ class AsyncAIWorker(QObject):
                 )
 
             if finish_called:
-                print("tool_finish called, exiting loop.")
+                print("finish called, exiting loop.")
                 if finish_result:
                     return finish_result
                 if final_response and not self._is_low_value_final_response(final_response):

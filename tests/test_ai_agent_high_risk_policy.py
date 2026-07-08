@@ -106,7 +106,7 @@ class ToolSelectionStrategyTests(unittest.TestCase):
 
     def test_verification_tool_ranks_ahead_of_high_risk_external_tool(self):
         verification_spec = ToolSpec(
-            name="tool_verify_target",
+            name="verify_target",
             description="verify",
             args_schema={},
             source="local",
@@ -130,7 +130,7 @@ class ToolSelectionStrategyTests(unittest.TestCase):
 
         ranked = self.strategy.order_specs([risky_external_spec, verification_spec], state=self.state)
 
-        self.assertEqual(ranked[0].name, "tool_verify_target")
+        self.assertEqual(ranked[0].name, "verify_target")
         self.assertEqual(ranked[-1].name, "mcp_delete_remote_resource")
 
 

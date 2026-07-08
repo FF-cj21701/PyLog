@@ -1,6 +1,7 @@
 import os
 import json
 import importlib
+import shlex
 from PySide6.QtCore import QCoreApplication, QEventLoop
 
 import sys
@@ -81,6 +82,53 @@ def _classify_document_path(filepath):
     if is_html_previewable and is_html_previewable(lower_path):
         return "html"
     return "unsupported"
+
+
+def normalize_script_terminal_command(command):
+    """Normalize input for the script editor's Python terminal."""
+    raw = str(command or "").strip()
+    if not raw:
+        return "", "command is required"
+
+    lowered = raw.lower()
+    if lowered.startswith(("python -c", "python.exe -c", "py -c")):
+        try:
+            parts = shlex.split(raw, posix=False)
+            if len(parts) >= 3 and parts[1].lower() == "-c":
+                code = parts[2]
+                if len(code) >= 2 and code[0] == code[-1] and code[0] in {'"', "'"}:
+                    code = code[1:-1]
+                return code.strip(), None
+        except Exception:
+            pass
+        return "", (
+            "run_terminal_command accepts raw Python code. Remove the python -c "
+            "wrapper and pass only the Python statements."
+        )
+
+    shell_prefixes = (
+        "python ",
+        "python.exe ",
+        "py ",
+        "pip ",
+        "pytest",
+        "cmd ",
+        "cmd.exe ",
+        "powershell ",
+        "powershell.exe ",
+        "pwsh ",
+        "dir",
+        "ls",
+        "cd ",
+    )
+    if lowered.startswith(shell_prefixes):
+        return "", (
+            "run_terminal_command executes raw Python statements in the script editor "
+            "Python terminal, not shell commands. Use run_shell_command for command-line "
+            "syntax, or remove the shell wrapper."
+        )
+
+    return raw, None
 
 
 def _fetch_script_state(tool_executor, editor_id=None, script_path=None):
@@ -243,7 +291,7 @@ def _get_script_editor_code(main_window, editor_id=None, script_path=None):
 @register_tool
 class OpenScriptTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
-        super().__init__("tool_open_script", "Open a new empty script editor window and return its editor_id for later editor operations.", {
+        super().__init__("open_script", "Open a new empty script editor window and return its editor_id for later editor operations.", {
             "title": {
                 "type": "string",
                 "description": "Title for the script editor window",
@@ -287,7 +335,7 @@ class OpenScriptTool(BaseTool):
 @register_tool
 class OpenScriptFileTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
-        super().__init__("tool_open_script_file", "Open an existing script file in a new editor window. Use this when user wants to open a specific script file by name or path. IMPORTANT: Always use tool_search_code or tool_find_files to locate the file first if the path is unknown.", {
+        super().__init__("open_script_file", "Open an existing script file in a new editor window. Use this when user wants to open a specific script file by name or path. IMPORTANT: Always use search_code or find_files to locate the file first if the path is unknown.", {
             "filepath": {
                 "type": "string",
                 "description": "Full path to the script file to open. For example: 'scripts_user/list_wells.py' or 'scripts_user/direct_plot_sample.py'"
@@ -304,7 +352,7 @@ class OpenScriptFileTool(BaseTool):
                 "python editor",
                 "open .py",
             ],
-            "usage_hint": "If the exact path is unknown, call tool_find_files or tool_search_code first to locate candidate files.",
+            "usage_hint": "If the exact path is unknown, call find_files or search_code first to locate candidate files.",
         })
         self.main_window = main_window
         self.tool_executor = tool_executor
@@ -336,7 +384,7 @@ class OpenScriptFileTool(BaseTool):
 class OpenHtmlPreviewTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_open_html_preview",
+            "open_html_preview",
             "Open an existing local HTML file in the workspace as a rendered web preview. Use this for .html or .htm documents when the user wants to view the page itself instead of raw source.",
             {
                 "filepath": {
@@ -394,7 +442,7 @@ class OpenHtmlPreviewTool(BaseTool):
 class OpenDocumentTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_open_document",
+            "open_document",
             "Open a local workspace document using the most suitable built-in surface. Python scripts open in the script editor, while HTML files open as rendered web previews. This reuses the existing file-specific open tools so future document types can be added centrally.",
             {
                 "filepath": {
@@ -451,7 +499,7 @@ class OpenDocumentTool(BaseTool):
 @register_tool
 class WriteScriptFileTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
-        super().__init__("tool_write_script_file", "Create a new script file on disk. Optionally open it in an editor so later editor tools can target it by editor_id.", {
+        super().__init__("write_script_file", "Create a new script file on disk. Optionally open it in an editor so later editor tools can target it by editor_id.", {
             "filepath": {
                 "type": "string",
                 "description": "Full path to the script file to create. For example: 'scripts_user/new_script.py'"
@@ -480,7 +528,7 @@ class WriteScriptFileTool(BaseTool):
                 "new script file",
                 "save new script",
             ],
-            "usage_hint": "Use tool_find_files or tool_search_code first when you only know the filename or feature, not the exact path.",
+            "usage_hint": "Use find_files or search_code first when you only know the filename or feature, not the exact path.",
         })
         self.main_window = main_window
         self.tool_executor = tool_executor
@@ -559,7 +607,7 @@ class WriteScriptFileTool(BaseTool):
 @register_tool
 class SetScriptCodeTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
-        super().__init__("tool_set_script_code", "Set the full content of a script editor. Prefer passing editor_id returned by tool_open_script or tool_open_script_file.", {
+        super().__init__("set_script_code", "Set the full content of a script editor. Prefer passing editor_id returned by open_script or open_script_file.", {
             "code": {
                 "type": "string",
                 "description": "Python code to place in the script editor"
@@ -612,7 +660,7 @@ class SetScriptCodeTool(BaseTool):
 @register_tool
 class AppendScriptCodeTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
-        super().__init__("tool_append_script_code", "Append Python code to a script editor. Prefer passing editor_id returned by tool_open_script or tool_open_script_file.", {
+        super().__init__("append_script_code", "Append Python code to a script editor. Prefer passing editor_id returned by open_script or open_script_file.", {
             "code": {
                 "type": "string",
                 "description": "Python code to append to the script editor"
@@ -681,7 +729,7 @@ class AppendScriptCodeTool(BaseTool):
 @register_tool
 class RunScriptTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
-        super().__init__("tool_run_script", "Run a script in the dedicated AI terminal. You can provide raw code, a script_path, or an editor_id.", {
+        super().__init__("run_script", "Run a script in the dedicated AI terminal. You can provide raw code, a script_path, or an editor_id.", {
             "code": {
                 "type": "string",
                 "description": "Optional: Raw Python code to execute directly",
@@ -725,7 +773,7 @@ class RunScriptTool(BaseTool):
                 "background script",
                 "long running script",
             ],
-            "usage_hint": "Provide code, script_path, or editor_id. Defaults to quick background-process execution; use background for long tasks and tool_get_script_job/tool_stop_script to monitor or cancel.",
+            "usage_hint": "Provide code, script_path, or editor_id. Defaults to quick background-process execution; use background for long tasks and get_script_job/stop_script to monitor or cancel.",
         })
         self.main_window = main_window
         self.tool_executor = tool_executor
@@ -765,12 +813,12 @@ class RunScriptTool(BaseTool):
 class GetScriptJobTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_get_script_job",
+            "get_script_job",
             "Inspect a background script job by job_id and return its latest status and output.",
             {
                 "job_id": {
                     "type": "string",
-                    "description": "Script job id returned by tool_run_script.",
+                    "description": "Script job id returned by run_script.",
                 }
             },
             metadata={
@@ -778,7 +826,7 @@ class GetScriptJobTool(BaseTool):
                 "capability_tags": ["script_execution", "job_status"],
                 "domain_tags": ["script"],
                 "keywords": ["script job", "check script", "background script status", "get script output"],
-                "usage_hint": "Use after tool_run_script(execution_mode='background') to inspect completion, stdout, stderr, or errors.",
+                "usage_hint": "Use after run_script(execution_mode='background') to inspect completion, stdout, stderr, or errors.",
             },
         )
         self.main_window = main_window
@@ -798,12 +846,12 @@ class GetScriptJobTool(BaseTool):
 class StopScriptTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_stop_script",
+            "stop_script",
             "Stop a running background script job by job_id.",
             {
                 "job_id": {
                     "type": "string",
-                    "description": "Script job id returned by tool_run_script.",
+                    "description": "Script job id returned by run_script.",
                 }
             },
             metadata={
@@ -824,7 +872,7 @@ class StopScriptTool(BaseTool):
 @register_tool
 class SaveScriptTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
-        super().__init__("tool_save_script", "Save a script editor to disk. Prefer passing editor_id to avoid saving the wrong tab.", {
+        super().__init__("save_script", "Save a script editor to disk. Prefer passing editor_id to avoid saving the wrong tab.", {
             "filename": {
                 "type": "string",
                 "description": "Filename or full path to save the script as. If omitted, save to existing script_path.",
@@ -879,7 +927,7 @@ class SaveScriptTool(BaseTool):
 @register_tool
 class GetScriptStateTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
-        super().__init__("tool_get_script_state", "Get structured state for an open script editor, including whether it is in AI preview mode, whether it has unsaved changes, and whether the current working copy should be run instead of creating a new file.", {
+        super().__init__("get_script_state", "Get structured state for an open script editor, including whether it is in AI preview mode, whether it has unsaved changes, and whether the current working copy should be run instead of creating a new file.", {
             "editor_id": {
                 "type": "string",
                 "description": "Optional target editor id.",
@@ -933,7 +981,7 @@ class GetScriptStateTool(BaseTool):
 @register_tool
 class ListScriptsTool(BaseTool):
     def __init__(self):
-        super().__init__("tool_list_scripts", "List all user script files in the scripts_user directory", {}, metadata={
+        super().__init__("list_scripts", "List all user script files in the scripts_user directory", {}, metadata={
             "capability_tags": ["search", "script_inventory"],
             "domain_tags": ["script"],
             "keywords": [
@@ -958,7 +1006,7 @@ class ListScriptsTool(BaseTool):
                 if file.endswith(".py"):
                     full_path = os.path.join(root, file)
                     # 返回相对于项目根目录的路径，或者相对于 scripts_user 的路径
-                    # 考虑到 tool_open_script_file 的描述，通常使用 'scripts_user/folder/script.py'
+                    # 考虑到 open_script_file 的描述，通常使用 'scripts_user/folder/script.py'
                     rel_path = os.path.relpath(full_path, os.getcwd())
                     scripts.append(rel_path.replace('\\', '/'))
         return sorted(scripts)
@@ -967,10 +1015,10 @@ class ListScriptsTool(BaseTool):
 @register_tool
 class RunTerminalCommandTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
-        super().__init__("tool_run_terminal_command", "Execute a Python command in the script editor's terminal. Use this to run Python code interactively or test commands.", {
+        super().__init__("run_terminal_command", "Run raw Python statements in the script editor Python terminal. Do not include python -c, shell commands, or command-line syntax.", {
             "command": {
                 "type": "string",
-                "description": "Python command to execute in the terminal"
+                "description": "Raw Python statements to execute in the script editor Python terminal. Do not include python -c or shell syntax."
             }
         }, metadata={
             "required_args": ["command"],
@@ -982,6 +1030,7 @@ class RunTerminalCommandTool(BaseTool):
                 "interactive python command",
                 "run python command",
             ],
+            "usage_hint": "Pass raw Python code only, for example `print(1 + 1)`. Do not pass `python -c ...`, `pytest`, `pip`, or shell commands.",
         })
         self.main_window = main_window
         self.tool_executor = tool_executor
@@ -992,6 +1041,10 @@ class RunTerminalCommandTool(BaseTool):
 
         if not command or not command.strip():
             return {"error": "command is required"}
+
+        normalized_command, error = normalize_script_terminal_command(command)
+        if error:
+            return {"ok": False, "error": error}
 
         loop = QEventLoop()
         result = {"error": "execution failed"}
@@ -1006,7 +1059,7 @@ class RunTerminalCommandTool(BaseTool):
                 loop.quit()
 
         self.tool_executor.tool_executed.connect(on_tool_executed)
-        self.tool_executor.execute_run_terminal_command.emit(command.strip())
+        self.tool_executor.execute_run_terminal_command.emit(normalized_command)
 
         loop.exec()
 

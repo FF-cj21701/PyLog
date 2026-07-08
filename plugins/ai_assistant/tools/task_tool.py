@@ -87,7 +87,7 @@ def _current_plan_payload(agent_state) -> Dict[str, Any]:
 class CreateTaskPlanTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None, ui_bridge=None, agent_state=None):
         super().__init__(
-            "tool_create_task_plan",
+            "create_task_plan",
             "Create the agent's short-lived execution plan for the current task. Use this as the default structured tracker for tasks that need 3 or more execution steps.",
             {
                 "steps": {
@@ -156,7 +156,7 @@ class CreateTaskPlanTool(BaseTool):
 class GetTaskPlanTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None, ui_bridge=None, agent_state=None):
         super().__init__(
-            "tool_get_task_plan",
+            "get_task_plan",
             "Get the current agent execution plan and its live step statuses.",
             {},
             metadata={
@@ -194,7 +194,7 @@ class UpdateTaskPlanTool(BaseTool):
 
     def __init__(self, main_window=None, tool_executor=None, ui_bridge=None, agent_state=None):
         super().__init__(
-            "tool_update_task_plan",
+            "update_task_plan",
             "Update the current agent task plan by marking an existing step as pending, in progress, completed, failed, or skipped.",
             {
                 "step_id": {

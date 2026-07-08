@@ -10,7 +10,7 @@ PLAN_STATUS_IN_PROGRESS = "in_progress"
 PLAN_STATUS_COMPLETED = "completed"
 PLAN_STATUS_FAILED = "failed"
 PLAN_STATUS_SKIPPED = "skipped"
-PLAN_TOOL_NAMES = {"tool_create_task_plan", "tool_get_task_plan", "tool_update_task_plan"}
+PLAN_TOOL_NAMES = {"create_task_plan", "get_task_plan", "update_task_plan"}
 
 
 @dataclass
@@ -250,7 +250,7 @@ def find_plan_step_id_for_tool(plan_steps: Iterable[Dict[str, object]], tool_nam
                 return str(step.get("id") or "")
         return None
 
-    if tool_name == "tool_finish":
+    if tool_name == "finish":
         return step_id_at(len(steps) - 1)
 
     capability_tags = set(getattr(tool, "capability_tags", []) or [])
@@ -263,7 +263,7 @@ def find_plan_step_id_for_tool(plan_steps: Iterable[Dict[str, object]], tool_nam
     if side_effect_level == "read" or capability_tags & {"inspection", "search", "navigation"}:
         return step_id_at(0)
 
-    if tool_name == "tool_run_script" or capability_tags & {"script_execution", "python_execution"}:
+    if tool_name == "run_script" or capability_tags & {"script_execution", "python_execution"}:
         return step_id_for_kind("run") or step_id_at(min(1, len(steps) - 1))
 
     if side_effect_level in {"write", "data_mutation", "script_write", "execution"}:

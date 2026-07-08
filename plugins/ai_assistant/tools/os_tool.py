@@ -36,7 +36,7 @@ except ImportError:
 @register_tool
 class TerminalTool(BaseTool):
     def __init__(self):
-        super().__init__("tool_run_shell_command", "Execute a controlled local command in the project root", {
+        super().__init__("run_shell_command", "Execute a controlled local command in the project root", {
             "command": {
                 "type": "string",
                 "description": "Command to execute without shell operators. Use verification tools for tests when possible."
@@ -88,7 +88,7 @@ class TerminalTool(BaseTool):
 @register_tool
 class FileSearchTool(BaseTool):
     def __init__(self):
-        super().__init__("tool_search_files", "Search for files by name pattern", {
+        super().__init__("search_files", "Search for files by name pattern", {
             "pattern": {
                 "type": "string",
                 "description": "File name pattern to search for (supports wildcards like *.py)"

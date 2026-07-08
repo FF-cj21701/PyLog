@@ -322,7 +322,7 @@ class SkillService:
         if not skills:
             return "No specialized geoscience skills currently enabled."
         
-        summary = "Available specialized geoscience skills (Consult via `tool_read_skill`):\n"
+        summary = "Available specialized geoscience skills (Consult via `read_skill`):\n"
         for s in skills:
             meta = self.get_skill_metadata(s)
             title = meta.get('title', s)

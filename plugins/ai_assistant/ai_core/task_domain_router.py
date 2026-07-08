@@ -82,11 +82,11 @@ class TaskDomainRouter:
     }
 
     ALWAYS_INCLUDE_TOOL_NAMES = {
-        "tool_finish",
-        "tool_get_help",
-        "tool_create_task_plan",
-        "tool_get_task_plan",
-        "tool_update_task_plan",
+        "finish",
+        "get_help",
+        "create_task_plan",
+        "get_task_plan",
+        "update_task_plan",
     }
 
     ALWAYS_INCLUDE_CAPABILITY_TAGS = {

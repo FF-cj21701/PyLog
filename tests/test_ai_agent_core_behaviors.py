@@ -126,7 +126,7 @@ class ContextManagerTests(unittest.TestCase):
         service.context_manager = ContextManager()
         service.agent_state = AgentState()
         service.agent_state.record_tool_result(
-            "tool_run_test_command",
+            "run_test_command",
             "failed",
             result={"stdout": "1 failed", "exit_code": 1},
             error="AssertionError",
@@ -138,7 +138,7 @@ class ContextManagerTests(unittest.TestCase):
 
         self.assertIn("Well: Well-B (db=demo.db)", prompt)
         self.assertIn("[Recent Tool Results]", prompt)
-        self.assertIn("- tool_run_test_command: failed; 1 failed; error: AssertionError", prompt)
+        self.assertIn("- run_test_command: failed; 1 failed; error: AssertionError", prompt)
         self.assertIn("[User Message]\nfix it", prompt)
 
     def test_chat_service_injects_last_verification_without_mutating_input_context(self):
@@ -147,7 +147,7 @@ class ContextManagerTests(unittest.TestCase):
         service.agent_state = AgentState()
         service.agent_state.record_verification({
             "ok": False,
-            "tool_name": "tool_verify_target",
+            "tool_name": "verify_target",
             "summary": "Verification failed",
             "error": "missing import",
         })
@@ -157,7 +157,7 @@ class ContextManagerTests(unittest.TestCase):
 
         self.assertEqual(context_data, [{"type": "active_script", "script_path": "scripts_user/demo.py"}])
         self.assertIn("[Active Script State]", prompt)
-        self.assertIn("- tool_verify_target: failed; Verification failed; error: missing import", prompt)
+        self.assertIn("- verify_target: failed; Verification failed; error: missing import", prompt)
 
     def test_chat_service_injects_verification_repair_context_after_failure(self):
         service = ChatService.__new__(ChatService)
@@ -167,7 +167,7 @@ class ContextManagerTests(unittest.TestCase):
         service.agent_state.mark_file_modified("plugins/ai_assistant/ai_core/policy.py")
         service.agent_state.record_verification({
             "ok": False,
-            "tool_name": "tool_verify_target",
+            "tool_name": "verify_target",
             "summary": "Verification failed",
             "error": "missing import",
         }, target="plugins/ai_assistant/ai_core/policy.py")
@@ -178,8 +178,8 @@ class ContextManagerTests(unittest.TestCase):
         self.assertLess(prompt.index("[Verification Repair]"), prompt.index("[Recent Tool Results]"))
         self.assertIn("- status: failed", prompt)
         self.assertIn("- modified_files: plugins/ai_assistant/ai_core/policy.py", prompt)
-        self.assertIn("- recommended_tool: tool_verify_target", prompt)
-        self.assertIn("- tool_verify_target: failed; Verification failed; error: missing import", prompt)
+        self.assertIn("- recommended_tool: verify_target", prompt)
+        self.assertIn("- verify_target: failed; Verification failed; error: missing import", prompt)
 
     def test_chat_service_injects_current_task_plan(self):
         service = ChatService.__new__(ChatService)
@@ -290,7 +290,7 @@ class ContextManagerTests(unittest.TestCase):
     def test_script_state_can_be_extracted_from_tool_result_payload(self):
         context = ContextManager().build_context_block([
             {
-                "tool_name": "tool_edit_file",
+                "tool_name": "edit_file",
                 "script_state": {
                     "editor_id": "editor-2",
                     "script_path": "scripts_user/tool_demo.py",
@@ -605,7 +605,7 @@ class ContextManagerTests(unittest.TestCase):
                 "current_step_id": "verify",
                 "steps": [{"id": "verify", "title": "Verify", "status": "in_progress"}],
             },
-            {"type": "tool_result", "tool_name": "tool_read_file", "ok": True, "message": "read"},
+            {"type": "tool_result", "tool_name": "read_file", "ok": True, "message": "read"},
         ])
 
         self.assertLess(context.index("Well: Well-A"), context.index("[Active Script State]"))
@@ -631,7 +631,7 @@ class ContextManagerTests(unittest.TestCase):
         context = ContextManager().build_context_block([
             {
                 "type": "tool_result",
-                "tool_name": "tool_edit_file",
+                "tool_name": "edit_file",
                 "status": "completed",
                 "result": {
                     "message": "File edited successfully",
@@ -645,7 +645,7 @@ class ContextManagerTests(unittest.TestCase):
             },
             {
                 "type": "tool_result",
-                "tool_name": "tool_run_test_command",
+                "tool_name": "run_test_command",
                 "ok": False,
                 "error": "AssertionError: expected 1 got 2",
                 "exit_code": 1,
@@ -653,17 +653,17 @@ class ContextManagerTests(unittest.TestCase):
         ])
 
         self.assertIn("[Recent Tool Results]", context)
-        self.assertIn("- tool_edit_file: ok; File edited successfully; filepath: plugins/demo.py", context)
+        self.assertIn("- edit_file: ok; File edited successfully; filepath: plugins/demo.py", context)
         self.assertIn("previewed: no", context)
         self.assertIn("ai_draft_active: no", context)
-        self.assertIn("- tool_run_test_command: failed; error: AssertionError: expected 1 got 2; exit_code: 1", context)
+        self.assertIn("- run_test_command: failed; error: AssertionError: expected 1 got 2; exit_code: 1", context)
 
     def test_recent_tool_results_can_be_extracted_from_agent_tool_steps(self):
         context = ContextManager().build_context_block([
             {
                 "tool_steps": [
                     {
-                        "command": "tool_read_file",
+                        "command": "read_file",
                         "status": "completed",
                         "result": {"summary": "Read 20 lines", "file_path": "demo.py"},
                     }
@@ -672,13 +672,13 @@ class ContextManagerTests(unittest.TestCase):
         ])
 
         self.assertIn("[Recent Tool Results]", context)
-        self.assertIn("- tool_read_file: ok; Read 20 lines; file_path: demo.py", context)
+        self.assertIn("- read_file: ok; Read 20 lines; file_path: demo.py", context)
 
     def test_recent_tool_results_include_ui_action_summary_and_failures(self):
         context = ContextManager().build_context_block([
             {
                 "type": "tool_result",
-                "tool_name": "tool_run_script",
+                "tool_name": "run_script",
                 "ok": True,
                 "result": {
                     "summary": "Script completed",
@@ -700,7 +700,7 @@ class ContextManagerTests(unittest.TestCase):
         context = ContextManager().build_context_block([
             {
                 "type": "tool_result",
-                "tool_name": "tool_run_test_command",
+                "tool_name": "run_test_command",
                 "ok": True,
                 "result": {"stdout": long_stdout},
             }
@@ -737,7 +737,7 @@ class ContextManagerTests(unittest.TestCase):
         context = ContextManager().build_context_block([
             {"type": "well", "name": "Well-A", "db_path": "demo.db"},
             {"type": "active_script", "script_path": "scripts_user/demo.py"},
-            {"type": "tool_result", "tool_name": "tool_read_file", "ok": True, "message": "read"},
+            {"type": "tool_result", "tool_name": "read_file", "ok": True, "message": "read"},
         ])
 
         self.assertLess(context.index("Well: Well-A"), context.index("[Active Script State]"))
@@ -750,7 +750,7 @@ class ContextManagerTests(unittest.TestCase):
                 "items": [
                     {
                         "type": "code_location",
-                        "source": "tool_search_code",
+                        "source": "search_code",
                         "path": "plugins/demo.py",
                         "line_number": 12,
                         "symbol": "demo_func",
@@ -768,7 +768,7 @@ class ContextManagerTests(unittest.TestCase):
 
         self.assertIn("[Retrieved Context]", context)
         self.assertIn(
-            "- tool_search_code; path: plugins/demo.py:12; symbol: demo_func; score: 0.9; snippet: def demo_func(): pass",
+            "- search_code; path: plugins/demo.py:12; symbol: demo_func; score: 0.9; snippet: def demo_func(): pass",
             context,
         )
         self.assertIn("- file_summary; path: README.md; summary: Project overview and setup notes", context)
@@ -776,7 +776,7 @@ class ContextManagerTests(unittest.TestCase):
     def test_retrieved_context_can_be_extracted_from_search_tool_result(self):
         context = ContextManager().build_context_block([
             {
-                "tool_name": "tool_search_code",
+                "tool_name": "search_code",
                 "status": "completed",
                 "result": {
                     "results": [
@@ -792,7 +792,7 @@ class ContextManagerTests(unittest.TestCase):
         ])
 
         self.assertIn("[Retrieved Context]", context)
-        self.assertIn("tool_search_code; path: plugins/ai_assistant/ai_core/context_manager.py:42", context)
+        self.assertIn("search_code; path: plugins/ai_assistant/ai_core/context_manager.py:42", context)
         self.assertIn("snippet: def build_sections(self, context_data):", context)
 
     def test_conversation_summary_section_formats_long_lived_context(self):
@@ -851,7 +851,7 @@ class ContextManagerTests(unittest.TestCase):
         ])
 
         self.assertIn("[Skills Summary]", context)
-        self.assertIn("tool_read_skill(name='<skill_id>')", context)
+        self.assertIn("read_skill(name='<skill_id>')", context)
         self.assertIn("- enabled_count: 2", context)
         self.assertIn("- disabled_skills: legacy-skill", context)
         self.assertIn("- pylog-scripting; title: PyLog Scripting; aliases: PyLog Scripting; description: Advanced script writing in PyLog.", context)
@@ -891,7 +891,7 @@ class ContextManagerTests(unittest.TestCase):
             {"type": "well", "name": "Well-A", "db_path": "demo.db"},
             {"type": "active_script", "script_path": "scripts_user/demo.py"},
             {"type": "task_plan", "steps": [{"id": "verify", "title": "Verify", "status": "pending"}]},
-            {"type": "tool_result", "tool_name": "tool_read_file", "ok": True, "message": "read"},
+            {"type": "tool_result", "tool_name": "read_file", "ok": True, "message": "read"},
             {"type": "search_result", "path": "demo.py", "summary": "found demo"},
         ])
 
@@ -907,7 +907,7 @@ class ContextManagerTests(unittest.TestCase):
             {"type": "plot_window_state", "plot_title": "Current Plot"},
             {"type": "skills_summary", "skills": [{"id": "pylog-scripting"}]},
             {"type": "task_plan", "steps": [{"id": "verify", "title": "Verify", "status": "pending"}]},
-            {"type": "tool_result", "tool_name": "tool_read_file", "ok": True, "message": "read"},
+            {"type": "tool_result", "tool_name": "read_file", "ok": True, "message": "read"},
             {"type": "search_result", "path": "demo.py", "summary": "found demo"},
             {"type": "conversation_summary", "goal": "Keep long-lived context compact"},
         ])
@@ -1241,33 +1241,33 @@ class ToolManagerBoundaryTests(unittest.IsolatedAsyncioTestCase):
         manager = ToolManager(
             [
                 DummyTool(name="list_curves", domain_tags=["geoscience"]),
-                DummyTool(name="tool_edit_file", side_effect_level="write", capability_tags=["file_edit"]),
+                DummyTool(name="edit_file", side_effect_level="write", capability_tags=["file_edit"]),
             ]
         )
 
         configs = manager.build_tool_configs(prompt="inspect well curves and plot GR")
         names = [item["function"]["name"] for item in configs]
 
-        self.assertEqual(names, ["list_curves", "tool_edit_file"])
+        self.assertEqual(names, ["list_curves", "edit_file"])
 
     def test_manager_builds_keyword_ranked_tool_configs(self):
         manager = ToolManager(
             [
-                DummyTool(name="tool_open_agent_page", keywords=["agent page"]),
-                DummyTool(name="tool_open_html_preview", keywords=["html preview", "web page"]),
+                DummyTool(name="open_agent_page", keywords=["agent page"]),
+                DummyTool(name="open_html_preview", keywords=["html preview", "web page"]),
             ]
         )
 
         configs = manager.build_tool_configs(prompt="please open this html preview in a web page")
         names = [item["function"]["name"] for item in configs]
 
-        self.assertEqual(names[0], "tool_open_html_preview")
+        self.assertEqual(names[0], "open_html_preview")
 
     def test_manager_exposes_lightweight_inventory(self):
         manager = ToolManager(
             [
                 DummyTool(
-                    name="tool_edit_file",
+                    name="edit_file",
                     side_effect_level="write",
                     domain_tags=["code"],
                     capability_tags=["file_edit"],
@@ -1278,7 +1278,7 @@ class ToolManagerBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         inventory = manager.describe_inventory()
 
-        self.assertEqual(inventory[0]["name"], "tool_edit_file")
+        self.assertEqual(inventory[0]["name"], "edit_file")
         self.assertEqual(inventory[0]["side_effect_level"], "write")
         self.assertEqual(inventory[0]["capability_tags"], ["file_edit"])
         self.assertEqual(inventory[0]["domain_tags"], ["code"])
@@ -1316,12 +1316,12 @@ class ToolManagerBoundaryTests(unittest.IsolatedAsyncioTestCase):
         manager = ToolManager(
             [
                 DummyTool(name="list_curves", domain_tags=["geoscience"], capability_tags=["curve_lookup"]),
-                DummyTool(name="tool_edit_file", domain_tags=["code"], capability_tags=["file_edit"]),
+                DummyTool(name="edit_file", domain_tags=["code"], capability_tags=["file_edit"]),
             ]
         )
 
         self.assertEqual([spec.name for spec in manager.list_specs_by_domain("geoscience")], ["list_curves"])
-        self.assertEqual([spec.name for spec in manager.list_specs_by_capability("file_edit")], ["tool_edit_file"])
+        self.assertEqual([spec.name for spec in manager.list_specs_by_capability("file_edit")], ["edit_file"])
 
     def test_manager_inventory_payload_includes_summary(self):
         manager = ToolManager(
@@ -1348,7 +1348,7 @@ class TaskStateMachineTests(unittest.TestCase):
 
     def test_write_tool_moves_to_awaiting_verification(self):
         self.machine.start_task("modify a file")
-        tool = DummyTool(name="tool_edit_file", side_effect_level="write")
+        tool = DummyTool(name="edit_file", side_effect_level="write")
 
         self.machine.after_tool_call(
             tool.name,
@@ -1358,14 +1358,14 @@ class TaskStateMachineTests(unittest.TestCase):
         )
 
         self.assertEqual(self.state.task_state, "awaiting_verification")
-        self.assertEqual(self.state.side_effects[-1]["tool"], "tool_edit_file")
+        self.assertEqual(self.state.side_effects[-1]["tool"], "edit_file")
         self.assertEqual(self.state.get_plan_step("implement")["status"], "completed")
         self.assertEqual(self.state.get_plan_step("verify")["status"], "in_progress")
 
     def test_failed_verification_moves_to_repairing(self):
         self.machine.start_task("verify a file")
         verify_tool = DummyTool(
-            name="tool_verify_target",
+            name="verify_target",
             side_effect_level="execution",
             is_verification_tool=True,
         )
@@ -1402,7 +1402,7 @@ class TaskStateMachineTests(unittest.TestCase):
     def test_run_script_auto_advances_script_plan_without_manual_cleanup_updates(self):
         self.machine.start_task("Write a PyLog script to print hello and run it")
         tool = DummyTool(
-            name="tool_run_script",
+            name="run_script",
             side_effect_level="execution",
             capability_tags=["script_execution", "python_execution"],
         )
@@ -1497,12 +1497,12 @@ class TaskPlannerTests(unittest.TestCase):
         planner = TaskPlanner()
         plan = planner.create_plan("Write a PyLog script to load well curves and plot them")
         tool = DummyTool(
-            name="tool_run_script",
+            name="run_script",
             side_effect_level="execution",
             capability_tags=["script_execution"],
         )
 
-        step_id = find_plan_step_id_for_tool(plan.to_dict_list(), "tool_run_script", tool=tool)
+        step_id = find_plan_step_id_for_tool(plan.to_dict_list(), "run_script", tool=tool)
 
         self.assertEqual(step_id, "run")
 
@@ -1667,11 +1667,11 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
     def test_finish_is_blocked_when_verification_required(self):
         self.state.mark_file_modified("scripts/example.py")
 
-        error = self.policy.before_tool_call(self.state, "tool_finish", {}, tool=None)
+        error = self.policy.before_tool_call(self.state, "finish", {}, tool=None)
 
         self.assertIsNotNone(error)
-        self.assertIn("Policy blocked tool_finish", error)
-        self.assertIn("tool_verify_target", error)
+        self.assertIn("Policy blocked finish", error)
+        self.assertIn("verify_target", error)
 
     def test_auto_verification_request_prefers_script_target(self):
         self.state.mark_file_modified("scripts_user/ai_example.py")
@@ -1679,7 +1679,7 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
         request = self.policy.get_auto_verification_request(self.state)
 
         self.assertIsNotNone(request)
-        self.assertEqual(request["tool_name"], "tool_verify_target")
+        self.assertEqual(request["tool_name"], "verify_target")
         self.assertEqual(request["args"]["filepath"], "scripts_user/ai_example.py")
 
     def test_verification_strategy_describes_single_script_target(self):
@@ -1689,7 +1689,7 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
 
         self.assertEqual(strategy["scope"], "file")
         self.assertEqual(strategy["category"], "script")
-        self.assertEqual(strategy["tool_name"], "tool_verify_target")
+        self.assertEqual(strategy["tool_name"], "verify_target")
         self.assertEqual(strategy["args"]["filepath"], "scripts_user/ai_example.py")
         self.assertIn("run_execution=true", strategy["message"])
 
@@ -1700,7 +1700,7 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
         request = self.policy.get_auto_verification_request(self.state)
 
         self.assertIsNotNone(request)
-        self.assertEqual(request["tool_name"], "tool_run_test_command")
+        self.assertEqual(request["tool_name"], "run_test_command")
         self.assertEqual(request["args"], {})
         self.assertIn("multiple modified files", request["reason"])
 
@@ -1711,7 +1711,7 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
 
         self.assertEqual(strategy["scope"], "project")
         self.assertEqual(strategy["category"], "ui")
-        self.assertEqual(strategy["tool_name"], "tool_run_test_command")
+        self.assertEqual(strategy["tool_name"], "run_test_command")
         self.assertIn("tests/test_chat_ui_template_regressions.py", strategy["args"]["command"])
         self.assertIn("chat UI regression suite", strategy["message"])
 
@@ -1722,13 +1722,13 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
 
         self.assertEqual(strategy["scope"], "file")
         self.assertEqual(strategy["category"], "python_source")
-        self.assertEqual(strategy["tool_name"], "tool_verify_target")
+        self.assertEqual(strategy["tool_name"], "verify_target")
         self.assertEqual(strategy["args"]["filepath"], "plugins/ai_assistant/ai_core/policy.py")
         self.assertIn("nearest focused pytest", strategy["message"])
 
     def test_successful_verification_clears_finish_block(self):
         verify_tool = DummyTool(
-            name="tool_verify_target",
+            name="verify_target",
             side_effect_level="execution",
             is_verification_tool=True,
         )
@@ -1747,7 +1747,7 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
 
     def test_successful_verification_for_unmodified_target_does_not_clear_finish_block(self):
         verify_tool = DummyTool(
-            name="tool_verify_target",
+            name="verify_target",
             side_effect_level="execution",
             is_verification_tool=True,
         )
@@ -1766,7 +1766,7 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
         self.assertFalse(self.state.last_verification["covers_modified_files"])
         self.assertIn("did not cover", self.state.last_error)
 
-        error = self.policy.before_tool_call(self.state, "tool_finish", {}, tool=None)
+        error = self.policy.before_tool_call(self.state, "finish", {}, tool=None)
 
         self.assertIsNotNone(error)
         self.assertIn("did not cover the modified files", error)
@@ -1774,7 +1774,7 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
 
     def test_project_level_verification_without_target_clears_finish_block(self):
         verify_tool = DummyTool(
-            name="tool_run_test_command",
+            name="run_test_command",
             side_effect_level="execution",
             is_verification_tool=True,
         )
@@ -1793,7 +1793,7 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
 
     def test_single_file_verification_does_not_clear_multiple_modified_files(self):
         verify_tool = DummyTool(
-            name="tool_verify_target",
+            name="verify_target",
             side_effect_level="execution",
             is_verification_tool=True,
         )
@@ -1814,7 +1814,7 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
 
     def test_repair_guidance_describes_incomplete_verification_coverage(self):
         verify_tool = DummyTool(
-            name="tool_verify_target",
+            name="verify_target",
             side_effect_level="execution",
             is_verification_tool=True,
         )
@@ -1841,7 +1841,7 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
         self.state.mark_file_modified("plugins/ai_assistant/ai_core/policy.py")
         self.state.record_verification({
             "ok": False,
-            "tool_name": "tool_verify_target",
+            "tool_name": "verify_target",
             "summary": "Verification failed",
             "error": "SyntaxError",
         }, target="plugins/ai_assistant/ai_core/policy.py")
@@ -1850,15 +1850,15 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
 
         self.assertIsNotNone(repair)
         self.assertEqual(repair["status"], "failed")
-        self.assertEqual(repair["failed_tool"], "tool_verify_target")
-        self.assertEqual(repair["recommended_tool"], "tool_verify_target")
+        self.assertEqual(repair["failed_tool"], "verify_target")
+        self.assertEqual(repair["recommended_tool"], "verify_target")
         self.assertIn("patch the relevant modified file", repair["recommended_action"])
 
     def test_unresolved_failure_report_waits_for_repeated_failures(self):
         self.state.mark_file_modified("plugins/ai_assistant/ai_core/policy.py")
         self.state.record_verification({
             "ok": False,
-            "tool_name": "tool_verify_target",
+            "tool_name": "verify_target",
             "summary": "Verification failed",
             "error": "SyntaxError",
         }, target="plugins/ai_assistant/ai_core/policy.py")
@@ -1871,7 +1871,7 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
         self.state.mark_file_modified("plugins/ai_assistant/ai_core/policy.py")
         self.state.record_verification({
             "ok": False,
-            "tool_name": "tool_verify_target",
+            "tool_name": "verify_target",
             "summary": "Verification failed",
             "error": "SyntaxError",
         }, target="plugins/ai_assistant/ai_core/policy.py")
@@ -1883,11 +1883,11 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
         self.assertIn("Unresolved verification failure", report)
         self.assertIn("plugins/ai_assistant/ai_core/policy.py", report)
         self.assertIn("SyntaxError", report)
-        self.assertIn("recommended_tool: tool_verify_target", report)
+        self.assertIn("recommended_tool: verify_target", report)
 
     def test_read_tool_marks_file_as_read_even_when_tool_object_is_present(self):
         read_tool = DummyTool(
-            name="tool_read_file",
+            name="read_file",
             side_effect_level="none",
             path_argument_names=["file_path"],
         )
@@ -1904,12 +1904,12 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
 
     def test_write_policy_accepts_normalized_path_after_relative_read(self):
         read_tool = DummyTool(
-            name="tool_read_file",
+            name="read_file",
             side_effect_level="none",
             path_argument_names=["file_path"],
         )
         write_tool = DummyTool(
-            name="tool_edit_file",
+            name="edit_file",
             side_effect_level="write",
             path_argument_names=["filepath"],
         )
@@ -1933,7 +1933,7 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
 
     def test_write_tracking_uses_normalized_summary_not_message_only(self):
         write_tool = DummyTool(
-            name="tool_edit_file",
+            name="edit_file",
             side_effect_level="write",
             path_argument_names=["filepath"],
         )
@@ -1952,12 +1952,12 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
 class FinishOutputBehaviorTests(unittest.TestCase):
     def test_failed_finish_tool_result_is_not_treated_as_successful_finish(self):
         self.assertFalse(AsyncAIWorker._tool_result_succeeded(
-            '{"ok": false, "tool_name": "tool_finish", "error": "verification failed"}'
+            '{"ok": false, "tool_name": "finish", "error": "verification failed"}'
         ))
 
     def test_successful_finish_tool_result_is_treated_as_successful_finish(self):
         self.assertTrue(AsyncAIWorker._tool_result_succeeded(
-            '{"ok": true, "tool_name": "tool_finish", "content": "done"}'
+            '{"ok": true, "tool_name": "finish", "content": "done"}'
         ))
 
     def test_finish_final_answer_is_not_suppressed_when_no_visible_response_exists(self):
@@ -1971,7 +1971,7 @@ class FinishOutputBehaviorTests(unittest.TestCase):
 
     def test_finish_final_answer_is_suppressed_when_visible_response_already_exists_in_early_round(self):
         output = AsyncAIWorker._extract_finish_visible_output(
-            '{"ok": true, "final_answer": "Repeated tool_finish summary"}',
+            '{"ok": true, "final_answer": "Repeated finish summary"}',
             suppress_summary=True,
             has_visible_response=True,
         )
@@ -1998,7 +1998,7 @@ class FinishOutputBehaviorTests(unittest.TestCase):
 
     def test_script_result_summary_promotes_stdout_for_final_display(self):
         output = AsyncAIWorker._summarize_external_tool_result(
-            "tool_run_script",
+            "run_script",
             '{"ok": true, "script_path": "scripts_user/ai_well_curve_list.py", "stdout": "hello\\n", "exit_code": 0, "duration_seconds": 0.67}',
         )
 
@@ -2074,7 +2074,7 @@ class WebChatViewResultConsumptionTests(unittest.TestCase):
             },
         }
 
-        view.add_tool_call("tool_edit_file", status="success", result=result)
+        view.add_tool_call("edit_file", status="success", result=result)
 
         self.assertEqual(view._current_message_cards, [])
         self.assertEqual(len(view._current_message_pending_cards), 1)
@@ -2089,6 +2089,28 @@ class WebChatViewResultConsumptionTests(unittest.TestCase):
         self.assertEqual(view._current_message_cards[0]["removed"], 1)
         self.assertEqual(view._current_message_cards[0]["actions"][0]["label"], "Review")
         self.assertIn("setLastAiMessageState('finalized');", js_calls[-1])
+
+    def test_finalize_current_message_runs_callback_after_frontend_finalize(self):
+        view = WebChatView.__new__(WebChatView)
+        calls = []
+
+        def run_js(js, callback=None):
+            calls.append(("js", js))
+            if callback:
+                calls.append(("before_callback", view._has_active_ai_message))
+                callback("ok")
+
+        view._run_js = run_js
+        view._is_ready = True
+        view._current_message_cards = []
+        view._current_message_pending_cards = []
+        view._has_active_ai_message = True
+
+        view.finalize_current_message(callback=lambda result: calls.append(("callback", result, view._has_active_ai_message)))
+
+        self.assertEqual(calls[0], ("js", "setLastAiMessageState('finalized');"))
+        self.assertEqual(calls[1], ("before_callback", True))
+        self.assertEqual(calls[2], ("callback", "ok", False))
 
     def test_file_change_cards_merge_multiple_tool_updates_before_finalization(self):
         view = WebChatView.__new__(WebChatView)
@@ -2119,8 +2141,8 @@ class WebChatViewResultConsumptionTests(unittest.TestCase):
             },
         }
 
-        view.add_tool_call("tool_edit_file", status="success", result=first)
-        view.update_tool_status("tool_edit_file", "success", result=second)
+        view.add_tool_call("edit_file", status="success", result=first)
+        view.update_tool_status("edit_file", "success", result=second)
         view.finalize_current_message()
 
         self.assertEqual(len(view._current_message_cards), 1)
@@ -2149,7 +2171,7 @@ class WebChatViewResultConsumptionTests(unittest.TestCase):
             "message": "HTML preview opened",
         }
 
-        view.add_tool_call("tool_open_html_preview", status="success", result=result)
+        view.add_tool_call("open_html_preview", status="success", result=result)
         view.finalize_current_message()
 
         self.assertEqual(view._current_message_pending_cards, [])
@@ -2314,6 +2336,67 @@ class MessageCardActionRoutingTests(unittest.TestCase):
             chat_service.started,
             ("hello", [{"type": "well", "name": "Well-A", "db_path": "demo.db"}], [], "chat"),
         )
+
+    def test_chat_finished_restores_send_button_after_message_finalize_callback(self):
+        widget = AIAssistantWidget.__new__(AIAssistantWidget)
+        widget._is_sending = True
+        widget._pending_mode = "chat"
+        widget._streaming_content = "done"
+        widget._streaming_reasoning = ""
+        widget._pending_content_delta = ""
+        widget._pending_reasoning_delta = ""
+        widget._previous_content_length = 0
+        widget.update_model_chip = lambda: events.append(("model_chip", None))
+
+        class DummyTimer:
+            def isActive(self):
+                return False
+
+            def stop(self):
+                pass
+
+        class DummyChatView:
+            def __init__(self):
+                self._current_message_tools = []
+                self.finalize_callback = None
+
+            def update_last_message(self, content, reasoning=None):
+                events.append(("update", content, reasoning))
+
+            def finalize_current_message(self, callback=None):
+                self.finalize_callback = callback
+                events.append(("finalize", None))
+
+            def set_input_enabled(self, value):
+                events.append(("input", value))
+
+            def set_sending_state(self, value):
+                events.append(("sending", value))
+
+            def append_to_last_message(self, content_delta, reasoning_delta=None):
+                events.append(("append", content_delta, reasoning_delta))
+
+        class DummyMemory:
+            def add_ai_message(self, message):
+                events.append(("memory", message))
+
+        events = []
+        chat_view = DummyChatView()
+        widget._stream_flush_timer = DummyTimer()
+        widget.chat_view = chat_view
+        widget.memory = DummyMemory()
+
+        widget.handle_chat_finished("done")
+
+        self.assertTrue(widget._is_sending)
+        self.assertNotIn(("sending", False), events)
+        self.assertEqual(events[-1], ("finalize", None))
+
+        chat_view.finalize_callback(None)
+
+        self.assertFalse(widget._is_sending)
+        self.assertIn(("input", True), events)
+        self.assertIn(("sending", False), events)
 
     def test_refresh_effective_context_info_updates_chat_bubble_summary(self):
         widget = AIAssistantWidget.__new__(AIAssistantWidget)

@@ -12,32 +12,32 @@ from .tool_result import (
 
 
 WRITE_TOOLS = {
-    "tool_apply_patch",
-    "tool_edit_file",
-    "tool_overwrite_file",
-    "tool_insert_into_file",
-    "tool_write_file",
-    "tool_append_file",
-    "tool_write_script_file",
-    "tool_append_script_code",
-    "tool_save_script",
+    "apply_patch",
+    "edit_file",
+    "overwrite_file",
+    "insert_into_file",
+    "write_file",
+    "append_file",
+    "write_script_file",
+    "append_script_code",
+    "save_script",
 }
 
 CREATE_TOOLS = {
-    "tool_write_script_file",
+    "write_script_file",
 }
 
 READ_TOOLS = {
-    "tool_read_file",
+    "read_file",
 }
 
 VERIFICATION_TOOLS = {
-    "tool_verify_target",
-    "tool_run_python_file",
-    "tool_run_test_command",
-    "tool_run_lint_command",
-    "tool_run_format_command",
-    "tool_run_import_check",
+    "verify_target",
+    "run_python_file",
+    "run_test_command",
+    "run_lint_command",
+    "run_format_command",
+    "run_import_check",
 }
 
 def _get_filepath(args: Optional[Dict[str, Any]], tool=None) -> Optional[str]:
@@ -175,15 +175,15 @@ class ExecutionPolicy:
             if requires_read and filepath and filepath not in state.files_read:
                 return (
                     f"Policy blocked `{tool_name}` for `{filepath}`. "
-                    "Read the target file first with tool_read_file before modifying it."
+                    "Read the target file first with read_file before modifying it."
                 )
 
-        if tool_name == "tool_finish" and not state.can_finish():
+        if tool_name == "finish" and not state.can_finish():
             if self.verification_coordinator:
                 return self.verification_coordinator.get_finish_block_message(state)
             recommendation = self._verification_recommendation(state)
             return (
-                "Policy blocked tool_finish because files were modified and no successful verification "
+                "Policy blocked finish because files were modified and no successful verification "
                 f"has been recorded yet. {recommendation}"
             )
 
@@ -253,7 +253,7 @@ class ExecutionPolicy:
         if script_targets:
             target = script_targets[0].replace("\\", "/")
             return {
-                "tool_name": "tool_verify_target",
+                "tool_name": "verify_target",
                 "args": {
                     "filepath": target,
                 },
@@ -262,7 +262,7 @@ class ExecutionPolicy:
 
         target = modified_files[0].replace("\\", "/") if modified_files else None
         return {
-            "tool_name": "tool_verify_target",
+            "tool_name": "verify_target",
             "args": {"filepath": target} if target else {},
             "reason": "auto-verify modified project target before finish",
         }
@@ -286,14 +286,14 @@ class ExecutionPolicy:
             target = script_targets[0].replace("\\", "/")
             return (
                 "For AI/user script changes, prefer script-level verification first: "
-                f"run `tool_verify_target(filepath='{target}')`, then if needed "
-                f"`tool_verify_target(filepath='{target}', run_execution=true)`."
+                f"run `verify_target(filepath='{target}')`, then if needed "
+                f"`verify_target(filepath='{target}', run_execution=true)`."
             )
 
         return (
             "For source-code changes, prefer running a detected project verification command, "
-            "starting with `tool_verify_target`, then fall back to "
-            "`tool_run_test_command`, `tool_run_lint_command`, or `tool_run_format_command` if needed."
+            "starting with `verify_target`, then fall back to "
+            "`run_test_command`, `run_lint_command`, or `run_format_command` if needed."
         )
 
     def _verification_target(self, args: Optional[Dict[str, Any]], result: Dict[str, Any], tool=None) -> Optional[str]:
@@ -345,10 +345,10 @@ class ExecutionPolicy:
         if not state or not getattr(state, "has_active_task_plan", lambda: False)():
             return None
 
-        if tool_name in {"tool_create_task_plan", "tool_get_task_plan", "tool_update_task_plan"}:
+        if tool_name in {"create_task_plan", "get_task_plan", "update_task_plan"}:
             return None
 
-        if tool_name == "tool_finish":
+        if tool_name == "finish":
             incomplete = getattr(state, "get_incomplete_plan_steps", lambda: [])()
             blocking = incomplete[:-1] if len(incomplete) > 1 else []
             if blocking:
@@ -357,7 +357,7 @@ class ExecutionPolicy:
                     for step in blocking[:3]
                 )
                 return (
-                    "Policy blocked tool_finish because the active task plan still has incomplete steps: "
+                    "Policy blocked finish because the active task plan still has incomplete steps: "
                     f"{labels}. Finish the remaining steps in order before finishing."
                 )
 

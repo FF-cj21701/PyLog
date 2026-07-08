@@ -88,7 +88,7 @@ class AgentRuntime(QObject):
         self.tool_call_started.emit(tool_name, args)
 
     def _on_tool_call_finished(self, tool_name: str, status: str, result: str) -> None:
-        self._emit_event(AgentEvent.tool_finished(tool_name, status, result))
+        self._emit_event(AgentEvent.finished(tool_name, status, result))
         self.tool_call_finished.emit(tool_name, status, result)
 
     def _on_round_finished(self) -> None:

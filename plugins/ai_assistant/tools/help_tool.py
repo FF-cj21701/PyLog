@@ -52,7 +52,7 @@ def _instantiate_tool(tool_class, main_window=None):
 class HelpTool(BaseTool):
     def __init__(self, main_window=None):
         super().__init__(
-            "tool_get_help",
+            "get_help",
             "Get detailed documentation for AI tools or PyLog API functions",
             {
                 "query": {

@@ -55,7 +55,7 @@ def _run_executor_signal(tool_executor, signal, payload):
 class OpenAgentPageTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_open_agent_page",
+            "open_agent_page",
             "Open or focus a reusable agent-owned local HTML/web workspace page. Use this to show reviews, reports, plans, summaries, diagrams, or any structured content in a dedicated rendered page inside the workspace.",
             {
                 "page_id": {
@@ -154,7 +154,7 @@ class OpenAgentPageTool(BaseTool):
 class UpdateAgentPageTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_update_agent_page",
+            "update_agent_page",
             "Update the content of an existing agent-owned local HTML/web workspace page, or create it if it does not exist yet.",
             {
                 "page_id": {
@@ -249,7 +249,7 @@ class UpdateAgentPageTool(BaseTool):
 class CloseAgentPageTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_close_agent_page",
+            "close_agent_page",
             "Close an existing agent-owned local HTML/web workspace page by page_id.",
             {
                 "page_id": {

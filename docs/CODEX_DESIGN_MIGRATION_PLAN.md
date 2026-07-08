@@ -129,7 +129,7 @@ Required behavior:
 - Python/script changes must trigger verification guidance.
 - Full overwrite tools should remain available only for file creation or explicitly allowed cases.
 
-The existing `tool_apply_patch` should become the canonical editor path.
+The existing `apply_patch` should become the canonical editor path.
 
 ### 5.5 Shell Executor
 
@@ -187,7 +187,7 @@ Keep `.agents/skills` as the single source of truth for domain skills.
 
 Current implementation note: enabled skills are summarized through the structured
 `Skills Summary` context section, while complete `SKILL.md` guidance remains on-demand
-through `tool_read_skill(...)`. Phase 6 should build on this metadata for task routing.
+through `read_skill(...)`. Phase 6 should build on this metadata for task routing.
 
 Required behavior:
 
@@ -208,7 +208,7 @@ Required rules:
 - Destructive tools must be blocked by default.
 - Modified files require verification before finish.
 - Verification failures must prevent normal completion unless the assistant clearly reports the unresolved failure.
-- `tool_finish` remains a control signal and should not duplicate the visible final answer.
+- `finish` remains a control signal and should not duplicate the visible final answer.
 
 Verification should be selected by target:
 
@@ -275,7 +275,7 @@ Acceptance criteria:
 
 Deliverables:
 
-- Promote `tool_apply_patch` as the default edit tool.
+- Promote `apply_patch` as the default edit tool.
 - Limit overwrite-style tools to creation or explicitly approved cases.
 - Improve patch errors and file-change event reporting.
 
@@ -321,7 +321,7 @@ Acceptance criteria:
 Status: **Deferred intentionally.** Phase 6 is skipped for now so the migration can proceed directly to Phase 7. The current Phase 5 implementation already leaves the extension points needed to resume this later:
 
 - `SkillService.get_skill_summaries(...)`
-- `tool_read_skill(name=...)`
+- `read_skill(name=...)`
 - structured `[Skills Summary]` context section
 - `disabled_skills` settings support
 - stable system-prompt rule requiring full skill consultation before domain calculations or PyLog script-generation workflows
@@ -357,8 +357,8 @@ Implemented details:
 - Successful verification records the verified target and only clears the finish blocker when it covers all modified files.
 - `VerificationCoordinator` provides structured verification strategies for script, UI/template, Python source, multi-file, and project-scope changes.
 - Failed or incomplete verification injects `[Verification Repair]` context so the next turn can repair before retrying verification.
-- Repeated unresolved verification failures produce an explicit report instead of allowing a failed `tool_finish` to end the loop as if the task completed.
-- `tool_run_test_command` supports focused pytest arguments such as `pytest tests/test_chat_ui_template_regressions.py -q`.
+- Repeated unresolved verification failures produce an explicit report instead of allowing a failed `finish` to end the loop as if the task completed.
+- `run_test_command` supports focused pytest arguments such as `pytest tests/test_chat_ui_template_regressions.py -q`.
 
 Acceptance criteria:
 

@@ -10,7 +10,7 @@ except ImportError:
 class GetActiveDataViewerSelectionTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_get_active_data_viewer_selection",
+            "get_active_data_viewer_selection",
             "Read the currently selected rows and columns from the active Data Viewer table.",
             {
                 "max_rows": {

@@ -348,7 +348,7 @@ def verify_target(filepath=None, cwd=None, run_execution=False):
             )
             steps.append({
                 "name": "import_check",
-                "tool": "tool_run_import_check",
+                "tool": "run_import_check",
                 "result": import_result,
             })
             if not import_result.get("ok"):
@@ -359,14 +359,14 @@ def verify_target(filepath=None, cwd=None, run_execution=False):
                     "strategy": "script",
                     "steps": steps,
                     "summary": f"Script verification failed at import check for {normalized}",
-                    "recommended_next_tool": "tool_run_import_check",
+                    "recommended_next_tool": "run_import_check",
                 }
 
             if run_execution:
                 run_result = _run_command([sys.executable, resolved], cwd=cwd or _project_root())
                 steps.append({
                     "name": "run_file",
-                    "tool": "tool_run_python_file",
+                    "tool": "run_python_file",
                     "result": run_result,
                 })
                 return {
@@ -380,7 +380,7 @@ def verify_target(filepath=None, cwd=None, run_execution=False):
                         if run_result.get("ok")
                         else f"Script execution failed for {normalized}"
                     ),
-                    "recommended_next_tool": None if run_result.get("ok") else "tool_run_python_file",
+                    "recommended_next_tool": None if run_result.get("ok") else "run_python_file",
                 }
 
             return {
@@ -390,7 +390,7 @@ def verify_target(filepath=None, cwd=None, run_execution=False):
                 "strategy": "script",
                 "steps": steps,
                 "summary": f"Script import check passed for {normalized}",
-                "recommended_next_tool": "tool_run_python_file",
+                "recommended_next_tool": "run_python_file",
             }
 
     detected = detect_project_commands(cwd=cwd)
@@ -402,7 +402,7 @@ def verify_target(filepath=None, cwd=None, run_execution=False):
             "strategy": "project",
             "project_root": detected["project_root"],
             "detected_commands": detected["detected_commands"],
-            "summary": "No project test command detected. Try tool_detect_project_commands or run a target-specific verification.",
+            "summary": "No project test command detected. Try detect_project_commands or run a target-specific verification.",
             "error": "No project test command detected",
         }
 
@@ -427,7 +427,7 @@ def verify_target(filepath=None, cwd=None, run_execution=False):
         "detected_commands": detected["detected_commands"],
         "steps": [{
             "name": "project_test",
-            "tool": "tool_run_test_command",
+            "tool": "run_test_command",
             "result": result,
         }],
         "summary": (
@@ -435,7 +435,7 @@ def verify_target(filepath=None, cwd=None, run_execution=False):
             if result.get("ok")
             else f"Project verification failed with `{command}`"
         ),
-        "recommended_next_tool": None if result.get("ok") else "tool_run_test_command",
+        "recommended_next_tool": None if result.get("ok") else "run_test_command",
     }
 
 
@@ -443,7 +443,7 @@ def verify_target(filepath=None, cwd=None, run_execution=False):
 class RunPythonFileTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_run_python_file",
+            "run_python_file",
             "Run a Python file with the current Python interpreter and capture structured output. PyLog scripts run in a managed child process by default so they can time out or be cancelled.",
             {
                 "filepath": {
@@ -527,7 +527,7 @@ class RunPythonFileTool(BaseTool):
                     "Background plot launch succeeded. "
                     "Do not rerun the script in terminal just to inspect output; read the generated log files instead."
                 )
-                result["recommended_next_tool"] = "tool_read_file"
+                result["recommended_next_tool"] = "read_file"
             return result
         
         return _run_command([sys.executable, target], cwd=cwd or _project_root())
@@ -536,7 +536,7 @@ class RunPythonFileTool(BaseTool):
 class DetectProjectCommandsTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_detect_project_commands",
+            "detect_project_commands",
             "Detect recommended project test, lint, and format commands based on repository files.",
             {
                 "cwd": {
@@ -570,7 +570,7 @@ class DetectProjectCommandsTool(BaseTool):
 class VerifyTargetTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_verify_target",
+            "verify_target",
             "Verify a changed target using the best default strategy: script-level checks for script files, or detected project tests for source changes.",
             {
                 "filepath": {
@@ -617,7 +617,7 @@ class VerifyTargetTool(BaseTool):
 class RunTestCommandTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_run_test_command",
+            "run_test_command",
             "Run a controlled Python test command. Prefer this after code changes.",
             {
                 "command": {
@@ -662,7 +662,7 @@ class RunTestCommandTool(BaseTool):
 class RunLintCommandTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_run_lint_command",
+            "run_lint_command",
             "Run a controlled lint command. Supported: ruff check, python -m py_compile <file>.",
             {
                 "command": {
@@ -724,7 +724,7 @@ class RunLintCommandTool(BaseTool):
 class RunFormatCommandTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_run_format_command",
+            "run_format_command",
             "Run a controlled format check command. Supported: ruff format --check, black --check .",
             {
                 "command": {
@@ -769,7 +769,7 @@ class RunFormatCommandTool(BaseTool):
 class RunImportCheckTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
         super().__init__(
-            "tool_run_import_check",
+            "run_import_check",
             "Run a Python import/compile check for a target file.",
             {
                 "filepath": {

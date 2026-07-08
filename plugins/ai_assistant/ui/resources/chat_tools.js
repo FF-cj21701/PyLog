@@ -107,7 +107,7 @@ function parseToolResultObject(rawResult) {
             const parsedResult = extractToolDisplayResult(tool?.result || '', tool?.status || 'pending');
             const outputText = parsedResult.displayResult || '';
             if (outputText && outputText !== 'Waiting for result...' && outputText !== 'No output') {
-                const label = (tool?.name === 'tool_run_terminal_command' || tool?.name === 'tool_get_terminal_content' || tool?.name === 'tool_run_script' || tool?.name === 'tool_run_shell_command')
+                const label = (tool?.name === 'run_terminal_command' || tool?.name === 'tool_get_terminal_content' || tool?.name === 'run_script' || tool?.name === 'run_shell_command')
                     ? 'Terminal'
                     : 'Output';
                 const outputSection = createToolDetailSection(label, outputText, {

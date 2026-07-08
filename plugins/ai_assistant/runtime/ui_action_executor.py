@@ -275,7 +275,7 @@ class UiActionExecutor:
             "error": error,
             "summary": error,
             "retryable": retryable,
-            "recommended_next_tool": "tool_get_script_job" if retryable else None,
+            "recommended_next_tool": "get_script_job" if retryable else None,
         }
 
     @staticmethod

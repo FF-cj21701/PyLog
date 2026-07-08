@@ -150,7 +150,7 @@ def draft_change_in_open_editor(filepath, new_content, tool_executor):
 @register_tool
 class EditFileTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
-        super().__init__("tool_edit_file", "Edit an existing file by replacing specific content. Use this for targeted, minor modifications. IMPORTANT: Always use tool_read_file first to understand the file content.", {
+        super().__init__("edit_file", "Edit an existing file by replacing specific content. Use this for targeted, minor modifications. IMPORTANT: Always use read_file first to understand the file content.", {
             "filepath": {
                 "type": "string",
                 "description": "Path to the file to edit"
@@ -179,7 +179,7 @@ class EditFileTool(BaseTool):
                 "change code",
                 "replace string",
             ],
-            "usage_hint": "If the target path is unknown, call tool_find_files or tool_search_code first. Read the file before editing.",
+            "usage_hint": "If the target path is unknown, call find_files or search_code first. Read the file before editing.",
         })
         self.main_window = main_window
         self.tool_executor = tool_executor
@@ -258,7 +258,7 @@ class EditFileTool(BaseTool):
 @register_tool
 class OverwriteFileTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
-        super().__init__("tool_overwrite_file", "Overwrite an existing file with new content. Use this when you need to completely replace a file's content. IMPORTANT: Always use tool_read_file first to backup or understand the existing content.", {
+        super().__init__("overwrite_file", "Overwrite an existing file with new content. Use this when you need to completely replace a file's content. IMPORTANT: Always use read_file first to backup or understand the existing content.", {
             "filepath": {
                 "type": "string",
                 "description": "Path to the file to overwrite"
@@ -282,7 +282,7 @@ class OverwriteFileTool(BaseTool):
                 "set file content",
                 "replace full content",
             ],
-            "usage_hint": "If the target path is unknown, call tool_find_files or tool_search_code first. Read the file before overwriting it.",
+            "usage_hint": "If the target path is unknown, call find_files or search_code first. Read the file before overwriting it.",
         })
         self.main_window = main_window
         self.tool_executor = tool_executor
@@ -335,7 +335,7 @@ class OverwriteFileTool(BaseTool):
 @register_tool
 class InsertIntoFileTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
-        super().__init__("tool_insert_into_file", "Insert content into a file at a specific location. Use this to add code at a specific line or after/before a specific marker.", {
+        super().__init__("insert_into_file", "Insert content into a file at a specific location. Use this to add code at a specific line or after/before a specific marker.", {
             "filepath": {
                 "type": "string",
                 "description": "Path to the file to edit"
@@ -381,7 +381,7 @@ class InsertIntoFileTool(BaseTool):
                 "insert before",
                 "insert at line",
             ],
-            "usage_hint": "If the target path is unknown, call tool_find_files or tool_search_code first. Then provide exactly one insertion anchor.",
+            "usage_hint": "If the target path is unknown, call find_files or search_code first. Then provide exactly one insertion anchor.",
         })
         self.main_window = main_window
         self.tool_executor = tool_executor

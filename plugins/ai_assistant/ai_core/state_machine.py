@@ -53,7 +53,7 @@ class TaskStateMachine:
         if self.agent_state.task_state in FINAL_TASK_STATES:
             return
 
-        if tool_name == "tool_finish":
+        if tool_name == "finish":
             self.agent_state.finish_requested = True
             if self.agent_state.verification_required:
                 self.transition("awaiting_verification", reason="finish requested before verification")
@@ -97,7 +97,7 @@ class TaskStateMachine:
                 self.transition("executing", reason=f"{tool_name} passed")
             return
 
-        if tool_name == "tool_finish":
+        if tool_name == "finish":
             complete_step = self.agent_state.get_plan_step("complete")
             if complete_step:
                 self.agent_state.mark_plan_step_completed(str(complete_step.get("id")))

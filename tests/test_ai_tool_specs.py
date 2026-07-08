@@ -23,10 +23,11 @@ import pylog_api
 from plugins.ai_assistant.tools.help_tool import HelpTool
 from plugins.ai_assistant.tools.agent_page_tool import CloseAgentPageTool, OpenAgentPageTool, UpdateAgentPageTool
 from plugins.ai_assistant.tools.edit_file_tool import InsertIntoFileTool
-from plugins.ai_assistant.tools.file_tool import RunScriptTool
+from plugins.ai_assistant.tools.file_tool import RunScriptTool, RunTerminalCommandTool
 from plugins.ai_assistant.tools.file_tool import OpenScriptTool, SaveScriptTool
 from plugins.ai_assistant.tools.file_tool import SetScriptCodeTool
 from plugins.ai_assistant.tools.file_tool import OpenDocumentTool, OpenHtmlPreviewTool, OpenScriptFileTool
+from plugins.ai_assistant.tools.file_tool import normalize_script_terminal_command
 from plugins.ai_assistant.tools.file_operations import ReadFileTool, SearchInFileTool
 from plugins.ai_assistant.tools.file_operations import ListDirectoryTool
 from plugins.ai_assistant.tools.os_tool import FileSearchTool, TerminalTool
@@ -44,7 +45,7 @@ class ToolSpecConsistencyTests(unittest.IsolatedAsyncioTestCase):
     async def test_dispatcher_uses_real_tool_required_args_for_search_code(self):
         dispatcher = ToolDispatcher([SearchCodeTool()])
 
-        _tool, result = await dispatcher.execute("tool_search_code", {})
+        _tool, result = await dispatcher.execute("search_code", {})
 
         self.assertFalse(result.ok)
         self.assertEqual(result.metadata["missing_required_args"], ["query"])
@@ -52,7 +53,7 @@ class ToolSpecConsistencyTests(unittest.IsolatedAsyncioTestCase):
     async def test_dispatcher_uses_real_tool_required_args_for_apply_patch(self):
         dispatcher = ToolDispatcher([ApplyPatchTool()])
 
-        _tool, result = await dispatcher.execute("tool_apply_patch", {"filepath": "demo.py"})
+        _tool, result = await dispatcher.execute("apply_patch", {"filepath": "demo.py"})
 
         self.assertFalse(result.ok)
         self.assertEqual(result.metadata["missing_required_args"], ["hunks"])
@@ -62,6 +63,27 @@ class ToolSpecConsistencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("filepath", FindFilesTool().spec.usage_hint)
         self.assertIn("editing code", FindSymbolTool().spec.usage_hint)
         self.assertIn("impact", FindReferencesTool().spec.usage_hint)
+
+    def test_run_terminal_command_describes_python_repl_input(self):
+        tool = RunTerminalCommandTool()
+
+        self.assertIn("raw Python statements", tool.description)
+        self.assertIn("Do not include python -c", tool.description)
+        self.assertIn("Raw Python statements", tool.args_schema["command"]["description"])
+        self.assertIn("Do not pass `python -c", tool.spec.usage_hint)
+
+    def test_script_terminal_command_normalizes_simple_python_c(self):
+        code, error = normalize_script_terminal_command('python -c "print(1 + 1)"')
+
+        self.assertIsNone(error)
+        self.assertEqual(code, "print(1 + 1)")
+
+    def test_script_terminal_command_rejects_shell_commands(self):
+        code, error = normalize_script_terminal_command("pytest tests/test_demo.py -q")
+
+        self.assertEqual(code, "")
+        self.assertIn("raw Python statements", error)
+        self.assertIn("run_shell_command", error)
 
     def test_required_args_are_declared_for_real_tools(self):
         self.assertEqual(HelpTool().spec.get_required_args(), ["query"])
@@ -76,6 +98,21 @@ class ToolSpecConsistencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(OpenAgentPageTool().spec.get_required_args(), ["page_id", "title"])
         self.assertEqual(UpdateAgentPageTool().spec.get_required_args(), ["page_id"])
         self.assertEqual(CloseAgentPageTool().spec.get_required_args(), ["page_id"])
+
+    def test_local_tool_registry_uses_unprefixed_tool_names(self):
+        from plugins.ai_assistant.tools.registry import tool_registry
+
+        tool_registry._discovered = False
+        tool_registry.tools = []
+        tools_dir = os.path.join(PROJECT_ROOT, "plugins", "ai_assistant", "tools")
+        tool_registry.discover(tools_dir)
+
+        names = [spec.name for spec in tool_registry.get_tool_specs()]
+
+        self.assertTrue(names)
+        self.assertFalse([name for name in names if name.startswith("tool_")])
+        self.assertIn("get_help", names)
+        self.assertIn("run_script", names)
 
     def test_real_tools_expose_conditional_argument_rules(self):
         insert_rules = InsertIntoFileTool().spec.get_argument_rules()
@@ -2144,9 +2181,9 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         self.assertIn("def _close_agent_page(self, payload):", executor_code)
 
     def test_agent_page_tools_are_registered_with_expected_names(self):
-        self.assertEqual(OpenAgentPageTool().name, "tool_open_agent_page")
-        self.assertEqual(UpdateAgentPageTool().name, "tool_update_agent_page")
-        self.assertEqual(CloseAgentPageTool().name, "tool_close_agent_page")
+        self.assertEqual(OpenAgentPageTool().name, "open_agent_page")
+        self.assertEqual(UpdateAgentPageTool().name, "update_agent_page")
+        self.assertEqual(CloseAgentPageTool().name, "close_agent_page")
 
     def test_agent_page_tools_explicitly_describe_local_html_web_pages(self):
         open_tool = OpenAgentPageTool()
@@ -2468,8 +2505,8 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         self.assertIn("save script", SaveScriptTool().spec.keywords)
 
     def test_document_open_tools_are_registered_with_expected_names(self):
-        self.assertEqual(OpenHtmlPreviewTool().name, "tool_open_html_preview")
-        self.assertEqual(OpenDocumentTool().name, "tool_open_document")
+        self.assertEqual(OpenHtmlPreviewTool().name, "open_html_preview")
+        self.assertEqual(OpenDocumentTool().name, "open_document")
 
     def test_document_open_tools_describe_html_preview_and_routing(self):
         html_tool = OpenHtmlPreviewTool()
@@ -3614,7 +3651,7 @@ class RunPythonFileBehaviorTests(unittest.TestCase):
             self.assertTrue(result.get("background"), result)
             self.assertEqual(result.get("strategy"), "background_execution")
             self.assertEqual(result.get("python_executable"), "C:\\Python311\\pythonw.exe")
-            self.assertEqual(result.get("recommended_next_tool"), "tool_read_file")
+            self.assertEqual(result.get("recommended_next_tool"), "read_file")
             self.assertIn("stdout log", result.get("summary", ""))
             self.assertIn("stderr log", result.get("summary", ""))
             mock_select.assert_called_once()

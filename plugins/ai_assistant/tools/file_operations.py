@@ -47,7 +47,7 @@ def _check_whitelist(file_path, whitelist):
 @register_tool
 class ReadFileTool(BaseTool):
     def __init__(self):
-        super().__init__("tool_read_file", "Read content from a file with optional offset and limit", {
+        super().__init__("read_file", "Read content from a file with optional offset and limit", {
             "file_path": {
                 "type": "string",
                 "description": "Path to the file to read"
@@ -184,7 +184,7 @@ class ReadFileTool(BaseTool):
 @register_tool
 class WriteFileTool(BaseTool):
     def __init__(self):
-        super().__init__("tool_write_file", "Write content to a file", {
+        super().__init__("write_file", "Write content to a file", {
             "file_path": {
                 "type": "string",
                 "description": "Path to the file to write"
@@ -225,7 +225,7 @@ class WriteFileTool(BaseTool):
 @register_tool
 class ListDirectoryTool(BaseTool):
     def __init__(self):
-        super().__init__("tool_list_directory", "List files and directories in a directory", {
+        super().__init__("list_directory", "List files and directories in a directory", {
             "directory": {
                 "type": "string",
                 "description": "Path to the directory to list"
@@ -272,7 +272,7 @@ class ListDirectoryTool(BaseTool):
 @register_tool
 class AppendFileTool(BaseTool):
     def __init__(self, main_window=None, tool_executor=None):
-        super().__init__("tool_append_file", "Append content to a file", {
+        super().__init__("append_file", "Append content to a file", {
             "file_path": {
                 "type": "string",
                 "description": "Path to the file to append to"
@@ -315,7 +315,7 @@ class AppendFileTool(BaseTool):
 @register_tool
 class FileExistsTool(BaseTool):
     def __init__(self):
-        super().__init__("tool_file_exists", "Check if a file exists", {
+        super().__init__("file_exists", "Check if a file exists", {
             "file_path": {
                 "type": "string",
                 "description": "Path to the file to check"
@@ -358,7 +358,7 @@ class FileExistsTool(BaseTool):
 @register_tool
 class DeleteFileTool(BaseTool):
     def __init__(self):
-        super().__init__("tool_delete_file", "Delete a file", {
+        super().__init__("delete_file", "Delete a file", {
             "file_path": {
                 "type": "string",
                 "description": "Path to the file to delete"
@@ -395,7 +395,7 @@ class DeleteFileTool(BaseTool):
 @register_tool
 class CreateDirectoryTool(BaseTool):
     def __init__(self):
-        super().__init__("tool_create_directory", "Create a directory", {
+        super().__init__("create_directory", "Create a directory", {
             "directory_path": {
                 "type": "string",
                 "description": "Path to the directory to create"
@@ -433,7 +433,7 @@ class CreateDirectoryTool(BaseTool):
 @register_tool
 class GetFileInfoTool(BaseTool):
     def __init__(self):
-        super().__init__("tool_get_file_info", "Get information about a file", {
+        super().__init__("get_file_info", "Get information about a file", {
             "file_path": {
                 "type": "string",
                 "description": "Path to the file to get info for"
@@ -489,7 +489,7 @@ class GetFileInfoTool(BaseTool):
 @register_tool
 class SearchInFileTool(BaseTool):
     def __init__(self):
-        super().__init__("tool_search_in_file", "Search for text patterns in a file", {
+        super().__init__("search_in_file", "Search for text patterns in a file", {
             "file_path": {
                 "type": "string",
                 "description": "Path to the file to search in"

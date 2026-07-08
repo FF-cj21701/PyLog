@@ -12,7 +12,7 @@ class VerificationCoordinator:
         recommendation = self.get_verification_recommendation(state)
         coverage_note = self._verification_coverage_note(state)
         return (
-            "Policy blocked tool_finish because files were modified and no successful verification "
+            "Policy blocked finish because files were modified and no successful verification "
             f"has been recorded yet. {coverage_note}{recommendation}"
         )
 
@@ -40,13 +40,13 @@ class VerificationCoordinator:
             return {
                 "scope": "file",
                 "category": "script",
-                "tool_name": "tool_verify_target",
+                "tool_name": "verify_target",
                 "args": {"filepath": target},
                 "reason": f"verify changed PyLog script `{target}` before finish",
                 "message": (
                     "For AI/user script changes, prefer script-level verification first: "
-                    f"run `tool_verify_target(filepath='{target}')`, then if needed "
-                    f"`tool_verify_target(filepath='{target}', run_execution=true)`."
+                    f"run `verify_target(filepath='{target}')`, then if needed "
+                    f"`verify_target(filepath='{target}', run_execution=true)`."
                 ),
             }
 
@@ -55,13 +55,13 @@ class VerificationCoordinator:
             return {
                 "scope": "project",
                 "category": "ui",
-                "tool_name": "tool_run_test_command",
+                "tool_name": "run_test_command",
                 "args": {"command": "pytest tests/test_chat_ui_template_regressions.py -q"},
                 "reason": f"verify UI/template regression coverage for `{target}` before finish",
                 "message": (
                     "For AI UI/template changes, prefer the chat UI regression suite: "
-                    "`tool_run_test_command(command='pytest tests/test_chat_ui_template_regressions.py -q')`. "
-                    f"If the change is isolated, also inspect `{target}` with `tool_verify_target`."
+                    "`run_test_command(command='pytest tests/test_chat_ui_template_regressions.py -q')`. "
+                    f"If the change is isolated, also inspect `{target}` with `verify_target`."
                 ),
             }
 
@@ -70,12 +70,12 @@ class VerificationCoordinator:
             return {
                 "scope": "file",
                 "category": "python_source",
-                "tool_name": "tool_verify_target",
+                "tool_name": "verify_target",
                 "args": {"filepath": target},
                 "reason": f"verify changed Python source `{target}` before finish",
                 "message": (
                     "For Python source changes, start with "
-                    f"`tool_verify_target(filepath='{target}')` for syntax/import checks, "
+                    f"`verify_target(filepath='{target}')` for syntax/import checks, "
                     "then run the nearest focused pytest command if behavior changed."
                 ),
             }
@@ -219,14 +219,14 @@ class VerificationCoordinator:
         return {
             "scope": "project",
             "category": category,
-            "tool_name": "tool_run_test_command",
+            "tool_name": "run_test_command",
             "args": {},
             "reason": reason,
             "message": (
                 f"For {category.replace('_', ' ')} changes ({files}), prefer project-level verification "
-                "so all modified files are covered: run `tool_run_test_command` with the focused pytest "
-                "command when known, otherwise run `tool_verify_target` without a filepath or use "
-                "`tool_run_lint_command` / `tool_run_format_command` if tests are not applicable."
+                "so all modified files are covered: run `run_test_command` with the focused pytest "
+                "command when known, otherwise run `verify_target` without a filepath or use "
+                "`run_lint_command` / `run_format_command` if tests are not applicable."
             ),
         }
 

@@ -4,7 +4,7 @@ import re
 from typing import Iterable, List, Optional, Sequence
 
 
-PLAN_TOOL_NAMES = {"tool_create_task_plan", "tool_get_task_plan", "tool_update_task_plan"}
+PLAN_TOOL_NAMES = {"create_task_plan", "get_task_plan", "update_task_plan"}
 WRITE_SIDE_EFFECTS = {"write", "data_mutation", "script_write"}
 
 

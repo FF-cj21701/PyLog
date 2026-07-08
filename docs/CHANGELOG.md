@@ -3,6 +3,13 @@
 - This changelog now uses bilingual titles and English body text for long-term encoding stability.
 - Some older entries were historically affected by mojibake. Those sections were normalized into readable English summaries while preserving dates and main themes.
 
+## [2026-07-08] - Unprefixed Local Tool Names / 本地工具名去前缀
+
+- Renamed built-in local AI tool registrations from legacy prefixed names to direct action names such as `run_script`, `finish`, `read_file`, and `update_task_plan`.
+- Updated dispatcher references, policy messages, planning heuristics, prompt guidance, UI tool-card handling, documentation, and tests to use the real unprefixed names.
+- Added a registry regression test so newly registered local tools cannot reintroduce the `tool_` prefix.
+- Clarified `run_terminal_command` as a script-editor Python terminal tool, added guidance against `python -c`/shell syntax, and normalized simple `python -c "..."` inputs into raw Python statements.
+
 ## [2026-07-05] - Web AI Settings Workspace Page / Web AI设置工作区页面
 
 - Reworked the AI settings entrypoint to open a reusable Web settings page in the central MDI workspace, replacing the legacy Qt AI settings dialog.
@@ -23,28 +30,28 @@
 ## [2026-07-02] - Effective Context Bubble and Data Viewer Selection Tools / 有效上下文气泡与Data Viewer选区工具
 
 - Added the first managed background script execution boundary:
-  - `tool_run_script` now defaults to running scripts in a managed child process instead of direct main-thread `exec(...)`
+  - `run_script` now defaults to running scripts in a managed child process instead of direct main-thread `exec(...)`
   - script jobs return structured `job_id`, status, stdout/stderr, duration, timeout, and cancellation fields
-  - new `tool_get_script_job` and `tool_stop_script` tools can inspect or cancel background script jobs
-  - PyLog script execution through `tool_run_python_file` now uses the managed child process path for script targets
+  - new `get_script_job` and `stop_script` tools can inspect or cancel background script jobs
+  - PyLog script execution through `run_python_file` now uses the managed child process path for script targets
   - the legacy in-process script path remains available only through `execution_mode="legacy_in_process"`
 - Smoothed task-plan progress after script execution:
-  - `tool_run_script` now maps to the script plan's `run` step instead of `script_edit`
-  - successful execution auto-advances earlier open plan steps so the model does not need cleanup-only `tool_update_task_plan` calls after visible completion
+  - `run_script` now maps to the script plan's `run` step instead of `script_edit`
+  - successful execution auto-advances earlier open plan steps so the model does not need cleanup-only `update_task_plan` calls after visible completion
 - Completed Phase 7 verification-loop hardening:
   - successful verification now records the verified target
   - finish blockers remain active when a successful verification does not cover all modified files
   - finish-block messages explain when the last successful verification targeted the wrong file or scope
   - automatic verification recommendations are now structured by change category, including script, UI/template, Python source, and multi-file project-scope changes
-  - `tool_run_test_command` accepts focused pytest arguments such as `pytest tests/test_chat_ui_template_regressions.py -q`
+  - `run_test_command` accepts focused pytest arguments such as `pytest tests/test_chat_ui_template_regressions.py -q`
   - failed or incomplete verification now injects a `[Verification Repair]` context section with the failed tool, target, modified files, and recommended next verification step
-  - repeated unresolved verification failures now produce an explicit unresolved-failure report, and failed `tool_finish` calls no longer end the ReAct loop as if the task completed
+  - repeated unresolved verification failures now produce an explicit unresolved-failure report, and failed `finish` calls no longer end the ReAct loop as if the task completed
 - Moved skill inventory from always-embedded system prompt content into a structured Skills Summary context section:
   - `SkillService` now exposes structured enabled-skill summaries
   - `ChatService` injects enabled skills and disabled-skill state through runtime context
-  - `ContextManager` formats compact skill IDs, titles, aliases, and descriptions with `tool_read_skill` guidance
+  - `ContextManager` formats compact skill IDs, titles, aliases, and descriptions with `read_skill` guidance
   - the system prompt keeps only the stable rule to consult full skills before domain calculations or PyLog script generation
-- Marked Phase 6 skill-driven routing as intentionally deferred; the retained extension points are `SkillService.get_skill_summaries(...)`, `tool_read_skill(...)`, `[Skills Summary]`, and `disabled_skills`.
+- Marked Phase 6 skill-driven routing as intentionally deferred; the retained extension points are `SkillService.get_skill_summaries(...)`, `read_skill(...)`, `[Skills Summary]`, and `disabled_skills`.
 - Added the first structured Conversation Summary context section:
   - `AgentState` can store and merge long-lived conversation summary fields
   - `ChatService` injects the summary automatically before each prompt
@@ -59,7 +66,7 @@
   - table selection, header selection, edits, and active MDI window changes refresh the context bubble without waiting for message send
   - updates are debounced to avoid excessive refreshes during drag selection
 - Formalized the Data Viewer state API with `get_workspace_state()` and made `WorkspaceStateCollector` prefer the public API before legacy fallbacks.
-- Added `tool_get_active_data_viewer_selection` so the agent can inspect selected Data Viewer rows/columns directly from the current table model:
+- Added `get_active_data_viewer_selection` so the agent can inspect selected Data Viewer rows/columns directly from the current table model:
   - includes unsaved edits because it reads the active view model rather than database snapshots
   - returns bounded row previews, selected row ranges, selected columns, truncation metadata, and numeric stats
 - Improved Data Viewer table selection behavior with lightweight virtual header selection, copy support, and stable context summaries for selected columns/rows.
@@ -79,8 +86,8 @@
 
 - Replaced the old `try_preview_change(...)` helper with `draft_change_in_open_editor(...)`.
 - File editing tools now only send draft/review updates when the target Python script is already open in an editor.
-- `tool_edit_file`, `tool_overwrite_file`, and `tool_insert_into_file` no longer open script editors implicitly when editing `.py` files.
-- `tool_append_file` no longer reopens Python scripts after appending content.
+- `edit_file`, `overwrite_file`, and `insert_into_file` no longer open script editors implicitly when editing `.py` files.
+- `append_file` no longer reopens Python scripts after appending content.
 - Added a structured Recent Tool Results context section:
   - supports single tool-result items, batched recent result lists, and `AgentState.tool_steps`-style payloads
   - preserves high-signal fields such as status, summary, error, path, exit code, preview state, and script draft state
@@ -99,7 +106,7 @@
   - injects `AgentState.current_plan` from `ChatService` before recent tool results
 - Added a structured Retrieved Context section:
   - supports explicit `retrieved_context`, `search_result`, `file_summary`, and `code_location` items
-  - extracts code/file locations from search-style tool results such as `tool_search_code`
+  - extracts code/file locations from search-style tool results such as `search_code`
   - ranks retrieved items by score and location specificity, then emits omitted hints when compressed
 - Added regression coverage for:
   - structured draft payloads for already-open script editors
@@ -144,7 +151,7 @@
   - timeout handling and output truncation
   - shell-control blocking for commands that would require `shell=True`
   - default blocking for destructive commands such as `git reset --hard`, forced checkout/restore/clean/revert, recursive delete patterns, and package installation commands
-- Reworked `tool_run_shell_command` to use the controlled executor instead of direct `subprocess.run(..., shell=True)`.
+- Reworked `run_shell_command` to use the controlled executor instead of direct `subprocess.run(..., shell=True)`.
 - Routed verification helper command execution through the same controlled executor while leaving detached background plot execution unchanged.
 - Added regression coverage for:
   - safe command execution without shell mode
@@ -171,8 +178,8 @@
   - exposed the chat `pyBridge` on `window.pyBridge`
   - changed card-action payload transport to URL-safe JSON encoding / decoding
 - Added a reusable document-opening layer for local workspace files:
-  - introduced `tool_open_html_preview` to open `.html` / `.htm` files as rendered web previews inside PyLog
-  - introduced `tool_open_document` as a central router that reuses existing openers and currently dispatches `.py` files to the script editor and `.html` / `.htm` files to the HTML preview surface
+  - introduced `open_html_preview` to open `.html` / `.htm` files as rendered web previews inside PyLog
+  - introduced `open_document` as a central router that reuses existing openers and currently dispatches `.py` files to the script editor and `.html` / `.htm` files to the HTML preview surface
   - extended `ToolExecutor` with a dedicated HTML preview signal / slot so future document types can plug into the same routing model without duplicating window-management logic
 - Formalized tool metadata extensibility for discovery-oriented fields:
   - added first-class `keywords` support to the `BaseTool -> ToolSpec -> ToolManager inventory` pipeline
@@ -182,16 +189,16 @@
     - `TaskDomainRouter` now keeps keyword-matched tools visible even when coarse domain tags would otherwise filter them out
     - `ToolSelectionStrategy` now uses keyword relevance as a same-bucket ranking signal so prompt-matched tools appear earlier in the model-visible tool list
   - expanded retrieval keywords across high-frequency tool groups:
-    - code search and navigation tools such as `tool_search_code`, `tool_find_files`, `tool_find_symbol`, and `tool_find_references`
-    - file editing tools such as `tool_edit_file`, `tool_overwrite_file`, `tool_insert_into_file`, and `tool_apply_patch`
-    - verification tools such as `tool_verify_target`, `tool_run_python_file`, `tool_run_test_command`, `tool_run_lint_command`, `tool_run_format_command`, and `tool_run_import_check`
-    - command / shell entry tools such as `tool_run_shell_command`
+    - code search and navigation tools such as `search_code`, `find_files`, `find_symbol`, and `find_references`
+    - file editing tools such as `edit_file`, `overwrite_file`, `insert_into_file`, and `apply_patch`
+    - verification tools such as `verify_target`, `run_python_file`, `run_test_command`, `run_lint_command`, `run_format_command`, and `run_import_check`
+    - command / shell entry tools such as `run_shell_command`
     - core PyLog data and plotting tools such as `list_wells`, `list_curves`, `plot`, `create_plot`, `update_plot`, and plot-style / plot-inspection operations
   - expanded retrieval keywords across second-tier workflow tools:
-    - file reading and inspection tools such as `tool_read_file`, `tool_search_in_file`, and directory/file inspection helpers
-    - script-editor lifecycle tools such as `tool_open_script`, `tool_write_script_file`, `tool_set_script_code`, `tool_run_script`, `tool_save_script`, and `tool_get_script_state`
-    - planning tools such as `tool_create_task_plan`, `tool_get_task_plan`, and `tool_update_task_plan`
-    - documentation/help lookup via `tool_get_help`
+    - file reading and inspection tools such as `read_file`, `search_in_file`, and directory/file inspection helpers
+    - script-editor lifecycle tools such as `open_script`, `write_script_file`, `set_script_code`, `run_script`, `save_script`, and `get_script_state`
+    - planning tools such as `create_task_plan`, `get_task_plan`, and `update_task_plan`
+    - documentation/help lookup via `get_help`
   - fixed chat metadata popovers for HTML-backed file pills so preview content is rendered as escaped text instead of live DOM, preventing local HTML snippets from altering the AI chat surface when metadata dialogs are opened
   - added regression coverage for the shared bridge path
 - Removed the requirement that a script editor window must remain open before a review page can be opened from chat:
@@ -256,9 +263,9 @@
   - supports injected title, summary, content, meta pills, and optional structured sections
   - gives future agent pages a stable default visual surface without needing custom Qt dialogs per feature
 - Added a generic agent page tool surface so the model can open, update, and close workspace pages directly:
-  - introduced `tool_open_agent_page`
-  - introduced `tool_update_agent_page`
-  - introduced `tool_close_agent_page`
+  - introduced `open_agent_page`
+  - introduced `update_agent_page`
+  - introduced `close_agent_page`
   - connected those tools through new `ToolExecutor` signals and page-host execution handlers
 - Expanded regression coverage for:
   - silent review-session editor behavior
@@ -561,7 +568,7 @@
 - Complete architectural rework of the AI chat interface using pure HTML and Vanilla JavaScript, eliminating complex UI dependencies and reducing Python event loop overhead.
 - Implemented **Interleaved Streaming**: Text, reasoning, and tool execution cards now appear strictly in chronological order within the main chat bubble during active generation, restoring a natural conversational flow.
 - Re-implemented the **"Archive-to-Details"** mechanism: once a task is finished, intermediate steps and tool logs are automatically moved from the main bubble to a collapsible structured `details` panel, leaving only the final conclusion visible.
-- Optimized **`tool_finish`** logic: prevents trivial "Finished" messages from overwriting rich streamed summaries by prioritizing accumulated content.
+- Optimized **`finish`** logic: prevents trivial "Finished" messages from overwriting rich streamed summaries by prioritizing accumulated content.
 - Implemented **Dynamic AI Task Planning** [Roadmap 8.3 / M3]: Transitioned from rigid, template-based 4-step plans to a model-authored dynamic architecture where the UI 1:1 reflects the agent's internal task plan.
 - Enhanced **Domain Routing** [Roadmap 8.2]: Significantly improved geoscience domain detection for data analysis, statistics, and correlation tasks, ensuring accurate tool-policy alignment.
 - Refined **Task Card Interaction**: Implemented a "collapsed-by-default" behavior for task progress cards to ensure a clean UI during execution, requiring manual expansion for detailed step inspection.
@@ -571,7 +578,7 @@
 ## [2026-04-08] - Tool Result Contract Convergence / 工具结果契约收敛
 
 - Unified the local tool-result contract across the main AI execution path so upper layers now consume normalized `ok`, `summary`, `content`, and `data` semantics instead of branching on legacy raw dict shapes.
-- Tightened `ToolResult` normalization and updated `tool_finish` so visible output, final control signaling, and fallback summaries follow the same result contract.
+- Tightened `ToolResult` normalization and updated `finish` so visible output, final control signaling, and fallback summaries follow the same result contract.
 - Wrapped PyLog API tools into the unified result envelope, including primary payload extraction for wells, curves, analysis results, plot metadata, and API inspection results.
 - Updated policy, state, and finish handling layers to consume normalized summaries/errors instead of reading raw `message` or `final_answer` fields directly.
 - Unified planning/result consumption in `chat_service.py`, `web_chat_view.py`, and `message_formatter.py`, so UI-facing tool cards and task-progress updates now work with normalized result payloads while still tolerating legacy top-level fields.
@@ -772,10 +779,10 @@
 
 ## [2026-03-23] - Agent Loop & Prompt Optimization / AI 助手循环与提示词优化
 
-- Introduced the explicit `tool_finish` endpoint for final answers and summaries.
+- Introduced the explicit `finish` endpoint for final answers and summaries.
 - Refactored the ReAct loop and streaming parser around more controlled thought/action separation.
 - Upgraded prompt structure to better distinguish reasoning display from action execution.
-- Fixed final-answer synchronization so `tool_finish` results appear in normal conversation output.
+- Fixed final-answer synchronization so `finish` results appear in normal conversation output.
 - Added real-time code preview with draft-aware editing, reading, searching, running, and undo-friendly acceptance flows.
 
 ## [2026-03-22] - Architecture & Modularity Refactor / 架构优化与重构

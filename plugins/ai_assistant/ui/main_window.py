@@ -624,6 +624,8 @@ class AIAssistantWidget(QWidget):
         
     def clear_chat_memory(self):
         self.memory.clear()
+        if hasattr(self.chat_service, "reset_active_tools"):
+            self.chat_service.reset_active_tools()
         # UI is cleared in JS, just sync memory
 
     def set_theme(self, theme):

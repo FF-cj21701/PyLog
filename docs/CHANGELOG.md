@@ -17,6 +17,10 @@
   - `search_tools` marks results that are already loaded and callable now
   - prompts now include a compact `[Active Tools]` context section so the agent can call active tools directly
   - script-edit turns pre-activate low-risk script/file tools for the current turn to reduce repeated discovery calls
+  - successful non-base tool calls are remembered in the session cache even when they came from script-edit preactivation
+  - clearing chat/new-session reset paths now clear the active tool cache
+  - an active tool cache limit interface is available, while the default remains unlimited
+- Fixed the chat send button state so clearing the input after submit no longer overrides the stop-generating button while a response is in progress.
 - Kept system prompt caching across chat turns instead of clearing it every turn, reducing repeated prompt construction.
 - Fixed chat mention/context handling so file and context bubbles are passed as structured runtime context, not as literal user-message text.
 - Added `scripts_user` workspace write guards:

@@ -161,6 +161,47 @@ class ContextManagerTests(unittest.TestCase):
         self.assertIn("- callable_now: edit_file, read_file", prompt)
         self.assertIn("do not call load_tools for them again", prompt)
 
+    def test_chat_service_remembers_successful_non_base_tool_calls(self):
+        service = ChatService.__new__(ChatService)
+        service.active_tool_names = set()
+        service.tool_call_finished = SimpleNamespace(emit=lambda *_args: None)
+
+        service._on_tool_call_finished("read_file", "success", "{}")
+        service._on_tool_call_finished("finish", "success", "{}")
+        service._on_tool_call_finished("edit_file", "error", "{}")
+
+        self.assertEqual(service.active_tool_names, {"read_file"})
+
+    def test_chat_service_reset_active_tools_clears_session_cache(self):
+        service = ChatService.__new__(ChatService)
+        service.active_tool_names = {"read_file", "edit_file"}
+        service._current_turn_initial_tool_names = {"read_file", "verify_target"}
+
+        service.reset_active_tools()
+
+        self.assertEqual(service.active_tool_names, set())
+        self.assertEqual(service._current_turn_initial_tool_names, set())
+
+    def test_chat_service_active_tool_cache_limit_interface_defaults_to_unlimited(self):
+        service = ChatService.__new__(ChatService)
+        service.active_tool_names = {"read_file", "edit_file", "verify_target"}
+        service.active_tool_cache_limit = None
+
+        service._prune_active_tool_cache()
+
+        self.assertEqual(service.active_tool_names, {"read_file", "edit_file", "verify_target"})
+
+    def test_clear_chat_memory_resets_active_tool_cache(self):
+        calls = []
+        widget = SimpleNamespace(
+            memory=SimpleNamespace(clear=lambda: calls.append("memory")),
+            chat_service=SimpleNamespace(reset_active_tools=lambda: calls.append("tools")),
+        )
+
+        AIAssistantWidget.clear_chat_memory(widget)
+
+        self.assertEqual(calls, ["memory", "tools"])
+
     def test_chat_service_active_tools_summary_accepts_turn_profile_without_persisting_it(self):
         service = ChatService.__new__(ChatService)
         service.context_manager = ContextManager()

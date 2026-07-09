@@ -54,6 +54,7 @@ class ChatService(QObject):
         self.tool_manager = ToolManager(self.tools)
         self.active_tool_names = set()
         self._current_turn_initial_tool_names = set()
+        self.active_tool_cache_limit = None
 
         # Initialize SystemPrompts so the dynamic tool list is available.
         SystemPrompts()
@@ -192,6 +193,8 @@ class ChatService(QObject):
 
     def _on_tool_call_finished(self, tool_name, status, result):
         """Handle a completed tool call."""
+        if status == "success":
+            self._remember_active_tool(tool_name)
         self.tool_call_finished.emit(tool_name, status, result)
 
     def resolve_model(self, base_url, configured_model, mode="chat"):
@@ -328,6 +331,31 @@ class ChatService(QObject):
             for name in (active_tool_names or [])
             if str(name).strip() and str(name) not in AsyncAIWorker.BASE_ACTIVE_TOOL_NAMES
         }
+        self._prune_active_tool_cache()
+
+    def _remember_active_tool(self, tool_name):
+        name = str(tool_name or "").strip()
+        if not name or name in AsyncAIWorker.BASE_ACTIVE_TOOL_NAMES:
+            return
+        active_tool_names = getattr(self, "active_tool_names", set())
+        active_tool_names.add(name)
+        self.active_tool_names = active_tool_names
+        self._prune_active_tool_cache()
+
+    def reset_active_tools(self):
+        self.active_tool_names = set()
+        self._current_turn_initial_tool_names = set()
+
+    def set_active_tool_cache_limit(self, limit=None):
+        self.active_tool_cache_limit = int(limit) if limit else None
+        self._prune_active_tool_cache()
+
+    def _prune_active_tool_cache(self):
+        limit = getattr(self, "active_tool_cache_limit", None)
+        if not limit or limit <= 0:
+            return
+        active_tool_names = sorted(getattr(self, "active_tool_names", set()))
+        self.active_tool_names = set(active_tool_names[:limit])
 
     def _script_edit_profile_tool_names(self, user_text, context_data):
         if not self._looks_like_script_edit_task(user_text, context_data):
@@ -343,7 +371,7 @@ class ChatService(QObject):
 
     def _looks_like_script_edit_task(self, user_text, context_data):
         text = str(user_text or "").lower()
-        edit_tokens = ("修改", "输出", "保存", "运行", "脚本", "print", "edit", "script", "save", "run")
+        edit_tokens = ("修改", "改为", "输出", "保存", "运行", "脚本", "print", "edit", "script", "save", "run")
         if any(token in text for token in edit_tokens):
             return True
 

@@ -183,6 +183,14 @@ class ChatTemplateRegressionTests(unittest.TestCase):
         self.assertIn("rendered: shouldRenderOptimistically", self.input_js)
         self.assertIn("setSendingState(true);", self.input_js)
 
+    def test_send_button_update_preserves_stop_state_while_generating(self):
+        self.assertIn("if (isSendingState) {", self.input_js)
+        self.assertIn("sendBtn.disabled = false;", self.input_js)
+        self.assertRegex(
+            self.input_js,
+            r"(?s)function updateSendButton\(\)\s*\{.*?if \(isSendingState\).*?return;.*?sendBtn\.disabled =",
+        )
+
     def test_metadata_popover_escapes_preview_html_content(self):
         self.assertIn("function escapePopoverHtml(value)", self.input_js)
         self.assertIn("const previewText = escapePopoverHtml(finalContent.substring(0, 500))", self.input_js)

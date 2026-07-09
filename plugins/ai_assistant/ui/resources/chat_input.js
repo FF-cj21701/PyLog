@@ -1,4 +1,8 @@
 function updateSendButton() {
+            if (isSendingState) {
+                sendBtn.disabled = false;
+                return;
+            }
             const text = input.innerText.trim();
             const hasPills = input.querySelector('.mention-pill') !== null;
             sendBtn.disabled = (text.length === 0 && !hasPills && selectedContexts.length === 0);

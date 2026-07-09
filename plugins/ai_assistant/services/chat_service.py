@@ -52,6 +52,8 @@ class ChatService(QObject):
         self.skill_service = SkillService()
         self.tools = self._initialize_tools()
         self.tool_manager = ToolManager(self.tools)
+        self.active_tool_names = set()
+        self._current_turn_initial_tool_names = set()
 
         # Initialize SystemPrompts so the dynamic tool list is available.
         SystemPrompts()
@@ -82,7 +84,13 @@ class ChatService(QObject):
         )
 
     def start_chat(self, user_text, context_data, history, mode="chat"):
-        prompt = self.compose_prompt(user_text, context_data)
+        profile_tool_names = self._script_edit_profile_tool_names(user_text, context_data)
+        self._current_turn_initial_tool_names = set(self.active_tool_names) | set(profile_tool_names)
+        prompt = self.compose_prompt(
+            user_text,
+            context_data,
+            extra_active_tool_names=self._current_turn_initial_tool_names,
+        )
         self.task_state_machine.start_task(user_text, mode=mode)
 
         # Run the worker start in an async context so MCP tools can be fetched.
@@ -109,6 +117,7 @@ class ChatService(QObject):
             system_prompt=system_prompt,
             mode=mode,
             all_tools=turn_tool_manager.tools,
+            initial_active_tool_names=getattr(self, "_current_turn_initial_tool_names", getattr(self, "active_tool_names", set())),
         )
 
     def stop(self):
@@ -128,7 +137,15 @@ class ChatService(QObject):
             return self.runtime.get_tool_inventory_payload()
         return self.tool_manager.get_inventory_payload()
 
-    def _start_worker(self, prompt, history, system_prompt=None, mode="chat", all_tools=None):
+    def _start_worker(
+        self,
+        prompt,
+        history,
+        system_prompt=None,
+        mode="chat",
+        all_tools=None,
+        initial_active_tool_names=None,
+    ):
         api_key = self.config.get_api_key()
         base_url = self.config.get_base_url()
         model = self.config.get_model()
@@ -154,6 +171,8 @@ class ChatService(QObject):
             execution_policy=self.execution_policy,
             task_state_machine=self.task_state_machine,
             verification_coordinator=self.verification_coordinator,
+            initial_active_tool_names=initial_active_tool_names or getattr(self, "active_tool_names", set()),
+            on_tools_loaded=self._handle_tools_loaded,
         )
 
         self.runtime = AgentRuntime(self.worker)
@@ -178,8 +197,11 @@ class ChatService(QObject):
     def resolve_model(self, base_url, configured_model, mode="chat"):
         return configured_model
 
-    def compose_prompt(self, user_text, context_data):
-        return self.context_manager.compose_prompt(user_text, self._compose_runtime_context(context_data))
+    def compose_prompt(self, user_text, context_data, extra_active_tool_names=None):
+        return self.context_manager.compose_prompt(
+            user_text,
+            self._compose_runtime_context(context_data, extra_active_tool_names=extra_active_tool_names),
+        )
 
     def handle_system_message(self, message):
         """Handle system messages."""
@@ -197,7 +219,7 @@ class ChatService(QObject):
         sections = self.context_manager.build_sections(runtime_context)
         groups = []
         for section in sorted(sections, key=lambda item: item.priority):
-            if section.title == "skills_summary":
+            if section.title in {"skills_summary", "active_tools_summary"}:
                 continue
             section_has_header = bool(section.lines and str(section.lines[0]).startswith("["))
             source_lines = section.lines[1:] if section_has_header else section.lines
@@ -240,9 +262,16 @@ class ChatService(QObject):
             extras = max(0, len(groups) - 1)
         return f"{primary} +{extras}" if extras else primary
 
-    def _compose_runtime_context(self, context_data):
+    def _compose_runtime_context(self, context_data, extra_active_tool_names=None):
         """Merge user-selected context with recent runtime state for the next turn."""
         merged = list(context_data or [])
+        active_tools = set(getattr(self, "active_tool_names", set()))
+        active_tools.update(str(name) for name in (extra_active_tool_names or []) if str(name).strip())
+        if active_tools:
+            merged.append({
+                "type": "active_tools_summary",
+                "tools": sorted(active_tools),
+            })
         workspace_state = self._collect_workspace_state()
         if workspace_state:
             merged.append(workspace_state)
@@ -292,6 +321,43 @@ class ChatService(QObject):
             })
 
         return merged
+
+    def _handle_tools_loaded(self, active_tool_names):
+        self.active_tool_names = {
+            str(name)
+            for name in (active_tool_names or [])
+            if str(name).strip() and str(name) not in AsyncAIWorker.BASE_ACTIVE_TOOL_NAMES
+        }
+
+    def _script_edit_profile_tool_names(self, user_text, context_data):
+        if not self._looks_like_script_edit_task(user_text, context_data):
+            return set()
+        return {
+            "get_script_state",
+            "read_file",
+            "edit_file",
+            "overwrite_file",
+            "save_script",
+            "verify_target",
+        }
+
+    def _looks_like_script_edit_task(self, user_text, context_data):
+        text = str(user_text or "").lower()
+        edit_tokens = ("修改", "输出", "保存", "运行", "脚本", "print", "edit", "script", "save", "run")
+        if any(token in text for token in edit_tokens):
+            return True
+
+        for item in context_data or []:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type in {"active_script", "script_state", "script"} or isinstance(item.get("script_state"), dict):
+                return True
+            for key in ("path", "filepath", "file_path", "script_path"):
+                value = str(item.get(key) or "").replace("\\", "/").lower()
+                if "scripts_user/" in value and value.endswith(".py"):
+                    return True
+        return False
 
     def _collect_verification_repair_context(self, agent_state):
         coordinator = getattr(self, "verification_coordinator", None)

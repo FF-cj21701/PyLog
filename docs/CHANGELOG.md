@@ -3,6 +3,29 @@
 - This changelog now uses bilingual titles and English body text for long-term encoding stability.
 - Some older entries were historically affected by mojibake. Those sections were normalized into readable English summaries while preserving dates and main themes.
 
+## [2026-07-09] - On-demand Tool Discovery and Workspace Path Guards / 工具按需发现与工作区路径保护
+
+- Replaced always-exposed full tool schemas with a compact discovery flow:
+  - `ToolSpec.to_index_entry()` now exposes a short searchable index entry instead of full parameter schemas
+  - `ToolManager.search_specs(...)` ranks tools by name, tags, keywords, preferred phrases, and lightweight metadata
+  - the always-active tool set is limited to core agent controls, `search_tools`, `load_tools`, and task-plan tools
+  - `load_tools` activates selected schemas for the current worker/session so later ReAct rounds can call them
+- Added system-prompt guidance for the new tool directory workflow: search first, load the 3-5 relevant tools, then execute.
+- Added short-term tool loading optimizations:
+  - `ChatService` keeps session-level active tool names and passes them into new workers
+  - `load_tools` is idempotent and reports loaded, already active, missing, and full active tool names
+  - `search_tools` marks results that are already loaded and callable now
+  - prompts now include a compact `[Active Tools]` context section so the agent can call active tools directly
+  - script-edit turns pre-activate low-risk script/file tools for the current turn to reduce repeated discovery calls
+- Kept system prompt caching across chat turns instead of clearing it every turn, reducing repeated prompt construction.
+- Fixed chat mention/context handling so file and context bubbles are passed as structured runtime context, not as literal user-message text.
+- Added `scripts_user` workspace write guards:
+  - bare write targets such as `ai_hello.py` now resolve to `scripts_user/ai_hello.py` when the AI workspace scope is `scripts_user`
+  - write targets outside `scripts_user` are blocked in `scripts_user` scope
+  - automatic verification now tracks the resolved tool result path instead of the raw tool input path
+- Completed PyLog API reflection metadata coverage for the public `pylog_api.__all__` surface.
+- Added regression coverage for tool discovery/search/load behavior, prompt schema budget reduction, mention context sanitation, workspace write path guards, and verification target tracking.
+
 ## [2026-07-08] - Unprefixed Local Tool Names / 本地工具名去前缀
 
 - Renamed built-in local AI tool registrations from legacy prefixed names to direct action names such as `run_script`, `finish`, `read_file`, and `update_task_plan`.

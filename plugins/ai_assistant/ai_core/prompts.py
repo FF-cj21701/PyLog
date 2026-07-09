@@ -144,7 +144,9 @@ class SystemPrompts:
     TOOL_DISCOVERY_GUIDELINES = (
         "## TOOL DISCOVERY\n"
         "- Only a small set of tools is available at the start of each session: finish, get_help, search_tools, load_tools, and task-plan tools.\n"
+        "- If the context contains an [Active Tools] section, those tools are already callable now. Do not call load_tools for them again.\n"
         "- When you need a capability that is not currently available, call search_tools with the task or capability, then load_tools with the 3-5 most relevant tool names before using them.\n"
+        "- search_tools results may include already_loaded/can_call_now. If can_call_now is true, call that tool directly.\n"
         "- If a tool is not loaded or context was compacted, search again and reload the needed tool definitions.\n"
         "- get_help provides documentation; it does not load tool schemas into the current session.\n\n"
     )

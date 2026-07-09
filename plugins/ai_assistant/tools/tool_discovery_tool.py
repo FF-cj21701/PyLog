@@ -95,6 +95,6 @@ class LoadToolsTool(BaseTool):
         loaded = result.get("loaded", [])
         return {
             "ok": bool(result.get("ok", True)),
-            "summary": f"Loaded {len(loaded)} tools",
+            "summary": result.get("summary") or f"Loaded {len(loaded)} tools",
             **result,
         }

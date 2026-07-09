@@ -108,6 +108,17 @@ class ContextManagerTests(unittest.TestCase):
         self.assertIn("[User Message]\nmodify to output hello", prompt)
         self.assertNotIn("@[file:", prompt)
 
+    def test_active_tools_summary_lists_callable_tools_with_budget(self):
+        context = ContextManager().build_context_block([{
+            "type": "active_tools_summary",
+            "tools": [f"tool_{index}" for index in range(14)],
+        }])
+
+        self.assertIn("[Active Tools]", context)
+        self.assertIn("- callable_now: tool_0, tool_1", context)
+        self.assertIn("- guidance: call these tools directly", context)
+        self.assertIn("- omitted: 2 active tool(s)", context)
+
     def test_curve_context_resolves_well_name_from_database(self):
         import sqlite3
         import tempfile
@@ -135,6 +146,50 @@ class ContextManagerTests(unittest.TestCase):
         ])
 
         self.assertEqual(prompt, "[ALIVE Context]\nWell: Well-B (db=demo.db)\n\n[User Message]\nplot it")
+
+    def test_chat_service_tracks_loaded_tools_at_session_level(self):
+        service = ChatService.__new__(ChatService)
+        service.context_manager = ContextManager()
+        service.agent_state = AgentState()
+        service.active_tool_names = set()
+
+        service._handle_tools_loaded(["finish", "search_tools", "read_file", "edit_file"])
+        prompt = service.compose_prompt("continue", [])
+
+        self.assertEqual(service.active_tool_names, {"read_file", "edit_file"})
+        self.assertIn("[Active Tools]", prompt)
+        self.assertIn("- callable_now: edit_file, read_file", prompt)
+        self.assertIn("do not call load_tools for them again", prompt)
+
+    def test_chat_service_active_tools_summary_accepts_turn_profile_without_persisting_it(self):
+        service = ChatService.__new__(ChatService)
+        service.context_manager = ContextManager()
+        service.agent_state = AgentState()
+        service.active_tool_names = {"read_file"}
+
+        prompt = service.compose_prompt(
+            "修改脚本输出 hello",
+            [{"type": "active_script", "script_path": "scripts_user/demo.py"}],
+            extra_active_tool_names={"edit_file", "verify_target"},
+        )
+
+        self.assertIn("- callable_now: edit_file, read_file, verify_target", prompt)
+        self.assertEqual(service.active_tool_names, {"read_file"})
+
+    def test_chat_service_script_edit_profile_only_matches_script_tasks(self):
+        service = ChatService.__new__(ChatService)
+
+        profile_tools = service._script_edit_profile_tool_names(
+            "修改脚本输出 hello",
+            [{"type": "active_script", "script_path": "scripts_user/demo.py"}],
+        )
+        plain_tools = service._script_edit_profile_tool_names("hello", [])
+
+        self.assertEqual(
+            profile_tools,
+            {"get_script_state", "read_file", "edit_file", "overwrite_file", "save_script", "verify_target"},
+        )
+        self.assertEqual(plain_tools, set())
 
     def test_chat_service_injects_recent_runtime_tool_results(self):
         service = ChatService.__new__(ChatService)
@@ -1511,6 +1566,103 @@ class ToolManagerBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(load_result["ok"])
         self.assertIn("run_script", names)
         self.assertIn("get_script_state", names)
+
+    async def test_worker_initial_active_tools_are_available_without_loading(self):
+        worker = AsyncAIWorker(
+            "key",
+            "http://localhost/v1",
+            "model",
+            "read this file",
+            tools=[
+                DummyTool(name="finish", capability_tags=["finish"]),
+                DummyTool(name="read_file", domain_tags=["file"], capability_tags=["file_read"], keywords=["read file"]),
+                DummyTool(name="edit_file", domain_tags=["file"], capability_tags=["file_edit"], keywords=["edit file"]),
+            ],
+            initial_active_tool_names={"read_file"},
+        )
+
+        names = {item["function"]["name"] for item in worker._build_tool_configs()}
+
+        self.assertIn("read_file", names)
+        self.assertNotIn("edit_file", names)
+
+    async def test_worker_load_tools_is_idempotent_and_reports_active_names(self):
+        loaded_snapshots = []
+        worker = AsyncAIWorker(
+            "key",
+            "http://localhost/v1",
+            "model",
+            "read this file",
+            tools=[
+                DummyTool(name="finish", capability_tags=["finish"]),
+                DummyTool(name="read_file", domain_tags=["file"], capability_tags=["file_read"], keywords=["read file"]),
+            ],
+            initial_active_tool_names={"read_file"},
+            on_tools_loaded=lambda names: loaded_snapshots.append(names),
+        )
+
+        load_tool = worker.tool_manager.find_tool("load_tools")
+        result = load_tool.execute(names=["read_file"])
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["loaded"], [])
+        self.assertEqual(result["already_loaded"], ["read_file"])
+        self.assertIn("read_file", result["active_tool_names"])
+        self.assertIn("all requested tools are already active", result["summary"])
+        self.assertTrue(loaded_snapshots)
+        self.assertIn("read_file", loaded_snapshots[-1])
+
+    async def test_worker_search_marks_already_loaded_tools_callable_now(self):
+        worker = AsyncAIWorker(
+            "key",
+            "http://localhost/v1",
+            "model",
+            "read this file",
+            tools=[
+                DummyTool(name="finish", capability_tags=["finish"]),
+                DummyTool(name="read_file", domain_tags=["file"], capability_tags=["file_read"], keywords=["read file"]),
+            ],
+            initial_active_tool_names={"read_file"},
+        )
+
+        search_tool = worker.tool_manager.find_tool("search_tools")
+        result = search_tool.execute(query="read file", limit=3)
+        read_entry = next(item for item in result["tools"] if item["name"] == "read_file")
+
+        self.assertTrue(read_entry["already_loaded"])
+        self.assertTrue(read_entry["can_call_now"])
+
+    async def test_script_edit_profile_preloads_low_risk_script_tools_for_one_turn(self):
+        service = ChatService.__new__(ChatService)
+        profile_tools = service._script_edit_profile_tool_names(
+            "修改 scripts_user/demo.py 输出 hello",
+            [{"type": "active_script", "script_path": "scripts_user/demo.py"}],
+        )
+        worker = AsyncAIWorker(
+            "key",
+            "http://localhost/v1",
+            "model",
+            "modify script",
+            tools=[
+                DummyTool(name="finish", capability_tags=["finish"]),
+                DummyTool(name="get_script_state", domain_tags=["script"], keywords=["script state"]),
+                DummyTool(name="read_file", domain_tags=["file"], keywords=["read file"]),
+                DummyTool(name="edit_file", domain_tags=["file"], keywords=["edit file"]),
+                DummyTool(name="overwrite_file", domain_tags=["file"], keywords=["overwrite file"]),
+                DummyTool(name="save_script", domain_tags=["script"], keywords=["save script"]),
+                DummyTool(name="verify_target", domain_tags=["verification"], keywords=["verify script"]),
+                DummyTool(name="plot", domain_tags=["geoscience"], keywords=["plot curve"]),
+            ],
+            initial_active_tool_names=profile_tools,
+        )
+
+        names = {item["function"]["name"] for item in worker._build_tool_configs()}
+
+        self.assertIn("get_script_state", names)
+        self.assertIn("read_file", names)
+        self.assertIn("edit_file", names)
+        self.assertIn("verify_target", names)
+        self.assertNotIn("plot", names)
 
     async def test_worker_blocks_unloaded_direct_tool_call(self):
         worker = AsyncAIWorker(

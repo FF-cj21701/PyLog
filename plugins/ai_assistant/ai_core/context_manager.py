@@ -27,6 +27,7 @@ class ContextManager:
         "active_script_state": {"priority": 20, "max_lines": 12, "drop_strategy": "keep"},
         "verification_repair": {"priority": 22, "max_lines": 10, "drop_strategy": "keep"},
         "plot_window_state": {"priority": 23, "max_lines": 12, "drop_strategy": "summarize"},
+        "active_tools_summary": {"priority": 24, "max_lines": 4, "max_items": 12, "drop_strategy": "summarize"},
         "skills_summary": {"priority": 24, "max_lines": 10, "max_items": 8, "drop_strategy": "summarize"},
         "task_plan": {"priority": 25, "max_lines": 12, "drop_strategy": "summarize"},
         "recent_tool_results": {
@@ -64,6 +65,7 @@ class ContextManager:
         plot_window_lines = []
         skills_summary_items = []
         skills_summary_meta = {}
+        active_tools = []
         task_plan_lines = []
         tool_result_items = []
         retrieved_context_items = []
@@ -93,6 +95,9 @@ class ContextManager:
                 for skill in skills_summary.get("skills") or skills_summary.get("items") or []:
                     if isinstance(skill, Mapping):
                         skills_summary_items.append(skill)
+            active_tools_summary = self._extract_active_tools_summary(item)
+            if active_tools_summary:
+                active_tools.extend(active_tools_summary)
             task_plan = self._extract_task_plan(item)
             if task_plan:
                 task_plan_lines.extend(self._format_task_plan(task_plan))
@@ -114,6 +119,9 @@ class ContextManager:
         skills_summary_lines = self._format_skills_summary(skills_summary_items, skills_summary_meta)
         if skills_summary_lines:
             sections.append(self._make_section("skills_summary", skills_summary_lines))
+        active_tools_lines = self._format_active_tools_summary(active_tools)
+        if active_tools_lines:
+            sections.append(self._make_section("active_tools_summary", active_tools_lines))
         if task_plan_lines:
             sections.append(self._make_section("task_plan", task_plan_lines))
         tool_result_lines = self._format_recent_tool_results(tool_result_items)
@@ -329,6 +337,39 @@ class ContextManager:
         if description:
             parts.append(f"description: {self._truncate(description)}")
         return "; ".join(parts)
+
+    def _extract_active_tools_summary(self, item: Mapping[str, Any]) -> List[str]:
+        if item.get("type") not in {"active_tools_summary", "active_tools", "loaded_tools"}:
+            return []
+        tools = item.get("tools") or item.get("active_tool_names") or item.get("names")
+        if isinstance(tools, str):
+            return [tools]
+        if not isinstance(tools, Iterable):
+            return []
+        return [str(name) for name in tools if str(name).strip()]
+
+    def _format_active_tools_summary(self, tools: List[str]) -> List[str]:
+        unique_tools = []
+        seen = set()
+        for name in tools:
+            normalized = str(name).strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            unique_tools.append(normalized)
+        if not unique_tools:
+            return []
+
+        max_items = int(self._section_policy("active_tools_summary").get("max_items") or 12)
+        visible = unique_tools[:max_items]
+        lines = [
+            "[Active Tools]",
+            "- callable_now: " + ", ".join(visible),
+            "- guidance: call these tools directly; do not call load_tools for them again",
+        ]
+        if len(unique_tools) > max_items:
+            lines.append(f"- omitted: {len(unique_tools) - max_items} active tool(s)")
+        return lines
 
     def _extract_task_plan(self, item: Mapping[str, Any]) -> Mapping[str, Any] | None:
         item_type = item.get("type")

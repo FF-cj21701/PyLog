@@ -67,6 +67,8 @@ class AsyncAIWorker(QObject):
         execution_policy=None,
         task_state_machine=None,
         verification_coordinator=None,
+        initial_active_tool_names=None,
+        on_tools_loaded=None,
     ):
         super().__init__()
         self.api_key = api_key
@@ -87,6 +89,8 @@ class AsyncAIWorker(QObject):
         self.verification_coordinator = verification_coordinator
         self.tool_manager = ToolManager(self.tools)
         self.active_tool_names = set(self.BASE_ACTIVE_TOOL_NAMES)
+        self.active_tool_names.update(str(name) for name in (initial_active_tool_names or []) if str(name).strip())
+        self.on_tools_loaded = on_tools_loaded
         self._install_runtime_discovery_tools()
         self.tool_dispatcher = self.tool_manager
         self.tool_selection = ToolSelectionStrategy()
@@ -165,12 +169,17 @@ class AsyncAIWorker(QObject):
         self.tools = self.tool_manager.tools
 
     def _search_tools(self, query="", domain=None, capability=None, limit=5):
-        return self.tool_manager.search_specs(
+        results = self.tool_manager.search_specs(
             query=query,
             domain=domain,
             capability=capability,
             limit=limit,
         )
+        for item in results:
+            name = item.get("name")
+            item["already_loaded"] = name in self.active_tool_names
+            item["can_call_now"] = name in self.active_tool_names
+        return results
 
     def _load_tools(self, names):
         requested = [str(name).strip() for name in (names or []) if str(name).strip()]
@@ -186,10 +195,28 @@ class AsyncAIWorker(QObject):
                 already_loaded.append(name)
             else:
                 self.active_tool_names.add(name)
-            loaded.append(spec.to_index_entry())
+                loaded.append(spec.to_index_entry())
+
+        if callable(self.on_tools_loaded):
+            try:
+                self.on_tools_loaded(sorted(self.active_tool_names))
+            except Exception:
+                pass
+
+        if loaded and already_loaded:
+            summary = f"Loaded {len(loaded)} tools, {len(already_loaded)} already active"
+        elif loaded:
+            summary = f"Loaded {len(loaded)} tools"
+        elif already_loaded and not missing:
+            summary = "No new tools loaded; all requested tools are already active"
+        elif missing:
+            summary = f"Loaded {len(loaded)} tools; {len(missing)} missing"
+        else:
+            summary = "No tools requested"
 
         return {
             "ok": not missing,
+            "summary": summary,
             "loaded": loaded,
             "missing": missing,
             "already_loaded": already_loaded,

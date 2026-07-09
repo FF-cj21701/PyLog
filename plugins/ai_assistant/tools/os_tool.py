@@ -56,6 +56,8 @@ class TerminalTool(BaseTool):
             "side_effect_level": "external",
             "risk_level": "high",
             "capability_tags": ["shell", "command_execution"],
+            "domain_tags": ["code", "workspace"],
+            "search_weight": -8,
             "keywords": [
                 "run shell command",
                 "run command",
@@ -100,6 +102,9 @@ class FileSearchTool(BaseTool):
             }
         }, metadata={
             "required_args": ["pattern"],
+            "domain_tags": ["code", "workspace", "script"],
+            "capability_tags": ["path_discovery", "file_search"],
+            "search_weight": -5,
             "keywords": [
                 "search files",
                 "find files",

@@ -102,7 +102,6 @@ class ChatService(QObject):
                 print(f"Error fetching MCP tools: {e}")
                 self.system_message.emit(f"Warning: Failed to fetch some MCP tools: {e}")
 
-        SystemPrompts.clear_cache()
         system_prompt = SystemPrompts.get_prompt()
         self._start_worker(
             prompt,

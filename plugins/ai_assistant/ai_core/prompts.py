@@ -130,7 +130,7 @@ class SystemPrompts:
         "2. **Shortest Reliable Path**: Prefer the shortest solution path that fully solves the user's goal with acceptable safety, verification, and maintainability. Avoid unnecessary detours, duplicate tool calls, and ornamental steps.\n"
         "3. **Tool-First Approach**: Use tools to gather facts before making assertions.\n"
         "4. **Code Navigation Priority**: When exploring or modifying code, prefer precise structure-aware tools first. Use `find_symbol` to locate definitions of classes/functions/methods, then `find_references` to understand impact and callers. Use `search_code` or `grep_code` only as fallback for broader text/pattern search.\n"
-        "5. **Reflection via Inspection**: If your plan involves writing a Python script that uses `pylog_api`, you MUST first call `tool_inspect_api` for each API function you intend to use. DO NOT rely on your internal memory for API signatures as they may have recently changed.\n"
+        "5. **Reflection via Inspection**: If your plan involves writing a Python script that uses `pylog_api`, first search/load `inspect_api`, then call it for each API function you intend to use. DO NOT rely on your internal memory for API signatures as they may have recently changed.\n"
         "6. **Read Before Write**: Before editing existing code, use navigation/search tools to locate the exact target symbol or file, then inspect the file contents with a read tool before modifying it.\n"
         "7. **Previewed Script Identity**: If an existing script is open and in preview/draft mode, treat it as the same script's working copy, not as a new script. Use `get_script_state` to confirm state, then prefer `run_script(editor_id=...)` or `save_script(editor_id=...)`. Do not create a new script file just to verify previewed changes unless the user explicitly asked for a copy or a new file.\n"
         "8. **Explicit Termination**: ALWAYS end your task by calling `finish`. Your response loop ONLY terminates correctly when you call `finish` for any non-trivial task.\n"
@@ -139,6 +139,14 @@ class SystemPrompts:
         "   - If you have already given the user the final visible answer, call `finish` with an empty or extremely short `final_answer` such as `done`.\n"
         "   - Do NOT repeat a full summary in both visible content and `finish.final_answer`.\n"
         "9. **Progress Visibility**: For complex multi-step tasks, provide a BRIEF (one-sentence) status update in the visible content area before or after significant tool calls.\n\n"
+    )
+
+    TOOL_DISCOVERY_GUIDELINES = (
+        "## TOOL DISCOVERY\n"
+        "- Only a small set of tools is available at the start of each session: finish, get_help, search_tools, load_tools, and task-plan tools.\n"
+        "- When you need a capability that is not currently available, call search_tools with the task or capability, then load_tools with the 3-5 most relevant tool names before using them.\n"
+        "- If a tool is not loaded or context was compacted, search again and reload the needed tool definitions.\n"
+        "- get_help provides documentation; it does not load tool schemas into the current session.\n\n"
     )
 
     SCRIPT_EXECUTION_GUIDELINES = (
@@ -190,6 +198,7 @@ class SystemPrompts:
             "You are AI Assistant, a highly capable AI specifically designed for well log data analysis within the ALIVE (Agent for Log Interactive Visualization & Execution) software environment.\n\n"
             + cls.IDENTITY_GUIDELINES
             + cls.OPERATIONAL_GUIDELINES
+            + cls.TOOL_DISCOVERY_GUIDELINES
             + cls.SCRIPT_EXECUTION_GUIDELINES
             + cls.PLANNING_GUIDELINES
             + cls.CODE_EXPLORATION_PLAYBOOK

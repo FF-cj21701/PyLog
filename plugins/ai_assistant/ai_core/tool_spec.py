@@ -27,6 +27,27 @@ class ToolSpec:
     server_name: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    def to_index_entry(self) -> Dict[str, Any]:
+        """Return compact metadata intended for tool discovery/search."""
+        category = self.metadata.get("category")
+        if not category:
+            category = (self.domain_tags or self.capability_tags or [self.source or "general"])[0]
+        return {
+            "name": self.name,
+            "display_name": self.display_name or self.name,
+            "description": self.description.strip(),
+            "category": str(category),
+            "source": self.source,
+            "server_name": self.server_name,
+            "domain_tags": list(self.domain_tags),
+            "capability_tags": list(self.capability_tags),
+            "keywords": list(self.keywords),
+            "risk": self.risk_level,
+            "side_effect_level": self.side_effect_level,
+            "preferred_for": list(self.metadata.get("preferred_for") or []),
+            "search_weight": self.metadata.get("search_weight", 0),
+        }
+
     def to_model_description(self) -> str:
         parts = [self.description.strip()]
 

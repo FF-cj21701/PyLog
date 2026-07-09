@@ -39,6 +39,10 @@ except ImportError:
 
 
 def _resolve_path(filepath):
+    if PathResolver and hasattr(PathResolver, "resolve_workspace_write_path"):
+        resolved = PathResolver.resolve_workspace_write_path(filepath)
+        if resolved.get("ok"):
+            return resolved.get("filepath")
     if os.path.isabs(filepath):
         return filepath
     root = PathResolver.get_project_root() if PathResolver else os.getcwd()
@@ -182,6 +186,11 @@ class ApplyPatchTool(BaseTool):
             return {"ok": False, "error": "hunks are required"}
 
         try:
+            if PathResolver and hasattr(PathResolver, "resolve_workspace_write_path"):
+                workspace_path = PathResolver.resolve_workspace_write_path(filepath)
+                if not workspace_path.get("ok"):
+                    return workspace_path
+                filepath = workspace_path.get("filepath")
             editor = _get_file_editor(filepath)
             prepared = editor.prepare_patch(filepath, hunks, create_if_missing=create_if_missing)
             if not prepared.ok:

@@ -659,6 +659,14 @@ class VerifyTargetTool(BaseTool):
                 "output_type": "verification",
                 "capability_tags": ["verification", "auto_strategy"],
                 "domain_tags": ["code", "script"],
+                "search_weight": 8,
+                "preferred_for": [
+                    "verify file",
+                    "verify target",
+                    "check changed code",
+                    "validate script",
+                    "run verification",
+                ],
                 "keywords": [
                     "verify target",
                     "verify file",
@@ -700,6 +708,13 @@ class RunTestCommandTool(BaseTool):
                 "output_type": "verification",
                 "capability_tags": ["verification", "tests"],
                 "domain_tags": ["code"],
+                "search_weight": 6,
+                "preferred_for": [
+                    "run tests",
+                    "pytest",
+                    "unit tests",
+                    "test command",
+                ],
                 "keywords": [
                     "run tests",
                     "pytest",
@@ -779,6 +794,13 @@ class RunLintCommandTool(BaseTool):
                 "output_type": "verification",
                 "capability_tags": ["verification", "lint"],
                 "domain_tags": ["code"],
+                "search_weight": 5,
+                "preferred_for": [
+                    "run lint",
+                    "syntax check",
+                    "compile check",
+                    "py_compile",
+                ],
                 "keywords": [
                     "run lint",
                     "lint command",
@@ -827,6 +849,12 @@ class RunFormatCommandTool(BaseTool):
                 "output_type": "verification",
                 "capability_tags": ["verification", "format_check"],
                 "domain_tags": ["code"],
+                "search_weight": 4,
+                "preferred_for": [
+                    "format check",
+                    "check formatting",
+                    "formatter check",
+                ],
                 "keywords": [
                     "format check",
                     "run formatter check",

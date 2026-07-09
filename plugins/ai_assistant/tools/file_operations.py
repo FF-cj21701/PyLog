@@ -22,6 +22,14 @@ except ImportError:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         register_tool = importlib.import_module("registry").register_tool
 
+try:
+    from ..common.paths import PathResolver
+except ImportError:
+    try:
+        from plugins.ai_assistant.common.paths import PathResolver
+    except ImportError:
+        PathResolver = None
+
 
 def _check_whitelist(file_path, whitelist):
     """检查文件路径是否在白名单中（支持文件夹授权和单个文件授权）"""
@@ -43,6 +51,19 @@ def _check_whitelist(file_path, whitelist):
             continue
             
     return False, file_path
+
+
+def _resolve_write_path(file_path, whitelist):
+    if PathResolver:
+        resolved = PathResolver.resolve_workspace_write_path(file_path)
+        if not resolved.get("ok"):
+            return False, None, resolved
+        file_path = resolved.get("filepath")
+
+    allowed, resolved_path = _check_whitelist(file_path, whitelist)
+    if not allowed:
+        return False, resolved_path, {"error": f"Access denied: {resolved_path} is not in whitelist"}
+    return True, resolved_path, None
 
 @register_tool
 class ReadFileTool(BaseTool):
@@ -72,6 +93,8 @@ class ReadFileTool(BaseTool):
             "side_effect_level": "read",
             "required_args": ["file_path"],
             "path_argument_names": ["file_path"],
+            "domain_tags": ["code", "workspace", "script"],
+            "capability_tags": ["file_read", "inspection"],
             "keywords": [
                 "read file",
                 "open file content",
@@ -196,6 +219,9 @@ class WriteFileTool(BaseTool):
         }, metadata={
             "required_args": ["file_path", "content"],
             "path_argument_names": ["file_path"],
+            "domain_tags": ["code", "workspace", "script"],
+            "capability_tags": ["file_write", "overwrite"],
+            "search_weight": -2,
             "keywords": [
                 "write file",
                 "create file content",
@@ -210,15 +236,15 @@ class WriteFileTool(BaseTool):
             whitelist = os.environ.get('PYLOG_TOOL_WHITELIST', '').split(';')
 
             # 检查文件路径是否在白名单中
-            allowed, resolved_path = _check_whitelist(file_path, whitelist)
+            allowed, resolved_path, error = _resolve_write_path(file_path, whitelist)
             if not allowed:
-                return {"error": f"Access denied: {resolved_path} is not in whitelist"}
+                return error
             file_path = resolved_path
 
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(content)
 
-            return {"ok": True, "message": f"File written successfully: {file_path}"}
+            return {"ok": True, "filepath": file_path, "message": f"File written successfully: {file_path}"}
         except Exception as e:
             return {"error": str(e)}
 
@@ -233,6 +259,8 @@ class ListDirectoryTool(BaseTool):
         }, metadata={
             "required_args": ["directory"],
             "path_argument_names": ["directory"],
+            "domain_tags": ["code", "workspace", "script"],
+            "capability_tags": ["directory_listing", "path_discovery"],
             "keywords": [
                 "list directory",
                 "show folder contents",
@@ -284,6 +312,9 @@ class AppendFileTool(BaseTool):
         }, metadata={
             "required_args": ["file_path", "content"],
             "path_argument_names": ["file_path"],
+            "domain_tags": ["code", "workspace", "script"],
+            "capability_tags": ["file_write", "append"],
+            "search_weight": -3,
             "keywords": [
                 "append file",
                 "append content",
@@ -300,15 +331,15 @@ class AppendFileTool(BaseTool):
             whitelist = os.environ.get('PYLOG_TOOL_WHITELIST', '').split(';')
 
             # 检查文件路径是否在白名单中
-            allowed, resolved_path = _check_whitelist(file_path, whitelist)
+            allowed, resolved_path, error = _resolve_write_path(file_path, whitelist)
             if not allowed:
-                return {"error": f"Access denied: {resolved_path} is not in whitelist"}
+                return error
             file_path = resolved_path
 
             with open(file_path, 'a', encoding='utf-8') as f:
                 f.write(content)
 
-            return {"ok": True, "message": f"Content appended successfully: {file_path}"}
+            return {"ok": True, "filepath": file_path, "message": f"Content appended successfully: {file_path}"}
         except Exception as e:
             return {"error": str(e)}
 
@@ -323,6 +354,8 @@ class FileExistsTool(BaseTool):
         }, metadata={
             "required_args": ["file_path"],
             "path_argument_names": ["file_path"],
+            "domain_tags": ["code", "workspace", "script"],
+            "capability_tags": ["file_status", "path_discovery"],
             "keywords": [
                 "file exists",
                 "check file exists",
@@ -366,6 +399,9 @@ class DeleteFileTool(BaseTool):
         }, metadata={
             "required_args": ["file_path"],
             "path_argument_names": ["file_path"],
+            "domain_tags": ["code", "workspace", "script"],
+            "capability_tags": ["file_delete", "file_write"],
+            "search_weight": -4,
             "keywords": [
                 "delete file",
                 "remove file",
@@ -379,14 +415,14 @@ class DeleteFileTool(BaseTool):
             whitelist = os.environ.get('PYLOG_TOOL_WHITELIST', '').split(';')
 
             # 检查文件路径是否在白名单中
-            allowed, resolved_path = _check_whitelist(file_path, whitelist)
+            allowed, resolved_path, error = _resolve_write_path(file_path, whitelist)
             if not allowed:
-                return {"error": f"Access denied: {resolved_path} is not in whitelist"}
+                return error
             file_path = resolved_path
 
             if os.path.exists(file_path):
                 os.remove(file_path)
-                return {"ok": True, "message": f"File deleted successfully: {file_path}"}
+                return {"ok": True, "filepath": file_path, "message": f"File deleted successfully: {file_path}"}
             else:
                 return {"error": f"File does not exist: {file_path}"}
         except Exception as e:
@@ -403,6 +439,8 @@ class CreateDirectoryTool(BaseTool):
         }, metadata={
             "required_args": ["directory_path"],
             "path_argument_names": ["directory_path"],
+            "domain_tags": ["code", "workspace", "script"],
+            "capability_tags": ["directory_write", "file_write"],
             "keywords": [
                 "create directory",
                 "make folder",
@@ -417,16 +455,16 @@ class CreateDirectoryTool(BaseTool):
             whitelist = os.environ.get('PYLOG_TOOL_WHITELIST', '').split(';')
 
             # 检查目录路径是否在白名单中
-            allowed, resolved_path = _check_whitelist(directory_path, whitelist)
+            allowed, resolved_path, error = _resolve_write_path(directory_path, whitelist)
             if not allowed:
-                return {"error": f"Access denied: {resolved_path} is not in whitelist"}
+                return error
             directory_path = resolved_path
 
             if not os.path.exists(directory_path):
                 os.makedirs(directory_path, exist_ok=True)
-                return {"ok": True, "message": f"Directory created successfully: {directory_path}"}
+                return {"ok": True, "filepath": directory_path, "message": f"Directory created successfully: {directory_path}"}
             else:
-                return {"ok": True, "message": f"Directory already exists: {directory_path}"}
+                return {"ok": True, "filepath": directory_path, "message": f"Directory already exists: {directory_path}"}
         except Exception as e:
             return {"error": str(e)}
 
@@ -441,6 +479,8 @@ class GetFileInfoTool(BaseTool):
         }, metadata={
             "required_args": ["file_path"],
             "path_argument_names": ["file_path"],
+            "domain_tags": ["code", "workspace", "script"],
+            "capability_tags": ["file_metadata", "inspection"],
             "keywords": [
                 "file info",
                 "file metadata",
@@ -513,6 +553,8 @@ class SearchInFileTool(BaseTool):
         }, metadata={
             "required_args": ["file_path", "pattern"],
             "path_argument_names": ["file_path"],
+            "domain_tags": ["code", "workspace", "script"],
+            "capability_tags": ["search", "file_search", "regex"],
             "keywords": [
                 "search in file",
                 "find in file",

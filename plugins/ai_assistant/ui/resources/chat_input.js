@@ -1061,44 +1061,53 @@ function updateSendButton() {
 
             // Collect all contexts (both old pills and new inline ones)
             const inlineContexts = [];
+            const addInlineContext = (ctx) => {
+                if (!ctx) return;
+                const key = [
+                    ctx.type || '',
+                    ctx.path || ctx.db_path || '',
+                    ctx.name || ctx.display_name || '',
+                    ctx.id || ctx.curve_id || ''
+                ].join('|');
+                if (!inlineContexts.some(ic => [
+                    ic.type || '',
+                    ic.path || ic.db_path || '',
+                    ic.name || ic.display_name || '',
+                    ic.id || ic.curve_id || ''
+                ].join('|') === key)) {
+                    inlineContexts.push(ctx);
+                }
+            };
+            const appendMention = (node) => {
+                const type = node.dataset.type || 'file';
+                const path = node.dataset.path || "";
+                const name = node.dataset.name || node.textContent.trim() || "";
+                const wellId = node.dataset.wellId || "";
+                const curveId = node.dataset.curveId || "";
+
+                if (type === 'bubbles' && node.dataset.context) {
+                    try {
+                        const bubbleContexts = JSON.parse(node.dataset.context);
+                        bubbleContexts.forEach(ctx => addInlineContext(ctx));
+                    } catch (e) {
+                        console.error("Error parsing bubble context:", e);
+                    }
+                    displayMsg += node.outerHTML;
+                    return;
+                }
+
+                const markerPath = path || (wellId && curveId ? `${wellId}/${curveId}` : "");
+                const ctx = selectedContexts.find(c => c.type === type && c.path === path);
+                addInlineContext(ctx || { type, path: markerPath, name });
+                displayMsg += node.outerHTML;
+            };
             const walk = (node) => {
                 if (node.nodeType === Node.TEXT_NODE) {
                     actualMsg += node.textContent;
                     displayMsg += node.textContent;
                 } else if (node.nodeType === Node.ELEMENT_NODE) {
                     if (node.classList.contains('mention-pill')) {
-                        const type = node.dataset.type;
-                        const path = node.dataset.path || "";
-                        const name = node.dataset.name || "";
-                        const wellId = node.dataset.wellId || "";
-                        const wellName = node.dataset.wellName || "";
-                        const curveId = node.dataset.curveId || "";
-
-                        if (type === 'bubbles' && node.dataset.context) {
-                            try {
-                                const bubbleContexts = JSON.parse(node.dataset.context);
-                                bubbleContexts.forEach(ctx => {
-                                    if (!inlineContexts.some(ic => (ic.path === ctx.path || ic.db_path === ctx.db_path) && ic.name === ctx.name)) {
-                                        inlineContexts.push(ctx);
-                                    }
-                                });
-                                actualMsg += name; // Add displayed name to raw text
-                            } catch (e) {
-                                console.error("Error parsing bubble context:", e);
-                            }
-                        } else {
-                            const marker = `@[${type}:${path}:${name}]`;
-                            actualMsg += marker;
-
-                            // Find matching content in selectedContexts
-                            const ctx = selectedContexts.find(c => c.type === type && c.path === path);
-                            if (ctx && !inlineContexts.some(ic => ic.type === type && ic.path === path)) {
-                                inlineContexts.push(ctx);
-                            }
-                        }
-
-                        // For displayMsg (history), we can just use the outerHTML of the node
-                        displayMsg += node.outerHTML;
+                        appendMention(node);
                     } else if (node.nodeName === 'DIV' || node.nodeName === 'P') {
                         actualMsg += "\n";
                         displayMsg += "<br>";
@@ -1116,28 +1125,8 @@ function updateSendButton() {
 
             if (actualMsg.trim().length === 0 && selectedContexts.length === 0) return;
 
-            // Prepare the full message with context definitions
-            let fullMsg = "";
             const contextsToInclude = [...new Set(inlineContexts)];
-
-            if (contextsToInclude.length > 0) {
-                fullMsg += "Context information:\n\n";
-                contextsToInclude.forEach(ctx => {
-                    if (ctx.type === 'file') {
-                        fullMsg += `File: ${ctx.path}\n\`\`\`\n${ctx.content}\n\`\`\`\n\n`;
-                    } else if (ctx.type === 'plot') {
-                        fullMsg += `Plot context:\n${ctx.content}\n\n`;
-                    } else if (ctx.type === 'curve') {
-                        const wellN = ctx.well_name || (ctx.db_path ? ctx.db_path.split(/[/\\]/).pop().replace('.db', '') : "Unassigned");
-                        fullMsg += `Well curve: ${ctx.name} (Well: ${wellN}, Well ID: ${ctx.well_id || '-'}, Curve ID: ${ctx.id || '-'}, Database: ${ctx.db_path || '-'})\n${ctx.content || ""}\n\n`;
-                    } else {
-                        fullMsg += `Code snippet (${ctx.name} #${ctx.lines}):\n\`\`\`\n${ctx.content}\n\`\`\`\n\n`;
-                    }
-                });
-                fullMsg += "---\n\n";
-            }
-
-            fullMsg += actualMsg;
+            const fullMsg = actualMsg;
 
             const planActions = new Set([
                 "执行计划",
@@ -1161,7 +1150,8 @@ function updateSendButton() {
                 bridge.sendMessage(JSON.stringify({
                     actual: fullMsg,
                     display: displayMsg,
-                    rendered: shouldRenderOptimistically
+                    rendered: shouldRenderOptimistically,
+                    contexts: contextsToInclude
                 }));
             }
 

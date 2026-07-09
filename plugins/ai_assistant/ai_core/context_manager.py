@@ -146,6 +146,33 @@ class ContextManager:
             if well_name:
                 return f"Curve: {name} (well={well_name}, db={db_path})"
             return f"Curve: {name} (db={db_path})"
+        if item_type == "file":
+            path = item.get("path") or item.get("file_path") or item.get("filepath")
+            name = item.get("name") or item.get("display_name")
+            parts = [f"File: {self._truncate(path or name or '')}"]
+            if name and path and name != path:
+                parts.append(f"name={self._truncate(name)}")
+            content = self._first_text(item.get("summary"), item.get("content"))
+            if content:
+                parts.append(f"preview={self._truncate(content)}")
+            return "; ".join(part for part in parts if part)
+        if item_type == "selection":
+            name = item.get("name") or item.get("display_name") or item.get("path")
+            lines = item.get("lines")
+            content = self._first_text(item.get("content"), item.get("summary"))
+            parts = [f"Selection: {self._truncate(name or '')}"]
+            if lines:
+                parts.append(f"lines={self._truncate(lines)}")
+            if content:
+                parts.append(f"content={self._truncate(content)}")
+            return "; ".join(part for part in parts if part)
+        if item_type == "plot":
+            name = item.get("name") or item.get("display_name") or item.get("title")
+            content = self._first_text(item.get("content"), item.get("summary"))
+            parts = [f"Plot: {self._truncate(name or '')}"]
+            if content:
+                parts.append(f"summary={self._truncate(content)}")
+            return "; ".join(part for part in parts if part)
         return ""
 
     def _extract_script_state(self, item: Mapping[str, Any]) -> Mapping[str, Any] | None:

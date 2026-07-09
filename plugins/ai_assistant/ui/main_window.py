@@ -2,6 +2,9 @@
 import sys
 import os
 import json
+import html
+import re
+from html.parser import HTMLParser
 from urllib.parse import unquote
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QApplication
 from PySide6.QtCore import Qt, QTimer
@@ -23,6 +26,91 @@ except ImportError:
     open_ai_settings_page = None
 from .widgets.web_chat_view import WebChatView
 from PySide6.QtCore import QObject, Signal
+
+
+class _MentionHtmlParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.contexts = []
+        self._mention_stack = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs_dict = dict(attrs)
+        class_names = set(str(attrs_dict.get("class", "")).split())
+        if tag.lower() == "span" and "mention-pill" in class_names:
+            mention_type = attrs_dict.get("data-type") or "file"
+            path = attrs_dict.get("data-path") or ""
+            name = attrs_dict.get("data-name") or ""
+            self.contexts.append(_mention_context(mention_type, path, name))
+            self._mention_stack.append(tag.lower())
+        elif tag.lower() in {"br"} and not self._mention_stack:
+            self.parts.append("\n")
+        elif tag.lower() in {"div", "p"} and not self._mention_stack:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if self._mention_stack and tag.lower() == self._mention_stack[-1]:
+            self._mention_stack.pop()
+
+    def handle_data(self, data):
+        if not self._mention_stack:
+            self.parts.append(data)
+
+
+_MENTION_MARKER_RE = re.compile(r"@\[(?P<body>[^\]]+)\]")
+
+
+def _mention_context(mention_type, path, name):
+    context = {
+        "type": str(mention_type or "file"),
+        "name": str(name or ""),
+    }
+    if path:
+        context["path"] = str(path)
+    return context
+
+
+def _extract_marker_contexts(text):
+    contexts = []
+
+    def replace(match):
+        body = match.group("body")
+        parts = body.split(":")
+        if len(parts) >= 3:
+            mention_type = parts[0]
+            name = parts[-1]
+            path = ":".join(parts[1:-1])
+            contexts.append(_mention_context(mention_type, path, name))
+        return ""
+
+    cleaned = _MENTION_MARKER_RE.sub(replace, text)
+    return cleaned, contexts
+
+
+def normalize_chat_actual_text(text):
+    """Remove UI-only mention markup from user text and return extracted contexts."""
+    raw = str(text or "")
+    contexts = []
+    if "mention-pill" not in raw and "<span" not in raw:
+        cleaned, marker_contexts = _extract_marker_contexts(raw)
+        return cleaned.strip(), marker_contexts
+    parser = _MentionHtmlParser()
+    try:
+        parser.feed(raw)
+        parser.close()
+        cleaned = "".join(parser.parts)
+        contexts.extend(parser.contexts)
+    except Exception:
+        cleaned = re.sub(r"<[^>]+>", "", raw)
+    cleaned, marker_contexts = _extract_marker_contexts(html.unescape(cleaned))
+    contexts.extend(marker_contexts)
+    return cleaned.strip(), contexts
+
+
+def sanitize_chat_actual_text(text):
+    """Return user text without leaked mention-pill HTML or inline markers."""
+    return normalize_chat_actual_text(text)[0]
 
 
 class UIBridge(QObject):
@@ -186,9 +274,14 @@ class AIAssistantWidget(QWidget):
         self.chat_view.set_context_info(json.dumps(self.selection_context) if self.selection_context else None)
 
     def _merged_chat_contexts(self):
+        return self._merge_context_items(
+            list(getattr(self, "chat_contexts", []) or []) + list(getattr(self, "selection_context", []) or [])
+        )
+
+    def _merge_context_items(self, items):
         merged = []
         seen = set()
-        for item in list(getattr(self, "chat_contexts", []) or []) + list(getattr(self, "selection_context", []) or []):
+        for item in items:
             if not isinstance(item, dict):
                 continue
             key = (
@@ -237,10 +330,15 @@ class AIAssistantWidget(QWidget):
             full_text = data.get("actual", text)
             display_text = data.get("display", text)
             rendered_by_client = bool(data.get("rendered", False))
+            message_contexts = data.get("contexts") if isinstance(data.get("contexts"), list) else []
         except Exception:
             full_text = text
             display_text = text
             rendered_by_client = False
+            message_contexts = []
+
+        full_text, extracted_contexts = normalize_chat_actual_text(full_text)
+        message_contexts = self._merge_context_items(list(message_contexts or []) + list(extracted_contexts or []))
 
         if full_text in [
             "\u6267\u884c\u8ba1\u5212",
@@ -255,8 +353,10 @@ class AIAssistantWidget(QWidget):
 
         self._is_sending = True
         self.chat_view.set_sending_state(True)
-        effective_context = self._merged_chat_contexts()
-        self.refresh_effective_context_info(delay_ms=0)
+        effective_context = self._merge_context_items(self._merged_chat_contexts() + message_contexts)
+        self.chat_view.set_effective_context_info(
+            self.chat_service.build_effective_context_summary(effective_context)
+        )
         if not rendered_by_client:
             self.chat_view.append_message("user", display_text, is_html=True)
         self.chat_view.set_input_enabled(False)

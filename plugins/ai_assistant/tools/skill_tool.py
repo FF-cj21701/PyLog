@@ -48,7 +48,26 @@ class ReadSkillTool(BaseTool):
                 "description": "The path or name of the skill to read (e.g., 'lasio', 'workflows/well-log-evaluation'). Use read_skill with an empty name to see the full list of path-based IDs."
             }
         }
-        super().__init__(name, description, args_schema)
+        super().__init__(
+            name,
+            description,
+            args_schema,
+            metadata={
+                "side_effect_level": "read",
+                "risk_level": "low",
+                "output_type": "document",
+                "capability_tags": ["skill", "documentation", "expert_knowledge", "inspection"],
+                "domain_tags": ["geoscience", "pylog", "agent"],
+                "keywords": [
+                    "read skill",
+                    "expert skill",
+                    "petrophysics",
+                    "geoscience workflow",
+                    "pylog scripting",
+                    "skill documentation",
+                ],
+            },
+        )
         self.main_window = main_window
         
         # Use centralized PathResolver

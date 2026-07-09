@@ -92,6 +92,19 @@ def _attach_script_state(result, tool_executor, editor_id=None, script_path=None
     return result
 
 
+def _resolve_workspace_edit_path(filepath):
+    if PathResolver and hasattr(PathResolver, "resolve_workspace_write_path"):
+        resolved = PathResolver.resolve_workspace_write_path(filepath)
+        if not resolved.get("ok"):
+            return None, resolved
+        return resolved.get("filepath"), None
+
+    if not os.path.isabs(filepath):
+        root = PathResolver.get_project_root() if PathResolver else os.getcwd()
+        filepath = os.path.join(root, filepath)
+    return filepath, None
+
+
 def draft_change_in_open_editor(filepath, new_content, tool_executor):
     """
     Send code changes to an already-open editor draft/review session.
@@ -197,9 +210,9 @@ class EditFileTool(BaseTool):
         try:
             filepath = filepath.strip()
             
-            # Resolve relative paths against project root
-            if not os.path.isabs(filepath):
-                filepath = os.path.join(PathResolver.get_project_root(), filepath)
+            filepath, path_error = _resolve_workspace_edit_path(filepath)
+            if path_error:
+                return path_error
             
             if not os.path.exists(filepath):
                 return {"error": f"File not found: {filepath}"}
@@ -297,9 +310,9 @@ class OverwriteFileTool(BaseTool):
         try:
             filepath = filepath.strip()
             
-            # Resolve relative paths against project root
-            if not os.path.isabs(filepath):
-                filepath = os.path.join(PathResolver.get_project_root(), filepath)
+            filepath, path_error = _resolve_workspace_edit_path(filepath)
+            if path_error:
+                return path_error
             
             if not os.path.exists(filepath):
                 return {"error": f"File not found: {filepath}"}
@@ -399,9 +412,9 @@ class InsertIntoFileTool(BaseTool):
         try:
             filepath = filepath.strip()
             
-            # Resolve relative paths against project root
-            if not os.path.isabs(filepath):
-                filepath = os.path.join(PathResolver.get_project_root(), filepath)
+            filepath, path_error = _resolve_workspace_edit_path(filepath)
+            if path_error:
+                return path_error
             
             if not os.path.exists(filepath):
                 return {"error": f"File not found: {filepath}"}

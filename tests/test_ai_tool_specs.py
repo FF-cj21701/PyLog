@@ -27,9 +27,12 @@ from plugins.ai_assistant.tools.file_tool import RunScriptTool, RunTerminalComma
 from plugins.ai_assistant.tools.file_tool import OpenScriptTool, SaveScriptTool
 from plugins.ai_assistant.tools.file_tool import SetScriptCodeTool
 from plugins.ai_assistant.tools.file_tool import OpenDocumentTool, OpenHtmlPreviewTool, OpenScriptFileTool
+from plugins.ai_assistant.tools.file_tool import WriteScriptFileTool
 from plugins.ai_assistant.tools.file_tool import normalize_script_terminal_command
 from plugins.ai_assistant.tools.file_operations import ReadFileTool, SearchInFileTool
+from plugins.ai_assistant.tools.file_operations import WriteFileTool
 from plugins.ai_assistant.tools.file_operations import ListDirectoryTool
+from plugins.ai_assistant.common.paths import PathResolver
 from plugins.ai_assistant.tools.os_tool import FileSearchTool, TerminalTool
 from plugins.ai_assistant.tools.patch_tool import ApplyPatchTool
 from plugins.ai_assistant.tools.pylog_api_tool import AnalyzeDataTool, ApplyCurveStyleTool, ApplyImageStyleTool, ListWellsTool, PlotTool
@@ -222,6 +225,20 @@ class PylogApiOptionalDbPathTests(unittest.TestCase):
         self.assertEqual(pylog_api.inspect_api.__module__, "pylog_api.api_reflection")
         self.assertEqual(result.get("name"), "save_curve")
         self.assertIn("db_path", result.get("parameters", {}))
+
+    def test_public_pylog_api_surface_has_reflection_metadata(self):
+        from pylog_api.api_metadata import API_METADATA
+
+        missing = [
+            name
+            for name in pylog_api.__all__
+            if not name.startswith("_") and name not in API_METADATA
+        ]
+        stale = [name for name in API_METADATA if not hasattr(pylog_api, name)]
+
+        self.assertEqual(missing, [])
+        self.assertEqual(stale, [])
+        self.assertEqual(pylog_api.inspect_api("update_plot").get("name"), "update_plot")
 
     def test_save_curve_uses_packaged_writeback_module(self):
         self.assertEqual(pylog_api.save_curve.__module__, "pylog_api.writeback")
@@ -2551,6 +2568,97 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
         run_command.assert_called_once()
         self.assertEqual(run_command.call_args.args[0], ["pytest", "tests/test_ai_tool_specs.py", "-q"])
 
+    def test_scripts_user_workspace_resolves_bare_write_targets_to_scripts_user(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scripts_dir = os.path.join(tmpdir, "scripts_user")
+            os.makedirs(scripts_dir)
+
+            with patch.object(PathResolver, "get_ai_workspace_scope", return_value="scripts_user"), patch.object(
+                PathResolver, "get_project_root", return_value=tmpdir
+            ), patch.object(PathResolver, "get_scripts_user_dir", return_value=scripts_dir):
+                result = PathResolver.resolve_workspace_write_path("ai_well_curve_list.py")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["filepath"],
+            os.path.join(scripts_dir, "ai_well_curve_list.py"),
+        )
+
+    def test_scripts_user_workspace_blocks_write_targets_outside_scripts_user(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scripts_dir = os.path.join(tmpdir, "scripts_user")
+            os.makedirs(scripts_dir)
+            root_file = os.path.join(tmpdir, "ai_well_curve_list.py")
+
+            with patch.object(PathResolver, "get_ai_workspace_scope", return_value="scripts_user"), patch.object(
+                PathResolver, "get_project_root", return_value=tmpdir
+            ), patch.object(PathResolver, "get_scripts_user_dir", return_value=scripts_dir):
+                relative_result = PathResolver.resolve_workspace_write_path("data/demo.py")
+                absolute_result = PathResolver.resolve_workspace_write_path(root_file)
+
+        self.assertFalse(relative_result["ok"])
+        self.assertTrue(relative_result["blocked"])
+        self.assertFalse(absolute_result["ok"])
+        self.assertTrue(absolute_result["blocked"])
+
+    def test_write_script_file_uses_scripts_user_for_bare_filename_in_scripts_workspace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scripts_dir = os.path.join(tmpdir, "scripts_user")
+            os.makedirs(scripts_dir)
+
+            with patch.object(PathResolver, "get_ai_workspace_scope", return_value="scripts_user"), patch.object(
+                PathResolver, "get_project_root", return_value=tmpdir
+            ), patch.object(PathResolver, "get_scripts_user_dir", return_value=scripts_dir):
+                result = WriteScriptFileTool().execute("ai_well_curve_list.py", "print('hello')\n")
+
+            root_target = os.path.join(tmpdir, "ai_well_curve_list.py")
+            scripts_target = os.path.join(scripts_dir, "ai_well_curve_list.py")
+            self.assertTrue(result.get("ok"), result)
+            self.assertFalse(os.path.exists(root_target))
+            self.assertTrue(os.path.exists(scripts_target))
+
+    def test_write_file_uses_scripts_user_for_bare_filename_in_scripts_workspace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scripts_dir = os.path.join(tmpdir, "scripts_user")
+            os.makedirs(scripts_dir)
+
+            with patch.object(PathResolver, "get_ai_workspace_scope", return_value="scripts_user"), patch.object(
+                PathResolver, "get_project_root", return_value=tmpdir
+            ), patch.object(PathResolver, "get_scripts_user_dir", return_value=scripts_dir), patch.dict(
+                os.environ, {"PYLOG_TOOL_WHITELIST": tmpdir}
+            ):
+                result = WriteFileTool().execute("ai_well_curve_list.py", "print('hello')\n")
+
+            root_target = os.path.join(tmpdir, "ai_well_curve_list.py")
+            scripts_target = os.path.join(scripts_dir, "ai_well_curve_list.py")
+            self.assertTrue(result.get("ok"), result)
+            self.assertFalse(os.path.exists(root_target))
+            self.assertTrue(os.path.exists(scripts_target))
+
+    def test_edit_file_bare_filename_targets_scripts_user_file_in_scripts_workspace(self):
+        from plugins.ai_assistant.tools.edit_file_tool import EditFileTool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scripts_dir = os.path.join(tmpdir, "scripts_user")
+            os.makedirs(scripts_dir)
+            root_target = os.path.join(tmpdir, "ai_well_curve_list.py")
+            scripts_target = os.path.join(scripts_dir, "ai_well_curve_list.py")
+            with open(root_target, "w", encoding="utf-8") as handle:
+                handle.write("print('root')\n")
+            with open(scripts_target, "w", encoding="utf-8") as handle:
+                handle.write("print('old')\n")
+
+            with patch.object(PathResolver, "get_ai_workspace_scope", return_value="scripts_user"), patch.object(
+                PathResolver, "get_project_root", return_value=tmpdir
+            ), patch.object(PathResolver, "get_scripts_user_dir", return_value=scripts_dir):
+                result = EditFileTool().execute("ai_well_curve_list.py", "print('old')", "print('new')")
+
+            self.assertTrue(result.get("ok"), result)
+            with open(root_target, "r", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "print('root')\n")
+            with open(scripts_target, "r", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "print('new')\n")
+
     def test_second_tier_tools_expose_retrieval_keywords(self):
         self.assertIn("read file", ReadFileTool().spec.keywords)
         self.assertIn("search in file", SearchInFileTool().spec.keywords)
@@ -2830,7 +2938,9 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
                 handle.write("print('old')\n")
 
             tool = ApplyPatchTool(main_window=object(), tool_executor=object())
-            with patch("plugins.ai_assistant.tools.patch_tool._preview_script_patch") as mock_preview:
+            with patch.object(PathResolver, "get_ai_workspace_scope", return_value="project"), patch(
+                "plugins.ai_assistant.tools.patch_tool._preview_script_patch"
+            ) as mock_preview:
                 mock_preview.return_value = {
                     "ok": True,
                     "previewed": True,
@@ -2855,10 +2965,11 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
                 handle.write("print('old')\n")
 
             tool = ApplyPatchTool()
-            result = tool.execute(
-                filepath=filepath,
-                hunks=[{"old_string": "old", "new_string": "new"}],
-            )
+            with patch.object(PathResolver, "get_ai_workspace_scope", return_value="project"):
+                result = tool.execute(
+                    filepath=filepath,
+                    hunks=[{"old_string": "old", "new_string": "new"}],
+                )
 
             self.assertTrue(result.get("ok"), result)
             self.assertEqual(result.get("applied_hunks"), 1)
@@ -2923,7 +3034,9 @@ class ScriptPreviewBehaviorTests(unittest.TestCase):
                 handle.write("print('old')\n")
 
             tool = InsertIntoFileTool(main_window=object(), tool_executor=object())
-            with patch("plugins.ai_assistant.tools.edit_file_tool.draft_change_in_open_editor") as mock_preview, patch(
+            with patch.object(PathResolver, "get_ai_workspace_scope", return_value="project"), patch(
+                "plugins.ai_assistant.tools.edit_file_tool.draft_change_in_open_editor"
+            ) as mock_preview, patch(
                 "plugins.ai_assistant.tools.edit_file_tool._attach_script_state",
                 side_effect=lambda result, *_args, **_kwargs: result,
             ):

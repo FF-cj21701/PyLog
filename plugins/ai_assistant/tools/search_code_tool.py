@@ -390,6 +390,13 @@ class FindFilesTool(BaseTool):
             "required_args": ["pattern"],
             "capability_tags": ["search", "path_discovery"],
             "domain_tags": ["code", "script"],
+            "search_weight": 5,
+            "preferred_for": [
+                "find files",
+                "search files",
+                "locate file",
+                "filepath lookup",
+            ],
             "keywords": [
                 "find file",
                 "find files",

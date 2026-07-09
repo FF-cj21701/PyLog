@@ -75,6 +75,74 @@ class PathResolver:
         return PathResolver.get_ai_workspace_scope() == "scripts_user"
 
     @staticmethod
+    def resolve_workspace_write_path(filepath, allow_bare_scripts_user=True):
+        """Resolve write targets according to the configured AI workspace scope."""
+        raw = str(filepath or "").strip()
+        if not raw:
+            return {
+                "ok": False,
+                "blocked": True,
+                "error": "filepath is required",
+                "workspace_scope": PathResolver.get_ai_workspace_scope(),
+            }
+
+        root = os.path.abspath(PathResolver.get_project_root())
+        scope = PathResolver.get_ai_workspace_scope()
+        if scope != "scripts_user":
+            resolved = raw if os.path.isabs(raw) else os.path.join(root, raw)
+            return {
+                "ok": True,
+                "filepath": os.path.abspath(resolved),
+                "workspace_scope": "project",
+            }
+
+        scripts_dir = os.path.abspath(PathResolver.get_scripts_user_dir(root))
+        normalized_raw = raw.replace("\\", os.sep).replace("/", os.sep)
+        if os.path.isabs(normalized_raw):
+            resolved = os.path.abspath(normalized_raw)
+            normalized_rel = ""
+        else:
+            normalized_rel = os.path.normpath(normalized_raw)
+            if normalized_rel in {"", "."} or normalized_rel.startswith(".." + os.sep) or normalized_rel == "..":
+                return PathResolver._workspace_write_blocked(raw, scripts_dir)
+
+            parts = normalized_rel.split(os.sep)
+            if parts and parts[0].lower() == "scripts_user":
+                resolved = os.path.abspath(os.path.join(root, normalized_rel))
+            elif allow_bare_scripts_user and len(parts) == 1:
+                resolved = os.path.abspath(os.path.join(scripts_dir, parts[0]))
+            else:
+                return PathResolver._workspace_write_blocked(raw, scripts_dir)
+
+        try:
+            if os.path.commonpath([resolved, scripts_dir]) != scripts_dir:
+                return PathResolver._workspace_write_blocked(raw, scripts_dir)
+        except (ValueError, Exception):
+            return PathResolver._workspace_write_blocked(raw, scripts_dir)
+
+        return {
+            "ok": True,
+            "filepath": resolved,
+            "workspace_scope": "scripts_user",
+            "normalized_from": raw if resolved != os.path.abspath(raw) else "",
+        }
+
+    @staticmethod
+    def _workspace_write_blocked(filepath, scripts_dir):
+        return {
+            "ok": False,
+            "blocked": True,
+            "workspace_scope": "scripts_user",
+            "filepath": str(filepath or ""),
+            "allowed_root": scripts_dir,
+            "summary": "scripts_user workspace only allows writes inside scripts_user.",
+            "error": (
+                "scripts_user workspace only allows write targets inside scripts_user. "
+                "Use a scripts_user/<name> path, or a bare filename for a new user script."
+            ),
+        }
+
+    @staticmethod
     def clear_cache():
         """Force a re-discovery on next call."""
         PathResolver._cached_root = None

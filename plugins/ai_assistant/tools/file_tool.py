@@ -345,6 +345,7 @@ class OpenScriptFileTool(BaseTool):
             "path_argument_names": ["filepath"],
             "capability_tags": ["editor", "script_session"],
             "domain_tags": ["script"],
+            "search_weight": -1,
             "keywords": [
                 "open script",
                 "open python file",
@@ -397,6 +398,7 @@ class OpenHtmlPreviewTool(BaseTool):
                 "path_argument_names": ["filepath"],
                 "capability_tags": ["ui", "html_preview", "workspace"],
                 "domain_tags": ["agent", "script"],
+                "search_weight": -1,
                 "keywords": [
                     "html",
                     "htm",
@@ -455,6 +457,15 @@ class OpenDocumentTool(BaseTool):
                 "path_argument_names": ["filepath"],
                 "capability_tags": ["workspace", "document_open", "routing"],
                 "domain_tags": ["agent", "script"],
+                "search_weight": 8,
+                "preferred_for": [
+                    "open file",
+                    "open document",
+                    "open workspace file",
+                    "open html",
+                    "open script",
+                    "preview document",
+                ],
                 "keywords": [
                     "open document",
                     "open file",
@@ -540,9 +551,14 @@ class WriteScriptFileTool(BaseTool):
         try:
             filepath = filepath.strip()
             
-            # Resolve relative paths against project root
-            if not os.path.isabs(filepath):
-                filepath = os.path.join(PathResolver.get_project_root(), filepath)
+            if PathResolver and hasattr(PathResolver, "resolve_workspace_write_path"):
+                resolved = PathResolver.resolve_workspace_write_path(filepath)
+                if not resolved.get("ok"):
+                    return resolved
+                filepath = resolved.get("filepath")
+            elif not os.path.isabs(filepath):
+                root = PathResolver.get_project_root() if PathResolver else os.getcwd()
+                filepath = os.path.join(root, filepath)
             
             # 确保目录存在
             os.makedirs(os.path.dirname(filepath), exist_ok=True)

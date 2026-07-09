@@ -56,6 +56,22 @@ def _get_filepath(args: Optional[Dict[str, Any]], tool=None) -> Optional[str]:
     return None
 
 
+def _get_result_filepath(result: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(result, dict):
+        return None
+    for key in ("filepath", "file_path", "script_path", "path"):
+        value = result.get(key)
+        if value:
+            return value
+    script_state = result.get("script_state")
+    if isinstance(script_state, dict):
+        for key in ("script_path", "filepath", "file_path", "path"):
+            value = script_state.get(key)
+            if value:
+                return value
+    return None
+
+
 def _normalize_tracked_path(filepath: Optional[str]) -> Optional[str]:
     if not filepath:
         return None
@@ -198,7 +214,7 @@ class ExecutionPolicy:
             state.mark_file_read(filepath)
 
         if is_write_tool(tool_name, tool=tool):
-            filepath = _normalize_tracked_path(_get_filepath(args, tool=tool))
+            filepath = _normalize_tracked_path(_get_result_filepath(result_obj) or _get_filepath(args, tool=tool))
             if tool_result_ok(result):
                 summary = tool_result_summary(result)
                 state.mark_file_modified(

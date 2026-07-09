@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -92,6 +95,18 @@ class ContextManagerTests(unittest.TestCase):
         ])
 
         self.assertEqual(context, "[ALIVE Context]\nWell: Well-A (db=demo.db)")
+
+    def test_file_context_mentions_are_structured_context_not_user_text(self):
+        manager = ContextManager()
+
+        prompt = manager.compose_prompt(
+            "modify to output hello",
+            [{"type": "file", "name": "demo.py", "path": "scripts_user/demo.py"}],
+        )
+
+        self.assertIn("[ALIVE Context]\nFile: scripts_user/demo.py; name=demo.py", prompt)
+        self.assertIn("[User Message]\nmodify to output hello", prompt)
+        self.assertNotIn("@[file:", prompt)
 
     def test_curve_context_resolves_well_name_from_database(self):
         import sqlite3
@@ -244,6 +259,38 @@ class ContextManagerTests(unittest.TestCase):
         self.assertIn("- enabled_count: 2", prompt)
         self.assertIn("- pylog-scripting; title: PyLog Scripting; aliases: PyLog Scripting; description: Write scripts using pylog_api.", prompt)
         self.assertIn("- petropy; title: Petrophysics; description: Calculate Vsh, porosity, and saturation.", prompt)
+
+    def test_chat_service_keeps_system_prompt_cache_during_chat_turn(self):
+        class DummyConfig:
+            def get_mcp_enabled(self):
+                return False
+
+        service = ChatService.__new__(ChatService)
+        service.tools = []
+        service.config = DummyConfig()
+
+        started = {}
+
+        def start_worker(prompt, history, **kwargs):
+            started["prompt"] = prompt
+            started["history"] = history
+            started.update(kwargs)
+
+        service._start_worker = start_worker
+
+        with patch(
+            "plugins.ai_assistant.services.chat_service.SystemPrompts.clear_cache"
+        ) as mock_clear, patch(
+            "plugins.ai_assistant.services.chat_service.SystemPrompts.get_prompt",
+            return_value="cached prompt",
+        ) as mock_get_prompt:
+            asyncio.run(service._start_chat_async("hello", [{"role": "user", "content": "hi"}], "chat"))
+
+        mock_clear.assert_not_called()
+        mock_get_prompt.assert_called_once()
+        self.assertEqual(started["system_prompt"], "cached prompt")
+        self.assertEqual(started["mode"], "chat")
+        self.assertEqual(started["all_tools"], [])
 
     def test_agent_state_conversation_summary_merges_and_survives_task_reset(self):
         state = AgentState()
@@ -1263,6 +1310,81 @@ class ToolManagerBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(names[0], "open_html_preview")
 
+    def test_tool_spec_index_entry_omits_parameter_schema(self):
+        spec = DummyTool(
+            name="run_script",
+            domain_tags=["script"],
+            capability_tags=["script_run"],
+            keywords=["run script"],
+            side_effect_level="execution",
+        ).spec
+
+        entry = spec.to_index_entry()
+
+        self.assertEqual(entry["name"], "run_script")
+        self.assertEqual(entry["category"], "script")
+        self.assertEqual(entry["domain_tags"], ["script"])
+        self.assertEqual(entry["capability_tags"], ["script_run"])
+        self.assertEqual(entry["keywords"], ["run script"])
+        self.assertEqual(entry["side_effect_level"], "execution")
+        self.assertNotIn("parameters", entry)
+        self.assertNotIn("args_schema", entry)
+
+    def test_manager_search_specs_uses_keywords_domain_and_capability(self):
+        manager = ToolManager(
+            [
+                DummyTool(name="run_script", domain_tags=["script"], capability_tags=["script_run"], keywords=["run script"]),
+                DummyTool(name="plot", domain_tags=["geoscience"], capability_tags=["plotting"], keywords=["plot curve"]),
+                DummyTool(name="read_file", domain_tags=["code"], capability_tags=["file_read"], keywords=["inspect file"]),
+            ]
+        )
+
+        script_results = manager.search_specs("run python script", limit=2)
+        plot_results = manager.search_specs("curve", domain="geoscience", capability="plotting", limit=5)
+
+        self.assertEqual(script_results[0]["name"], "run_script")
+        self.assertEqual([item["name"] for item in plot_results], ["plot"])
+
+    def test_manager_search_specs_respects_preferred_tools_and_weights(self):
+        class WeightedTool(DummyTool):
+            def __init__(self, *, preferred_for=None, search_weight=0, **kwargs):
+                super().__init__(**kwargs)
+                self._preferred_for = list(preferred_for or [])
+                self._search_weight = search_weight
+
+            @property
+            def spec(self):
+                spec = super().spec
+                spec.metadata["preferred_for"] = self._preferred_for
+                spec.metadata["search_weight"] = self._search_weight
+                return spec
+
+        manager = ToolManager(
+            [
+                WeightedTool(name="open_script_file", domain_tags=["script"], keywords=["open script file"], search_weight=-1),
+                WeightedTool(
+                    name="open_document",
+                    domain_tags=["agent", "script"],
+                    capability_tags=["document_open", "routing"],
+                    keywords=["open document", "open file", "script"],
+                    preferred_for=["open file", "open document", "open script"],
+                    search_weight=8,
+                ),
+                WeightedTool(name="run_shell_command", capability_tags=["shell"], keywords=["run command pytest"], search_weight=-8, side_effect_level="external"),
+                WeightedTool(name="run_test_command", capability_tags=["verification", "tests"], keywords=["run tests pytest"], preferred_for=["run tests", "pytest"], search_weight=6),
+            ]
+        )
+
+        open_results = manager.search_specs("open script file", limit=3)
+        test_results = manager.search_specs("run pytest tests", limit=3)
+
+        self.assertEqual(open_results[0]["name"], "open_document")
+        self.assertEqual(test_results[0]["name"], "run_test_command")
+        self.assertLess(
+            next(item["score"] for item in test_results if item["name"] == "run_shell_command"),
+            test_results[0]["score"],
+        )
+
     def test_manager_exposes_lightweight_inventory(self):
         manager = ToolManager(
             [
@@ -1339,6 +1461,98 @@ class ToolManagerBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["summary"]["domain_tags"], ["geoscience"])
         self.assertEqual(payload["summary"]["keywords"], ["curve lookup"])
         self.assertEqual([tool["name"] for tool in payload["tools"]], ["list_curves", "mcp_lookup"])
+
+    async def test_worker_initial_tool_configs_only_include_base_active_tools(self):
+        worker = AsyncAIWorker(
+            "key",
+            "http://localhost/v1",
+            "model",
+            "hello",
+            tools=[
+                DummyTool(name="finish", capability_tags=["finish"]),
+                DummyTool(name="get_help", capability_tags=["inspection"]),
+                DummyTool(name="run_script", domain_tags=["script"], keywords=["run script"]),
+                DummyTool(name="plot", domain_tags=["geoscience"], keywords=["plot curve"]),
+            ],
+        )
+
+        configs = worker._build_tool_configs()
+        names = {item["function"]["name"] for item in configs}
+
+        self.assertIn("finish", names)
+        self.assertIn("get_help", names)
+        self.assertIn("search_tools", names)
+        self.assertIn("load_tools", names)
+        self.assertNotIn("run_script", names)
+        self.assertNotIn("plot", names)
+
+    async def test_worker_search_and_load_tools_adds_active_schemas(self):
+        worker = AsyncAIWorker(
+            "key",
+            "http://localhost/v1",
+            "model",
+            "run a python script",
+            tools=[
+                DummyTool(name="finish", capability_tags=["finish"]),
+                DummyTool(name="get_help", capability_tags=["inspection"]),
+                DummyTool(name="run_script", domain_tags=["script"], capability_tags=["script_run"], keywords=["run script"]),
+                DummyTool(name="get_script_state", domain_tags=["script"], capability_tags=["script_state"], keywords=["script state"]),
+            ],
+        )
+
+        search_tool = worker.tool_manager.find_tool("search_tools")
+        load_tool = worker.tool_manager.find_tool("load_tools")
+        search_result = search_tool.execute(query="run script", limit=3)
+        load_result = load_tool.execute(names=["run_script", "get_script_state"])
+        names = {item["function"]["name"] for item in worker._build_tool_configs()}
+
+        self.assertTrue(search_result["ok"])
+        self.assertEqual(search_result["tools"][0]["name"], "run_script")
+        self.assertTrue(load_result["ok"])
+        self.assertIn("run_script", names)
+        self.assertIn("get_script_state", names)
+
+    async def test_worker_blocks_unloaded_direct_tool_call(self):
+        worker = AsyncAIWorker(
+            "key",
+            "http://localhost/v1",
+            "model",
+            "run a python script",
+            tools=[
+                DummyTool(name="finish", capability_tags=["finish"]),
+                DummyTool(name="run_script", domain_tags=["script"], keywords=["run script"]),
+            ],
+        )
+        tool_call = SimpleNamespace(
+            function=SimpleNamespace(name="run_script", arguments=json.dumps({})),
+        )
+
+        result = json.loads(await worker._execute_tool(tool_call))
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["metadata"]["tool_not_loaded"])
+        self.assertIn("search_tools", result["error"])
+        self.assertIn("load_tools", result["error"])
+
+    async def test_worker_tool_schema_budget_drops_until_tools_are_loaded(self):
+        tools = [
+            DummyTool(name="finish", capability_tags=["finish"]),
+            DummyTool(name="get_help", capability_tags=["inspection"]),
+            DummyTool(name="run_script", domain_tags=["script"], keywords=["run script"]),
+            DummyTool(name="get_script_state", domain_tags=["script"], keywords=["script state"]),
+            DummyTool(name="plot", domain_tags=["geoscience"], keywords=["plot curve"]),
+            DummyTool(name="edit_file", domain_tags=["code"], keywords=["edit file"]),
+        ]
+        worker = AsyncAIWorker("key", "http://localhost/v1", "model", "hello", tools=tools)
+
+        full_schema_chars = len(json.dumps(ToolManager(worker.tools).build_tool_configs(prompt="hello")))
+        initial_schema_chars = len(json.dumps(worker._build_tool_configs()))
+        worker._load_tools(["run_script", "get_script_state", "plot"])
+        loaded_schema_chars = len(json.dumps(worker._build_tool_configs()))
+
+        self.assertLess(initial_schema_chars, full_schema_chars)
+        self.assertLess(loaded_schema_chars, full_schema_chars)
+        self.assertGreater(loaded_schema_chars, initial_schema_chars)
 
 
 class TaskStateMachineTests(unittest.TestCase):
@@ -1689,6 +1903,28 @@ class FinishAndVerificationPolicyTests(unittest.TestCase):
         self.assertIsNotNone(request)
         self.assertEqual(request["tool_name"], "verify_target")
         self.assertEqual(request["args"]["filepath"], "scripts_user/ai_example.py")
+
+    def test_write_result_path_drives_auto_verification_target(self):
+        tool = DummyTool(name="write_script_file", side_effect_level="script_write")
+        tool.metadata["creates_file"] = True
+        resolved_path = os.path.join(PROJECT_ROOT, "scripts_user", "ai_hello.py")
+
+        self.policy.after_tool_call(
+            self.state,
+            tool.name,
+            {"filepath": "ai_hello.py"},
+            {"ok": True, "filepath": resolved_path, "message": "created"},
+            tool=tool,
+        )
+        request = self.policy.get_auto_verification_request(self.state)
+
+        self.assertIsNotNone(request)
+        self.assertEqual(request["tool_name"], "verify_target")
+        self.assertIn("/scripts_user/ai_hello.py", request["args"]["filepath"].replace("\\", "/"))
+        self.assertNotEqual(
+            os.path.normcase(os.path.normpath(os.path.abspath("ai_hello.py"))),
+            next(iter(self.state.files_modified)),
+        )
 
     def test_verification_strategy_describes_single_script_target(self):
         self.state.mark_file_modified("scripts_user/ai_example.py")
@@ -2373,6 +2609,65 @@ class MessageCardActionRoutingTests(unittest.TestCase):
             chat_service.started,
             ("hello", [{"type": "well", "name": "Well-A", "db_path": "demo.db"}], [], "chat"),
         )
+
+    def test_send_message_merges_inline_context_payload_without_polluting_user_text(self):
+        widget = AIAssistantWidget.__new__(AIAssistantWidget)
+        widget._is_sending = False
+        widget.mode = "chat"
+        widget.chat_contexts = []
+        widget.selection_context = []
+        widget._stream_flush_timer = type("DummyTimer", (), {"stop": lambda self: None})()
+
+        class DummyChatView:
+            def set_sending_state(self, value):
+                pass
+
+            def set_effective_context_info(self, summary):
+                self.effective_summary = summary
+
+            def append_message(self, *args, **kwargs):
+                pass
+
+            def set_input_enabled(self, value):
+                pass
+
+            def clear_current_message_state(self):
+                pass
+
+            def clear_task_progress(self):
+                pass
+
+        class DummyMemory:
+            def add_user_message(self, message):
+                self.message = message
+
+            def get_recent_history(self):
+                return []
+
+        class DummyChatService:
+            def build_effective_context_summary(self, context):
+                self.summary_context = context
+                return {"label": "File", "groups": []}
+
+            def start_chat(self, text, context, history, mode="chat"):
+                self.started = (text, context, history, mode)
+
+        chat_service = DummyChatService()
+        widget.chat_view = DummyChatView()
+        widget.chat_service = chat_service
+        widget.memory = DummyMemory()
+        widget.append_ai_message = lambda _text, callback=None: callback() if callback else None
+
+        widget.send_message(json.dumps({
+            "actual": "modify to output hello@[file:scripts_user/demo.py:demo.py]",
+            "display": "modify to output hello <span class=\"mention-pill\">demo.py</span>",
+            "rendered": True,
+            "contexts": [{"type": "file", "path": "scripts_user/demo.py", "name": "demo.py"}],
+        }))
+
+        self.assertEqual(chat_service.started[0], "modify to output hello")
+        self.assertEqual(chat_service.started[1], [{"type": "file", "path": "scripts_user/demo.py", "name": "demo.py"}])
+        self.assertNotIn("@[file:", widget.memory.message)
 
     def test_chat_finished_restores_send_button_after_message_finalize_callback(self):
         widget = AIAssistantWidget.__new__(AIAssistantWidget)

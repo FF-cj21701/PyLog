@@ -194,6 +194,46 @@ class ChatTemplateRegressionTests(unittest.TestCase):
         self.assertIn("Effective Prompt Context", self.input_js)
         self.assertIn("Failed to parse effective context payload.", self.input_js)
 
+    def test_chat_actual_text_sanitizes_leaked_mention_html(self):
+        from plugins.ai_assistant.ui.main_window import sanitize_chat_actual_text
+
+        leaked = (
+            '修改为输出hello<span class="mention-pill" data-type="file" '
+            'data-path="scripts_user/ai_well_curve_list.py" '
+            'data-name="ai_well_curve_list.py">'
+            '<svg class="tag-icon"></svg><span>ai_well_curve_list.py</span></span>'
+        )
+
+        cleaned = sanitize_chat_actual_text(leaked)
+        self.assertTrue(cleaned.endswith("hello"))
+        self.assertNotIn("@[file:", cleaned)
+        self.assertNotIn("mention-pill", cleaned)
+        self.assertNotIn("<span", cleaned)
+
+
+    def test_chat_actual_text_strips_inline_mention_markers(self):
+        from plugins.ai_assistant.ui.main_window import normalize_chat_actual_text
+
+        cleaned, contexts = normalize_chat_actual_text(
+            "modify to output hello@[file:scripts_user\\ai_well_curve_list.py:ai_well_curve_list.py]"
+        )
+
+        self.assertEqual(cleaned, "modify to output hello")
+        self.assertEqual(
+            contexts,
+            [{
+                "type": "file",
+                "name": "ai_well_curve_list.py",
+                "path": "scripts_user\\ai_well_curve_list.py",
+            }],
+        )
+
+    def test_inline_mentions_are_sent_as_contexts_not_user_text(self):
+        self.assertIn("contexts: contextsToInclude", self.input_js)
+        self.assertIn("const fullMsg = actualMsg;", self.input_js)
+        self.assertNotIn("actualMsg += `@[", self.input_js)
+        self.assertNotIn("Context information:\\n\\n", self.input_js)
+
 
 class ReviewTemplateRegressionTests(unittest.TestCase):
     @classmethod

@@ -17,6 +17,7 @@ from .tool_result import (
     tool_result_to_dict,
 )
 from .tool_selection import ToolSelectionStrategy
+from ..tools.tool_discovery_tool import LoadToolsTool, SearchToolsTool
 
 try:
     import openai
@@ -28,6 +29,16 @@ except ImportError:
 
 class AsyncAIWorker(QObject):
     """Async chat worker coordinating streaming, tools, planning, and verification."""
+
+    BASE_ACTIVE_TOOL_NAMES = {
+        "finish",
+        "get_help",
+        "search_tools",
+        "load_tools",
+        "create_task_plan",
+        "get_task_plan",
+        "update_task_plan",
+    }
 
     finished = Signal(str)
     reasoning_update = Signal(str)
@@ -75,6 +86,8 @@ class AsyncAIWorker(QObject):
         self.task_state_machine = task_state_machine
         self.verification_coordinator = verification_coordinator
         self.tool_manager = ToolManager(self.tools)
+        self.active_tool_names = set(self.BASE_ACTIVE_TOOL_NAMES)
+        self._install_runtime_discovery_tools()
         self.tool_dispatcher = self.tool_manager
         self.tool_selection = ToolSelectionStrategy()
         self.domain_router = TaskDomainRouter()
@@ -139,11 +152,64 @@ class AsyncAIWorker(QObject):
             router=self.domain_router,
             prompt=self.prompt,
             history=self.history,
+            active_tool_names=self.active_tool_names,
         )
 
     def get_tool_inventory_payload(self):
         """Expose the current worker tool inventory for diagnostics and UI consumers."""
         return self.tool_manager.get_inventory_payload()
+
+    def _install_runtime_discovery_tools(self):
+        self.tool_manager.register_tool(SearchToolsTool(self._search_tools), replace_existing=True)
+        self.tool_manager.register_tool(LoadToolsTool(self._load_tools), replace_existing=True)
+        self.tools = self.tool_manager.tools
+
+    def _search_tools(self, query="", domain=None, capability=None, limit=5):
+        return self.tool_manager.search_specs(
+            query=query,
+            domain=domain,
+            capability=capability,
+            limit=limit,
+        )
+
+    def _load_tools(self, names):
+        requested = [str(name).strip() for name in (names or []) if str(name).strip()]
+        loaded = []
+        missing = []
+        already_loaded = []
+        for name in requested:
+            spec = self.tool_manager.get_spec(name)
+            if spec is None:
+                missing.append(name)
+                continue
+            if name in self.active_tool_names:
+                already_loaded.append(name)
+            else:
+                self.active_tool_names.add(name)
+            loaded.append(spec.to_index_entry())
+
+        return {
+            "ok": not missing,
+            "loaded": loaded,
+            "missing": missing,
+            "already_loaded": already_loaded,
+            "active_tool_names": sorted(self.active_tool_names),
+        }
+
+    def _is_tool_active(self, tool_name: str) -> bool:
+        return str(tool_name or "") in self.active_tool_names
+
+    def _inactive_tool_result(self, tool_name: str):
+        return error_tool_result(
+            tool_name,
+            (
+                f"Tool '{tool_name}' is not loaded in the current session. "
+                "Call search_tools to find relevant tools, then load_tools with the selected tool names."
+            ),
+            source="local",
+            tool_not_loaded=True,
+            active_tool_names=sorted(self.active_tool_names),
+        )
 
     def _maybe_append_tool_selection_guidance(self, messages):
         """Append dynamic system guidance about tool choice when available."""
@@ -488,6 +554,16 @@ class AsyncAIWorker(QObject):
             args = json.loads(arguments) if arguments else {}
         except Exception as e:
             return serialize_tool_result(error_tool_result(tool_name, f"Error parsing tool arguments: {str(e)}"))
+
+        if not self._is_tool_active(tool_name):
+            result = self._inactive_tool_result(tool_name)
+            if self.agent_state:
+                self.agent_state.record_error(result.error)
+                self.agent_state.record_tool_result(tool_name, "failed", error=result.error)
+            if self.task_state_machine:
+                self.task_state_machine.on_tool_error(tool_name, result.error, tool=self._find_tool(tool_name))
+            self.tool_call_finished.emit(tool_name, "error", serialize_tool_result(result))
+            return serialize_tool_result(result)
 
         if self.execution_policy:
             tool = self._find_tool(tool_name)

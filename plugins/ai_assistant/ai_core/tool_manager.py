@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Iterable, Optional
 
 from .tool_dispatcher import ToolDispatcher
@@ -86,9 +87,13 @@ class ToolManager:
         router=None,
         prompt: str = "",
         history=None,
+        active_tool_names: Optional[Iterable[str]] = None,
     ):
         """Return model-ready tool configs after selection and optional domain routing."""
         ranked_specs = self.list_ranked_specs(state=state, strategy=strategy, prompt=prompt, history=history)
+        active = None
+        if active_tool_names is not None:
+            active = {str(name) for name in active_tool_names if str(name).strip()}
         routed_specs = ranked_specs
         if router is not None:
             routed_specs = router.route_specs(
@@ -97,30 +102,55 @@ class ToolManager:
                 history=history or [],
                 state=state,
             )
+        if active is not None:
+            routed_names = {spec.name for spec in routed_specs}
+            routed_specs = list(routed_specs)
+            routed_specs.extend(spec for spec in ranked_specs if spec.name in active and spec.name not in routed_names)
+            routed_specs = [spec for spec in routed_specs if spec.name in active]
         return [spec.to_openai_tool() for spec in routed_specs]
+
+    def search_specs(self, query: str = "", domain: Optional[str] = None, capability: Optional[str] = None, limit: int = 5):
+        """Search tool specs and return compact index entries ordered by relevance."""
+        query_terms = self._tokenize(query)
+        domain_filter = str(domain or "").strip().lower()
+        capability_filter = str(capability or "").strip().lower()
+        try:
+            safe_limit = max(1, min(int(limit or 5), 20))
+        except Exception:
+            safe_limit = 5
+
+        scored = []
+        for spec in self.list_specs():
+            if domain_filter and domain_filter not in {str(tag).lower() for tag in spec.domain_tags}:
+                continue
+            if capability_filter and capability_filter not in {str(tag).lower() for tag in spec.capability_tags}:
+                continue
+            score = self._score_spec(spec, query_terms)
+            if query_terms and score <= 0:
+                continue
+            entry = spec.to_index_entry()
+            entry["score"] = score
+            scored.append((score, spec.name, entry))
+
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        return [entry for _score, _name, entry in scored[:safe_limit]]
 
     def describe_inventory(self):
         """Return lightweight metadata for UI/debugging without exposing tool objects."""
         inventory = []
         for spec in self.list_specs():
-            inventory.append(
+            entry = spec.to_index_entry()
+            entry.update(
                 {
-                    "name": spec.name,
-                    "display_name": spec.display_name or spec.name,
-                    "source": spec.source,
-                    "server_name": spec.server_name,
-                    "side_effect_level": spec.side_effect_level,
                     "risk_level": spec.risk_level,
                     "output_type": spec.output_type,
                     "requires_verification": spec.requires_verification,
                     "requires_read_before_write": spec.requires_read_before_write,
                     "is_verification_tool": spec.is_verification_tool,
                     "lifecycle_role": spec.lifecycle_role,
-                    "capability_tags": list(spec.capability_tags),
-                    "domain_tags": list(spec.domain_tags),
-                    "keywords": list(getattr(spec, "keywords", []) or []),
                 }
             )
+            inventory.append(entry)
         return inventory
 
     def summarize_inventory(self):
@@ -171,3 +201,62 @@ class ToolManager:
     def _increment(counter: Dict[str, int], key: Optional[str]) -> None:
         safe_key = str(key or "unknown")
         counter[safe_key] = counter.get(safe_key, 0) + 1
+
+    @staticmethod
+    def _tokenize(text: str):
+        return [token for token in re.split(r"[^a-zA-Z0-9_]+", str(text or "").lower()) if token]
+
+    @classmethod
+    def _score_spec(cls, spec, query_terms) -> int:
+        if not query_terms:
+            return 1
+
+        name = str(spec.name or "").lower()
+        display_name = str(spec.display_name or "").lower()
+        description = str(spec.description or "").lower()
+        keywords = [str(item).lower() for item in (getattr(spec, "keywords", []) or [])]
+        capability_tags = [str(item).lower() for item in (getattr(spec, "capability_tags", []) or [])]
+        domain_tags = [str(item).lower() for item in (getattr(spec, "domain_tags", []) or [])]
+        preferred_for = [str(item).lower() for item in (spec.metadata.get("preferred_for") or [])]
+        searchable = " ".join(
+            [
+                name,
+                display_name,
+                description,
+                " ".join(keywords),
+                " ".join(capability_tags),
+                " ".join(domain_tags),
+                " ".join(preferred_for),
+            ]
+        )
+
+        score = cls._safe_int(spec.metadata.get("search_weight"), default=0)
+        for term in query_terms:
+            if term == name:
+                score += 20
+            if term in name:
+                score += 12
+            if display_name and term in display_name:
+                score += 8
+            if any(term in keyword for keyword in keywords):
+                score += 8
+            if any(term == tag or term in tag for tag in capability_tags):
+                score += 6
+            if any(term == tag or term in tag for tag in domain_tags):
+                score += 5
+            if any(term in phrase for phrase in preferred_for):
+                score += 10
+            if term in description:
+                score += 2
+            if term in searchable:
+                score += 1
+        if spec.risk_level == "high" and spec.side_effect_level in {"external", "execution"}:
+            score -= 4
+        return score
+
+    @staticmethod
+    def _safe_int(value, default: int = 0) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return default

@@ -17,6 +17,7 @@ from plugins.ai_assistant.ai_core.agent_state import AgentState
 from plugins.ai_assistant.ai_core.api_client import AsyncAIWorker
 from plugins.ai_assistant.ai_core.context_manager import ContextManager
 from plugins.ai_assistant.ai_core.policy import ExecutionPolicy
+from plugins.ai_assistant.ai_core.prompts import SystemPrompts
 from plugins.ai_assistant.ai_core.state_machine import TaskStateMachine
 from plugins.ai_assistant.ai_core.task_plan import TaskPlanner
 from plugins.ai_assistant.ai_core.tool_dispatcher import ToolDispatcher
@@ -81,6 +82,18 @@ class DummyTool:
 
 
 class ContextManagerTests(unittest.TestCase):
+    def test_default_system_prompt_stays_compact_and_keeps_core_rules(self):
+        SystemPrompts.clear_cache()
+        prompt = SystemPrompts.get_prompt()
+
+        self.assertLess(len(prompt), 4000)
+        self.assertIn("Read before write", prompt)
+        self.assertIn("search_tools", prompt)
+        self.assertIn("load_tools", prompt)
+        self.assertIn("finish", prompt)
+        self.assertIn("AI WORKSPACE SCOPE", prompt)
+        self.assertIn("pylog_api", prompt)
+
     def test_empty_context_returns_user_message_unchanged(self):
         manager = ContextManager()
 
@@ -1672,6 +1685,105 @@ class ToolManagerBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(read_entry["already_loaded"])
         self.assertTrue(read_entry["can_call_now"])
+
+    async def test_tool_selection_guidance_is_not_appended_twice(self):
+        worker = AsyncAIWorker("key", "http://localhost/v1", "model", "hello", tools=[])
+        guidance = "Use script tools directly."
+        worker.tool_selection.build_guidance = lambda _state: guidance
+        worker.domain_router.build_guidance = lambda **_kwargs: ""
+        messages = [
+            {"role": "system", "content": "base"},
+            {"role": "system", "content": guidance},
+            {"role": "tool", "content": "{}"},
+        ]
+
+        worker._maybe_append_tool_selection_guidance(messages)
+
+        self.assertEqual(messages[-1], {"role": "tool", "content": "{}"})
+        self.assertEqual(
+            len([msg for msg in messages if msg.get("role") == "system" and msg.get("content") == guidance]),
+            1,
+        )
+
+    async def test_worker_prints_prompt_debug_breakdown(self):
+        worker = AsyncAIWorker("key", "http://localhost/v1", "model", "hello", tools=[])
+        messages = [
+            {"role": "system", "content": "base"},
+            {"role": "user", "content": "change script"},
+            {
+                "role": "assistant",
+                "content": "I will read it.",
+                "tool_calls": [{"id": "call_1", "function": {"name": "read_file", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "{\"ok\": true}"},
+        ]
+        tool_configs = [{"type": "function", "function": {"name": "read_file", "parameters": {}}}]
+
+        with patch("builtins.print") as mock_print:
+            worker._print_prompt_debug(messages, tool_configs, iteration=2)
+
+        line = " ".join(str(part) for part in mock_print.call_args.args)
+        self.assertIn("[Prompt Debug] round=2", line)
+        self.assertIn("messages=4", line)
+        self.assertIn("system=1/", line)
+        self.assertIn("user=1/", line)
+        self.assertIn("assistant=1/", line)
+        self.assertIn("tool=1/", line)
+        self.assertIn("tool_schemas=1/", line)
+
+    async def test_worker_records_token_usage_debug_events(self):
+        worker = AsyncAIWorker("key", "http://localhost/v1", "model", "hello", tools=[])
+
+        worker._record_token_usage({
+            "prompt_tokens": 100,
+            "completion_tokens": 25,
+            "total_tokens": 125,
+            "prompt_tokens_details": {"cached_tokens": 80},
+            "completion_tokens_details": {"reasoning_tokens": 5},
+        }, "react_round_1")
+
+        self.assertEqual(worker.token_usage_events, [{
+            "source": "react_round_1",
+            "prompt_tokens": 100,
+            "completion_tokens": 25,
+            "total_tokens": 125,
+            "cached_tokens": 80,
+            "reasoning_tokens": 5,
+        }])
+
+    async def test_worker_extracts_usage_from_openai_like_object(self):
+        class UsageObject:
+            def model_dump(self):
+                return {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
+
+        worker = AsyncAIWorker("key", "http://localhost/v1", "model", "hello", tools=[])
+        chunk = SimpleNamespace(usage=UsageObject())
+
+        self.assertEqual(
+            worker._extract_usage(chunk),
+            {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+        )
+
+    async def test_stream_response_retries_when_provider_rejects_usage_stream_options(self):
+        class FakeCompletions:
+            def __init__(self):
+                self.calls = []
+
+            async def create(self, **params):
+                self.calls.append(dict(params))
+                if "stream_options" in params:
+                    raise Exception("stream_options is not supported")
+                return "stream"
+
+        completions = FakeCompletions()
+        worker = AsyncAIWorker("key", "http://localhost/v1", "model", "hello", tools=[])
+        worker._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+        result = await worker._stream_response([{"role": "user", "content": "hello"}], use_tools=False)
+
+        self.assertEqual(result, "stream")
+        self.assertIn("stream_options", completions.calls[0])
+        self.assertNotIn("stream_options", completions.calls[1])
 
     async def test_script_edit_profile_preloads_low_risk_script_tools_for_one_turn(self):
         service = ChatService.__new__(ChatService)

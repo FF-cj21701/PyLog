@@ -91,6 +91,7 @@ class AsyncAIWorker(QObject):
         self.active_tool_names = set(self.BASE_ACTIVE_TOOL_NAMES)
         self.active_tool_names.update(str(name) for name in (initial_active_tool_names or []) if str(name).strip())
         self.on_tools_loaded = on_tools_loaded
+        self.token_usage_events = []
         self._install_runtime_discovery_tools()
         self.tool_dispatcher = self.tool_manager
         self.tool_selection = ToolSelectionStrategy()
@@ -254,9 +255,60 @@ class AsyncAIWorker(QObject):
             guidance_messages.append(domain_guidance)
 
         for guidance in guidance_messages:
+            existing = sum(
+                1
+                for msg in messages
+                if msg.get("role") == "system" and msg.get("content") == guidance
+            )
+            if existing:
+                continue
             if messages and messages[-1].get("role") == "system" and messages[-1].get("content") == guidance:
                 continue
             messages.append({"role": "system", "content": guidance})
+
+    def _json_char_count(self, value):
+        try:
+            return len(json.dumps(value, ensure_ascii=False, default=str))
+        except Exception:
+            return len(str(value))
+
+    def _print_prompt_debug(self, messages, tool_configs, iteration=None):
+        role_counts = {}
+        role_chars = {}
+        tool_result_chars = 0
+        assistant_tool_call_chars = 0
+
+        for message in messages or []:
+            role = str(message.get("role") or "unknown")
+            chars = self._json_char_count(message)
+            role_counts[role] = role_counts.get(role, 0) + 1
+            role_chars[role] = role_chars.get(role, 0) + chars
+            if role == "tool":
+                tool_result_chars += chars
+            if role == "assistant" and message.get("tool_calls"):
+                assistant_tool_call_chars += self._json_char_count(message.get("tool_calls"))
+
+        system_chars = role_chars.get("system", 0)
+        user_chars = role_chars.get("user", 0)
+        assistant_chars = role_chars.get("assistant", 0)
+        tool_chars = role_chars.get("tool", 0)
+        message_chars = sum(role_chars.values())
+        tool_schema_chars = self._json_char_count(tool_configs or [])
+        active_tool_count = len(tool_configs or [])
+        round_label = f"round={iteration} " if iteration is not None else ""
+        print(
+            "[Prompt Debug] "
+            f"{round_label}"
+            f"messages={len(messages or [])} "
+            f"system={role_counts.get('system', 0)}/{system_chars} "
+            f"user={role_counts.get('user', 0)}/{user_chars} "
+            f"assistant={role_counts.get('assistant', 0)}/{assistant_chars} "
+            f"tool={role_counts.get('tool', 0)}/{tool_chars} "
+            f"tool_results={tool_result_chars} "
+            f"assistant_tool_calls={assistant_tool_call_chars} "
+            f"tool_schemas={active_tool_count}/{tool_schema_chars} "
+            f"total_chars={message_chars + tool_schema_chars}"
+        )
 
     def _process_stream_chunk(self, delta, accumulator):
         """Parse streamed content, separating reasoning, visible text, and hidden task plans."""
@@ -645,6 +697,7 @@ class AsyncAIWorker(QObject):
             "model": self.model,
             "messages": messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
 
         if use_tools and tool_configs:
@@ -653,9 +706,104 @@ class AsyncAIWorker(QObject):
         else:
             params["tool_choice"] = "none"
 
-        return await self._client.chat.completions.create(**params)
+        try:
+            return await self._client.chat.completions.create(**params)
+        except Exception as exc:
+            if "stream_options" not in str(exc):
+                raise
+            params.pop("stream_options", None)
+            print("[Token Usage] provider rejected stream_options.include_usage; retrying stream without usage.")
+            return await self._client.chat.completions.create(**params)
 
-    async def _handle_stream_with_tools(self, messages, tool_configs):
+    def _usage_to_dict(self, usage):
+        if usage is None:
+            return {}
+        if isinstance(usage, dict):
+            return usage
+        for method_name in ("model_dump", "dict"):
+            method = getattr(usage, method_name, None)
+            if callable(method):
+                try:
+                    return method()
+                except Exception:
+                    pass
+        result = {}
+        for key in (
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "prompt_tokens_details",
+            "completion_tokens_details",
+        ):
+            value = getattr(usage, key, None)
+            if value is not None:
+                result[key] = value
+        return result
+
+    def _extract_usage(self, response_or_chunk):
+        if response_or_chunk is None:
+            return {}
+        if isinstance(response_or_chunk, dict):
+            return self._usage_to_dict(response_or_chunk.get("usage"))
+        return self._usage_to_dict(getattr(response_or_chunk, "usage", None))
+
+    def _nested_usage_value(self, usage, parent_key, child_key):
+        details = usage.get(parent_key) if isinstance(usage, dict) else None
+        details = self._usage_to_dict(details)
+        value = details.get(child_key)
+        try:
+            return int(value or 0)
+        except Exception:
+            return 0
+
+    def _record_token_usage(self, usage, source):
+        usage = self._usage_to_dict(usage)
+        if not usage:
+            return
+
+        def as_int(key):
+            try:
+                return int(usage.get(key) or 0)
+            except Exception:
+                return 0
+
+        event = {
+            "source": source,
+            "prompt_tokens": as_int("prompt_tokens"),
+            "completion_tokens": as_int("completion_tokens"),
+            "total_tokens": as_int("total_tokens"),
+            "cached_tokens": self._nested_usage_value(usage, "prompt_tokens_details", "cached_tokens"),
+            "reasoning_tokens": self._nested_usage_value(usage, "completion_tokens_details", "reasoning_tokens"),
+        }
+        self.token_usage_events.append(event)
+        cached = f", cached={event['cached_tokens']}" if event["cached_tokens"] else ""
+        reasoning = f", reasoning={event['reasoning_tokens']}" if event["reasoning_tokens"] else ""
+        print(
+            "[Token Usage] "
+            f"{source}: input={event['prompt_tokens']}, "
+            f"output={event['completion_tokens']}, "
+            f"total={event['total_tokens']}"
+            f"{cached}{reasoning}"
+        )
+
+    def _print_token_usage_summary(self):
+        if not self.token_usage_events:
+            print("[Token Usage] No usage data returned by provider.")
+            return
+        prompt_tokens = sum(event.get("prompt_tokens", 0) for event in self.token_usage_events)
+        completion_tokens = sum(event.get("completion_tokens", 0) for event in self.token_usage_events)
+        total_tokens = sum(event.get("total_tokens", 0) for event in self.token_usage_events)
+        cached_tokens = sum(event.get("cached_tokens", 0) for event in self.token_usage_events)
+        reasoning_tokens = sum(event.get("reasoning_tokens", 0) for event in self.token_usage_events)
+        cached = f", cached={cached_tokens}" if cached_tokens else ""
+        reasoning = f", reasoning={reasoning_tokens}" if reasoning_tokens else ""
+        print(
+            "[Token Usage] total: "
+            f"input={prompt_tokens}, output={completion_tokens}, total={total_tokens}"
+            f"{cached}{reasoning}, rounds={len(self.token_usage_events)}"
+        )
+
+    async def _handle_stream_with_tools(self, messages, tool_configs, iteration=None):
         """Stream one assistant turn that may emit tool calls."""
         self._reset_stream_parse_state()
         accumulator = {"reasoning": "", "content": ""}
@@ -664,6 +812,11 @@ class AsyncAIWorker(QObject):
         response = await self._stream_response(messages, tool_configs, use_tools=True)
         try:
             async for chunk in response:
+                usage = self._extract_usage(chunk)
+                if usage:
+                    source = f"react_round_{iteration}" if iteration is not None else "react_round"
+                    self._record_token_usage(usage, source)
+
                 if self._is_stopped:
                     try:
                         await response.aclose()
@@ -711,6 +864,10 @@ class AsyncAIWorker(QObject):
         response = await self._stream_response(messages, use_tools=False)
         try:
             async for chunk in response:
+                usage = self._extract_usage(chunk)
+                if usage:
+                    self._record_token_usage(usage, "stream_no_tools")
+
                 if self._is_stopped:
                     try:
                         await response.aclose()
@@ -780,8 +937,13 @@ class AsyncAIWorker(QObject):
 
             tool_configs = self._build_tool_configs()
             self._maybe_append_tool_selection_guidance(messages)
+            self._print_prompt_debug(messages, tool_configs, iteration=iteration)
 
-            reasoning, content, tool_calls_dict = await self._handle_stream_with_tools(messages, tool_configs)
+            reasoning, content, tool_calls_dict = await self._handle_stream_with_tools(
+                messages,
+                tool_configs,
+                iteration=iteration,
+            )
             if reasoning is None:
                 return final_response
 
@@ -893,6 +1055,7 @@ class AsyncAIWorker(QObject):
                     messages=messages,
                     stream=False,
                 )
+                self._record_token_usage(self._extract_usage(response), "non_stream")
                 if response.choices:
                     if self.task_state_machine and self.agent_state and self.agent_state.can_finish():
                         self.task_state_machine.complete_task("non-stream response emitted")
@@ -907,6 +1070,7 @@ class AsyncAIWorker(QObject):
             self._emit_task_progress()
             self.error.emit(str(e))
         finally:
+            self._print_token_usage_summary()
             if self._client:
                 try:
                     await asyncio.shield(self._safe_aclose(self._client))

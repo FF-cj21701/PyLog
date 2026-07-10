@@ -153,12 +153,6 @@ class MenuManager:
         # Top-Level Actions
         menu.addAction(mw.new_plot_action)
 
-        fracture_menu = menu.addMenu("Fracture")
-        mw.fracture_pick_action = QAction("Fracture Picking Mode", mw)
-        mw.fracture_pick_action.setCheckable(True)
-        mw.fracture_pick_action.triggered.connect(mw.toggle_fracture_picking_mode)
-        fracture_menu.addAction(mw.fracture_pick_action)
-
-        mw.clear_fractures_action = QAction("Clear Fractures", mw)
-        mw.clear_fractures_action.triggered.connect(mw.handle_clear_fractures)
-        fracture_menu.addAction(mw.clear_fractures_action)
+        mw.fracture_action = QAction("Fracture", mw)
+        mw.fracture_action.triggered.connect(mw.open_fracture_picking_plot)
+        menu.addAction(mw.fracture_action)

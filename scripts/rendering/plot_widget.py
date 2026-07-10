@@ -312,6 +312,8 @@ class LogWidget(QWidget):
             self.quick_add.raise_()
 
         if hasattr(self, 'fracture_panel'):
+            if hasattr(self.fracture_panel, 'fit_to_parent'):
+                self.fracture_panel.fit_to_parent()
             self.fracture_panel.move(max(8, self.width() - self.fracture_panel.width() - 28), 8)
             if getattr(self, 'fracture_picking_enabled', False):
                 self.fracture_panel.show()
@@ -577,6 +579,22 @@ class LogWidget(QWidget):
     def undo_current_fracture_pick_point(self):
         if self.active_fracture_track and hasattr(self.active_fracture_track, "undo_fracture_pick_point"):
             self.active_fracture_track.undo_fracture_pick_point()
+
+    def delete_selected_fractures(self):
+        total = 0
+        for track in self.track_containers:
+            if hasattr(track, "delete_selected_fractures"):
+                total += track.delete_selected_fractures()
+        if total:
+            self._show_fracture_status(f"Deleted {total} selected fracture(s).")
+        else:
+            self._show_fracture_status("Select fracture lines before deleting.")
+        return total
+
+    def clear_fracture_selection(self):
+        for track in self.track_containers:
+            if hasattr(track, "clear_fracture_selection"):
+                track.clear_fracture_selection()
 
     def clear_fracture_annotations(self):
         for track in self.track_containers:

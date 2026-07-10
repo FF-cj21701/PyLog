@@ -177,11 +177,27 @@ class BaseTrackContainer(QFrame):
             add_empty_act.triggered.connect(lambda: lw.add_empty_track())
         menu.addAction(add_depth_act)
         menu.addAction(add_empty_act)
+
+        fracture_act = QAction("Fracture Picking", self)
+        fracture_act.triggered.connect(self.enter_fracture_picking_mode)
+        menu.addAction(fracture_act)
         
         settings_act = QAction("Properties...", self)
         settings_act.triggered.connect(self.open_settings)
         menu.addAction(settings_act)
         menu.exec(self.mapToGlobal(pos))
+
+    def enter_fracture_picking_mode(self):
+        lw = self.log_widget or self.find_log_widget()
+        if not lw or not hasattr(lw, "set_fracture_picking_enabled"):
+            return
+        if hasattr(self, "fracture_annotations") and hasattr(lw, "_image_tracks_for_fracture_display"):
+            tracks = lw._image_tracks_for_fracture_display()
+            if self in tracks:
+                lw.fracture_target_track = self
+        lw.set_fracture_picking_enabled(True)
+        if hasattr(lw, "refresh_fracture_target_tracks"):
+            lw.refresh_fracture_target_tracks()
     
     def paintEvent(self, event):
         opt = QStyleOption()
@@ -722,6 +738,7 @@ class ImageTrackContainer(BaseTrackContainer):
         super().__init__(parent, plot_widget_class=InteractivePlotWidget)
         self.fracture_annotations = []
         self._fracture_items = []
+        self._selected_fracture_indexes = set()
         self._fracture_pick_active = False
         self._fracture_pick_points = []
         self._fracture_preview_item = None
@@ -967,9 +984,44 @@ class ImageTrackContainer(BaseTrackContainer):
             except Exception:
                 pass
         self._fracture_items.clear()
+        self._selected_fracture_indexes.clear()
         self.fracture_annotations.clear()
         self.plot_widget.fracture_annotations = self.fracture_annotations
         self.plot_widget.update()
+
+    def clear_fracture_selection(self):
+        if not self._selected_fracture_indexes:
+            return
+        self._selected_fracture_indexes.clear()
+        self._refresh_fracture_item_styles()
+
+    def selected_fracture_count(self):
+        return len(self._selected_fracture_indexes)
+
+    def delete_selected_fractures(self):
+        selected = sorted(self._selected_fracture_indexes, reverse=True)
+        if not selected:
+            return 0
+        removed = 0
+        for index in selected:
+            if not (0 <= index < len(self.fracture_annotations)):
+                continue
+            item = self._fracture_items[index] if index < len(self._fracture_items) else None
+            if item is not None:
+                try:
+                    self.plot_widget.removeItem(item)
+                except Exception:
+                    pass
+            del self.fracture_annotations[index]
+            if index < len(self._fracture_items):
+                del self._fracture_items[index]
+            removed += 1
+        self._selected_fracture_indexes.clear()
+        self.plot_widget.fracture_annotations = self.fracture_annotations
+        self._refresh_fracture_names()
+        self._refresh_fracture_item_styles()
+        self.plot_widget.update()
+        return removed
 
     def add_fracture_annotation(self, annotation):
         if not isinstance(annotation, dict):
@@ -1001,6 +1053,20 @@ class ImageTrackContainer(BaseTrackContainer):
             return False
         if event.button() != Qt.LeftButton:
             return False
+        hit_index = self._fracture_index_at_event(event, plot_widget)
+        if hit_index is not None:
+            append = bool(event.modifiers() & Qt.ControlModifier)
+            if lw and not append and hasattr(lw, "clear_fracture_selection"):
+                lw.clear_fracture_selection()
+            self._toggle_fracture_selection(
+                hit_index,
+                append=append,
+            )
+            if lw and hasattr(lw, "set_active_fracture_track"):
+                lw.set_active_fracture_track(self)
+            return True
+        if lw and hasattr(lw, "clear_fracture_selection"):
+            lw.clear_fracture_selection()
         if not self._fracture_pick_active:
             self._fracture_pick_active = True
         if lw and hasattr(lw, "set_active_fracture_track"):
@@ -1027,10 +1093,16 @@ class ImageTrackContainer(BaseTrackContainer):
             return True
         if event.key() == Qt.Key_Escape:
             self.cancel_fracture_pick()
+            self.clear_fracture_selection()
             if lw and getattr(lw, "active_fracture_track", None) is self:
                 lw.active_fracture_track = None
             return True
         if event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
+            if self._selected_fracture_indexes:
+                removed = self.delete_selected_fractures()
+                if removed:
+                    self._show_fracture_status(f"Deleted {removed} selected fracture(s).")
+                return True
             self.undo_fracture_pick_point()
             return True
         return False
@@ -1047,15 +1119,74 @@ class ImageTrackContainer(BaseTrackContainer):
 
     def _add_fracture_item(self, annotation):
         x, y = sinusoidal_fracture_xy(annotation)
-        pen = pg.mkPen(
-            QColor(annotation.get("color", "#00E5FF")),
-            width=float(annotation.get("line_width", 2.0)),
-        )
+        pen = self._fracture_pen(annotation, selected=False)
         item = pg.PlotDataItem(x, y, pen=pen)
         item.setZValue(50)
         self.plot_widget.addItem(item)
         self._fracture_items.append(item)
         return item
+
+    def _fracture_pen(self, annotation, selected=False):
+        width = float(annotation.get("line_width", 2.0))
+        color = QColor(annotation.get("color", "#00E5FF"))
+        if selected:
+            return pg.mkPen(color, width=max(width + 2.0, 4.0), style=Qt.DashLine)
+        return pg.mkPen(color, width=width)
+
+    def _refresh_fracture_item_styles(self):
+        for index, item in enumerate(self._fracture_items):
+            if item is None or index >= len(self.fracture_annotations):
+                continue
+            try:
+                item.setPen(self._fracture_pen(
+                    self.fracture_annotations[index],
+                    selected=index in self._selected_fracture_indexes,
+                ))
+            except Exception:
+                pass
+
+    def _refresh_fracture_names(self):
+        for index, annotation in enumerate(self.fracture_annotations, start=1):
+            annotation["name"] = f"Fracture {index}"
+
+    def _toggle_fracture_selection(self, index, append=False):
+        if not (0 <= index < len(self.fracture_annotations)):
+            return
+        if append:
+            if index in self._selected_fracture_indexes:
+                self._selected_fracture_indexes.remove(index)
+            else:
+                self._selected_fracture_indexes.add(index)
+        else:
+            self._selected_fracture_indexes = {index}
+        self._fracture_pick_points = []
+        self._clear_fracture_preview()
+        self._refresh_fracture_item_styles()
+        count = len(self._selected_fracture_indexes)
+        self._show_fracture_status(f"Selected {count} fracture(s).")
+
+    def _fracture_index_at_event(self, event, plot_widget):
+        if not self.fracture_annotations:
+            return None
+        vb = plot_widget.getViewBox()
+        if not vb:
+            return None
+        scene_pos = plot_widget.mapToScene(event.position().toPoint())
+        threshold = 8.0
+        best_index = None
+        best_distance = threshold
+        for index, annotation in enumerate(self.fracture_annotations):
+            try:
+                x_values, y_values = sinusoidal_fracture_xy(annotation, samples=181)
+            except Exception:
+                continue
+            for x_val, y_val in zip(x_values, y_values):
+                point = vb.mapViewToScene(QPointF(float(x_val), float(y_val)))
+                distance = ((point.x() - scene_pos.x()) ** 2 + (point.y() - scene_pos.y()) ** 2) ** 0.5
+                if distance <= best_distance:
+                    best_distance = distance
+                    best_index = index
+        return best_index
 
     def _update_fracture_preview(self):
         self._clear_fracture_preview()

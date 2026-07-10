@@ -13,6 +13,7 @@ from .image_manager import ImageTrackManager
 from core.app_config import app_config
 
 from .graphics_items import get_physical_grid_steps, VerticalLoggingCurveItem, CachedGridItem
+from .fracture_annotations import sinusoidal_fracture_xy
 
 class PainterDepthTrack(QWidget):
     """
@@ -561,6 +562,34 @@ class InteractivePlotWidget(pg.PlotWidget):
                         path = QPainterPath()
                         path.addPolygon(poly)
                         painter.drawPath(path)
+
+            for fracture in getattr(self, 'fracture_annotations', []):
+                if fracture.get("type") != "sinusoidal_fracture":
+                    continue
+                fx, fy = sinusoidal_fracture_xy(fracture)
+                if max_y == min_y:
+                    continue
+                px_x = np.clip(fx / 360.0, 0.0, 1.0) * w
+                px_y = (fy - min_y) / (max_y - min_y) * h
+                visible = (px_y >= -h * 0.25) & (px_y <= h * 1.25)
+                if not np.any(visible):
+                    continue
+                painter.setPen(QPen(
+                    QColor(fracture.get("color", "#00E5FF")),
+                    float(fracture.get("line_width", 2.0)) * scale,
+                ))
+                path = QPainterPath()
+                started = False
+                for x_val, y_val, keep in zip(px_x, px_y, visible):
+                    if not keep:
+                        started = False
+                        continue
+                    if not started:
+                        path.moveTo(float(x_val), float(y_val))
+                        started = True
+                    else:
+                        path.lineTo(float(x_val), float(y_val))
+                painter.drawPath(path)
         finally:
             painter.restore()
         
@@ -597,13 +626,26 @@ class InteractivePlotWidget(pg.PlotWidget):
             self._mmb_start_pos = event.position()
             self._mmb_start_range = self.plotItem.vb.viewRange()[1]
             event.accept(); return
-        if self.parent() and hasattr(self.parent(), 'select_track'):
-            self.parent().setFocus()
+        parent = self.parent()
+        if parent and hasattr(parent, 'handle_fracture_pick_mouse'):
+            if parent.handle_fracture_pick_mouse(event, self):
+                event.accept()
+                return
+        if event.button() == Qt.LeftButton and parent and hasattr(parent, 'select_track'):
+            parent.setFocus()
             append = bool(event.modifiers() & Qt.ControlModifier)
-            self.parent().select_track(append=append)
+            parent.select_track(append=append)
             event.accept()
             return
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        parent = self.parent()
+        if parent and hasattr(parent, 'handle_fracture_pick_key'):
+            if parent.handle_fracture_pick_key(event):
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def mouseMoveEvent(self, event):
         if getattr(self, '_mmb_zooming', False):

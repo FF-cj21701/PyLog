@@ -15,7 +15,8 @@ from ..rendering.plot_constants import AXIS_WIDTH, NULL_MNEMONICS
 from core.app_config import app_config
 from ..ui.plot_dialogs import (UnifiedSettingsDialog, WellSelectionDialog, UnitEditDialog)
 from ..rendering.plot_components import (InteractivePlotWidget, HeaderWidget, SelectionOverlay, PainterDepthTrack, CachedGridItem)
-from ..ui.ui_components import (FloatingScaleControl, FloatingHeaderToggle, QuickAddZone, TrackSpacer, CustomScrollArea)
+from ..ui.ui_components import (FloatingScaleControl, FloatingHeaderToggle, FracturePickingPanel, QuickAddZone, TrackSpacer, CustomScrollArea)
+from ..rendering.fracture_annotations import FRACTURE_TYPE_STYLES
 from ..data.export_manager import LogExporter
 from ..tracks.track_container import BaseTrackContainer, DepthTrackContainer, CurveTrackContainer, ImageTrackContainer
 from ..rendering.scroll_manager import ScrollManager
@@ -66,9 +67,12 @@ class LogWidget(QWidget):
         self.scale_control = FloatingScaleControl(self)
         self.header_toggle = FloatingHeaderToggle(self)
         self.header_toggle.toggled.connect(self.toggle_headers)
+        self.fracture_panel = FracturePickingPanel(self)
+        self.fracture_panel.hide()
         
         self.scale_control.raise_()
         self.header_toggle.raise_()
+        self.fracture_panel.raise_()
         
         self.container = QWidget()
         self.scroll_area.setWidget(self.container)
@@ -191,6 +195,10 @@ class LogWidget(QWidget):
 
         self.SCROLL_PRECISION = 100 # Multiplier to support fractional depth scrolling (cm precision)
         self.enable_hard_slicing = True # [RE-ENABLED] Performance Toggle - User requested revert with improvements
+        self.fracture_picking_enabled = False
+        self.fracture_pick_type = "Conductive"
+        self.active_fracture_track = None
+        self.fracture_target_track = None
         
         # Use a per-plot thread pool so one window's template/image work
         # cannot starve unrelated plot windows via the global pool.
@@ -303,6 +311,12 @@ class LogWidget(QWidget):
             self.quick_add.show()
             self.quick_add.raise_()
 
+        if hasattr(self, 'fracture_panel'):
+            self.fracture_panel.move(max(8, self.width() - self.fracture_panel.width() - 28), 8)
+            if getattr(self, 'fracture_picking_enabled', False):
+                self.fracture_panel.show()
+                self.fracture_panel.raise_()
+
     def open_dialog(self, dlg):
         """Manage single active modeless dialog."""
         last_pos = None
@@ -372,6 +386,8 @@ class LogWidget(QWidget):
         new_track_idx = self.splitter.indexOf(track)
         self.splitter.setCollapsible(new_track_idx, False)
         self.splitter.setStretchFactor(new_track_idx, 0)
+        if getattr(self, "fracture_picking_enabled", False) and hasattr(track, "set_fracture_pick_enabled"):
+            track.set_fracture_pick_enabled(True)
         
         new_sizes = []
         MIN_SPACER_W = 60
@@ -402,6 +418,7 @@ class LogWidget(QWidget):
         self.sync_track_list()
         self.sync_header_heights()
         self._invalidate_track_x_cache()
+        self.refresh_fracture_target_tracks()
 
     def closeEvent(self, event):
         """Cleanup when plot window is closed."""
@@ -462,6 +479,120 @@ class LogWidget(QWidget):
         """Scroll horizontal scrollbar to the maximum right."""
         sb = self.scroll_area.horizontalScrollBar()
         sb.setValue(sb.maximum())
+
+    def set_fracture_picking_enabled(self, enabled):
+        self.fracture_picking_enabled = bool(enabled)
+        self.refresh_fracture_target_tracks()
+        if self.fracture_picking_enabled:
+            self.fracture_panel.show()
+            self.fracture_panel.raise_()
+            self._show_fracture_status("Fracture picking: left-click image points, Space/Enter to finish, Esc to cancel.")
+        else:
+            self.cancel_current_fracture_pick(show_message=False)
+            self.fracture_panel.hide()
+            self._show_fracture_status("Fracture picking disabled.")
+        for track in self.track_containers:
+            if hasattr(track, "set_fracture_pick_enabled"):
+                track.set_fracture_pick_enabled(self.fracture_picking_enabled)
+
+    def toggle_fracture_picking(self):
+        self.set_fracture_picking_enabled(not self.fracture_picking_enabled)
+
+    def set_fracture_pick_type(self, fracture_type):
+        self.fracture_pick_type = fracture_type if fracture_type in FRACTURE_TYPE_STYLES else "Conductive"
+        if self.active_fracture_track and hasattr(self.active_fracture_track, "refresh_fracture_preview_style"):
+            self.active_fracture_track.refresh_fracture_preview_style()
+
+    def get_fracture_pick_style(self):
+        style = FRACTURE_TYPE_STYLES.get(self.fracture_pick_type, FRACTURE_TYPE_STYLES["Conductive"])
+        return {
+            "fracture_type": self.fracture_pick_type,
+            "color": style["color"],
+            "line_width": 2.0,
+        }
+
+    def _image_tracks_for_fracture_display(self):
+        return [
+            track for track in self.track_containers
+            if isinstance(track, ImageTrackContainer) and getattr(track.plot_widget, "curves", None)
+        ]
+
+    def _fracture_track_label(self, track):
+        if not track:
+            return "Auto"
+        track_name = getattr(track, "track_name", None)
+        image_curve = next((c for c in getattr(track.plot_widget, "curves", []) if c.get("is_image")), None)
+        curve_name = None
+        if image_curve:
+            info = image_curve.get("info", {})
+            curve_name = info.get("title") or info.get("name")
+        if track_name and curve_name and track_name != curve_name:
+            return f"{track_name} / {curve_name}"
+        return curve_name or track_name or "Image Track"
+
+    def refresh_fracture_target_tracks(self):
+        tracks = self._image_tracks_for_fracture_display()
+        if self.fracture_target_track not in tracks:
+            self.fracture_target_track = tracks[0] if tracks else None
+        labels = [self._fracture_track_label(track) for track in tracks]
+        current_index = tracks.index(self.fracture_target_track) if self.fracture_target_track in tracks else 0
+        if hasattr(self, "fracture_panel"):
+            self.fracture_panel.set_target_tracks(labels or ["No image tracks"], current_index)
+
+    def set_fracture_target_track_index(self, index):
+        tracks = self._image_tracks_for_fracture_display()
+        if 0 <= index < len(tracks):
+            self.fracture_target_track = tracks[index]
+            self._show_fracture_status(f"Fractures will display on: {self._fracture_track_label(self.fracture_target_track)}")
+
+    def get_fracture_display_track(self, fallback=None):
+        tracks = self._image_tracks_for_fracture_display()
+        if self.fracture_target_track in tracks:
+            return self.fracture_target_track
+        if fallback in tracks:
+            self.fracture_target_track = fallback
+            self.refresh_fracture_target_tracks()
+            return fallback
+        self.fracture_target_track = tracks[0] if tracks else None
+        self.refresh_fracture_target_tracks()
+        return self.fracture_target_track
+
+    def set_active_fracture_track(self, track):
+        if self.active_fracture_track is not track:
+            if self.active_fracture_track and hasattr(self.active_fracture_track, "cancel_fracture_pick"):
+                self.active_fracture_track.cancel_fracture_pick(show_message=False)
+            self.active_fracture_track = track
+
+    def finish_current_fracture_pick(self):
+        if self.active_fracture_track and hasattr(self.active_fracture_track, "finish_fracture_pick"):
+            return self.active_fracture_track.finish_fracture_pick(continue_picking=True)
+        self._show_fracture_status("Click points on an image track before finishing a fracture.")
+        return False
+
+    def cancel_current_fracture_pick(self, show_message=True):
+        if self.active_fracture_track and hasattr(self.active_fracture_track, "cancel_fracture_pick"):
+            self.active_fracture_track.cancel_fracture_pick(show_message=show_message)
+        self.active_fracture_track = None
+
+    def undo_current_fracture_pick_point(self):
+        if self.active_fracture_track and hasattr(self.active_fracture_track, "undo_fracture_pick_point"):
+            self.active_fracture_track.undo_fracture_pick_point()
+
+    def clear_fracture_annotations(self):
+        for track in self.track_containers:
+            if hasattr(track, "clear_fracture_annotations"):
+                track.clear_fracture_annotations()
+        self.cancel_current_fracture_pick(show_message=False)
+        self._show_fracture_status("Fracture picks cleared.")
+
+    def _show_fracture_status(self, message):
+        try:
+            window = self.window()
+            status_bar = window.statusBar() if window and hasattr(window, "statusBar") else None
+            if status_bar:
+                status_bar.showMessage(message, 5000)
+        except Exception:
+            pass
 
     def sync_header_heights(self):
         """Find max required header height and apply to all tracks."""
@@ -750,6 +881,7 @@ class LogWidget(QWidget):
             self.sync_track_list()
             self._sync_container_width()
             self._invalidate_track_x_cache()
+            self.refresh_fracture_target_tracks()
 
     def replace_track(self, old_track, new_track):
         """[PHASE 9] Replace a track container in place (used for morphing Curve -> Image track)."""
@@ -784,3 +916,4 @@ class LogWidget(QWidget):
         self.sync_track_list()
         self.sync_header_heights()
         self._invalidate_track_x_cache()
+        self.refresh_fracture_target_tracks()

@@ -13,6 +13,12 @@ from ..rendering.plot_components import (InteractivePlotWidget, HeaderWidget, Se
 from ..rendering.image_manager import ImageTrackManager
 from ..rendering.fill_manager import FillManager
 from ..rendering.curve_manager import CurveManager
+from ..rendering.fracture_annotations import (
+    MIN_FRACTURE_PREVIEW_POINTS,
+    MIN_FRACTURE_PICK_POINTS,
+    build_fracture_annotation,
+    sinusoidal_fracture_xy,
+)
 from ..utils.logger import logger
 from ..utils.plot_style_utils import DEFAULT_IMAGE_CMAP, DEFAULT_NULL_COLOR, normalize_curve_plot_style
 from .interaction_handler import TrackInteractionHandler
@@ -162,7 +168,7 @@ class BaseTrackContainer(QFrame):
                 act.triggered.connect(lambda checked=False, idx=i: self.remove_curve_at(idx))
                 rem_menu.addAction(act)
             menu.addSeparator()
-        
+
         add_depth_act = QAction("Add Depth Track", self)
         add_empty_act = QAction("Add Empty Track", self)
         lw = self.find_log_widget()
@@ -363,6 +369,9 @@ class BaseTrackContainer(QFrame):
         self._update_track_settings_specific(s)
         self.plot_widget.update()
         self.header.update()
+        lw = self.log_widget or self.find_log_widget()
+        if lw and hasattr(lw, "refresh_fracture_target_tracks"):
+            lw.refresh_fracture_target_tracks()
 
     def _update_track_settings_specific(self, s):
         pass # Override in subclasses
@@ -711,6 +720,13 @@ class ImageTrackContainer(BaseTrackContainer):
     """Specialized track container for 2D image slices/matrices."""
     def __init__(self, parent=None):
         super().__init__(parent, plot_widget_class=InteractivePlotWidget)
+        self.fracture_annotations = []
+        self._fracture_items = []
+        self._fracture_pick_active = False
+        self._fracture_pick_points = []
+        self._fracture_preview_item = None
+        self._fracture_pick_scatter = None
+        self.plot_widget.fracture_annotations = self.fracture_annotations
         
     def add_curve(self, data: np.ndarray, depth: np.ndarray, info: Dict[str, Any], rgb_full_bg: Optional[QColor] = None) -> None:
         is_image_data = (data is not None and data.ndim > 1) or info.get('is_image', False)
@@ -722,6 +738,8 @@ class ImageTrackContainer(BaseTrackContainer):
             info = normalize_curve_plot_style(info)
             ImageTrackManager.setup_image_track(self, data, depth, info)
             self._refresh_z_orders()
+            if lw and hasattr(lw, "refresh_fracture_target_tracks"):
+                lw.refresh_fracture_target_tracks()
             return
         else:
             info['is_image'] = False
@@ -863,6 +881,9 @@ class ImageTrackContainer(BaseTrackContainer):
         if has_image_changed:
             self._refresh_image_tiles()
 
+        if "fractures" in s:
+            self.load_fracture_annotations(s.get("fractures") or [])
+
     def _refresh_z_orders(self):
         for i, c in enumerate(self.plot_widget.curves):
             z_val = 0 if c.get('is_image', False) else i + 10
@@ -871,9 +892,228 @@ class ImageTrackContainer(BaseTrackContainer):
         if hasattr(self.plot_widget, 'plotItem') and self.plot_widget.plotItem.vb:
             self.plot_widget.plotItem.vb.setZValue(0)
 
+    def _show_fracture_status(self, message):
+        lw = self.log_widget or self.find_log_widget()
+        try:
+            window = lw.window() if lw else None
+            status_bar = window.statusBar() if window and hasattr(window, "statusBar") else None
+            if status_bar:
+                status_bar.showMessage(message, 5000)
+        except Exception:
+            pass
+
+    def set_fracture_pick_enabled(self, enabled):
+        self._fracture_pick_active = bool(enabled)
+        if not enabled:
+            self._fracture_pick_points = []
+            self._clear_fracture_preview()
+
+    def start_fracture_pick(self):
+        self.set_fracture_pick_enabled(True)
+        self._fracture_pick_points = []
+        self._clear_fracture_preview()
+        self.setFocus()
+        self._show_fracture_status("Fracture pick: left-click at least 3 points, Space/Enter to finish, Esc to cancel.")
+
+    def cancel_fracture_pick(self, show_message=True):
+        self._fracture_pick_points = []
+        self._clear_fracture_preview()
+        if show_message:
+            self._show_fracture_status("Current fracture pick canceled.")
+
+    def finish_fracture_pick(self, continue_picking=False):
+        if len(self._fracture_pick_points) < MIN_FRACTURE_PICK_POINTS:
+            self.cancel_fracture_pick(show_message=False)
+            self._show_fracture_status("Not enough points for a fracture. Current pick canceled.")
+            return False
+        style = self._current_fracture_style()
+        lw = self.log_widget or self.find_log_widget()
+        target_track = lw.get_fracture_display_track(fallback=self) if lw and hasattr(lw, "get_fracture_display_track") else self
+        if target_track is None:
+            target_track = self
+        annotation = build_fracture_annotation(
+            self._fracture_pick_points,
+            fracture_type=style["fracture_type"],
+            color=style["color"],
+            line_width=style["line_width"],
+            name=f"Fracture {len(getattr(target_track, 'fracture_annotations', [])) + 1}",
+        )
+        image_curve = next((c for c in self.plot_widget.curves if c.get('is_image')), None)
+        if image_curve:
+            info = image_curve.get("info", {})
+            annotation["source_curve_id"] = info.get("curve_id", info.get("id"))
+            annotation["source_curve_name"] = info.get("name")
+        annotation["source_track_id"] = id(self)
+        target_track.add_fracture_annotation(annotation)
+        self._fracture_pick_points = []
+        self._clear_fracture_preview()
+        self.plot_widget.update()
+        if not continue_picking:
+            self._fracture_pick_active = False
+        target_name = lw._fracture_track_label(target_track) if lw and hasattr(lw, "_fracture_track_label") else "target track"
+        self._show_fracture_status(f"Fracture pick added on {target_name}. Continue picking or disable Fracture mode.")
+        return True
+
+    def undo_fracture_pick_point(self):
+        if not self._fracture_pick_points:
+            return
+        self._fracture_pick_points.pop()
+        self._update_fracture_preview()
+
+    def clear_fracture_annotations(self):
+        for item in list(self._fracture_items):
+            try:
+                self.plot_widget.removeItem(item)
+            except Exception:
+                pass
+        self._fracture_items.clear()
+        self.fracture_annotations.clear()
+        self.plot_widget.fracture_annotations = self.fracture_annotations
+        self.plot_widget.update()
+
+    def add_fracture_annotation(self, annotation):
+        if not isinstance(annotation, dict):
+            return None
+        clean = annotation.copy()
+        if "name" not in clean:
+            clean["name"] = f"Fracture {len(self.fracture_annotations) + 1}"
+        self.fracture_annotations.append(clean)
+        item = self._add_fracture_item(clean)
+        self.plot_widget.fracture_annotations = self.fracture_annotations
+        self.plot_widget.update()
+        return item
+
+    def load_fracture_annotations(self, annotations):
+        self.clear_fracture_annotations()
+        for annotation in annotations:
+            if not isinstance(annotation, dict):
+                continue
+            if annotation.get("type") != "sinusoidal_fracture":
+                continue
+            self.add_fracture_annotation(annotation)
+        self.plot_widget.fracture_annotations = self.fracture_annotations
+
+    def handle_fracture_pick_mouse(self, event, plot_widget):
+        lw = self.log_widget or self.find_log_widget()
+        if not getattr(lw, "fracture_picking_enabled", False):
+            return False
+        if event.button() == Qt.RightButton:
+            return False
+        if event.button() != Qt.LeftButton:
+            return False
+        if not self._fracture_pick_active:
+            self._fracture_pick_active = True
+        if lw and hasattr(lw, "set_active_fracture_track"):
+            lw.set_active_fracture_track(self)
+        vb = plot_widget.getViewBox()
+        if not vb:
+            return True
+        scene_pos = plot_widget.mapToScene(event.position().toPoint())
+        view_pos = vb.mapSceneToView(scene_pos)
+        x = max(0.0, min(360.0, float(view_pos.x())))
+        y = float(view_pos.y())
+        if not np.isfinite(y):
+            return True
+        self._fracture_pick_points.append([x, y])
+        self._update_fracture_preview()
+        return True
+
+    def handle_fracture_pick_key(self, event):
+        lw = self.log_widget or self.find_log_widget()
+        if not getattr(lw, "fracture_picking_enabled", False):
+            return False
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.finish_fracture_pick(continue_picking=True)
+            return True
+        if event.key() == Qt.Key_Escape:
+            self.cancel_fracture_pick()
+            if lw and getattr(lw, "active_fracture_track", None) is self:
+                lw.active_fracture_track = None
+            return True
+        if event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
+            self.undo_fracture_pick_point()
+            return True
+        return False
+
+    def _current_fracture_style(self):
+        lw = self.log_widget or self.find_log_widget()
+        if lw and hasattr(lw, "get_fracture_pick_style"):
+            return lw.get_fracture_pick_style()
+        return {"fracture_type": "Conductive", "color": "#00E5FF", "line_width": 2.0}
+
+    def refresh_fracture_preview_style(self):
+        if self._fracture_pick_points:
+            self._update_fracture_preview()
+
+    def _add_fracture_item(self, annotation):
+        x, y = sinusoidal_fracture_xy(annotation)
+        pen = pg.mkPen(
+            QColor(annotation.get("color", "#00E5FF")),
+            width=float(annotation.get("line_width", 2.0)),
+        )
+        item = pg.PlotDataItem(x, y, pen=pen)
+        item.setZValue(50)
+        self.plot_widget.addItem(item)
+        self._fracture_items.append(item)
+        return item
+
+    def _update_fracture_preview(self):
+        self._clear_fracture_preview()
+        points = self._fracture_pick_points
+        if not points:
+            return
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        self._fracture_pick_scatter = pg.ScatterPlotItem(
+            xs,
+            ys,
+            size=7,
+            pen=pg.mkPen(QColor("#FFFFFF"), width=1),
+            brush=pg.mkBrush(QColor(self._current_fracture_style()["color"])),
+        )
+        self._fracture_pick_scatter.setZValue(60)
+        self.plot_widget.addItem(self._fracture_pick_scatter)
+        if len(points) >= MIN_FRACTURE_PREVIEW_POINTS:
+            try:
+                annotation = build_fracture_annotation(
+                    points,
+                    name="Preview",
+                    min_points=MIN_FRACTURE_PREVIEW_POINTS,
+                )
+                x, y = sinusoidal_fracture_xy(annotation)
+                self._fracture_preview_item = pg.PlotDataItem(
+                    x,
+                    y,
+                    pen=pg.mkPen(QColor(self._current_fracture_style()["color"]), width=2, style=Qt.DashLine),
+                )
+                self._fracture_preview_item.setZValue(55)
+                self.plot_widget.addItem(self._fracture_preview_item)
+            except Exception:
+                pass
+
+    def _clear_fracture_preview(self):
+        for attr in ("_fracture_preview_item", "_fracture_pick_scatter"):
+            item = getattr(self, attr, None)
+            if item is not None:
+                try:
+                    self.plot_widget.removeItem(item)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
+    def keyPressEvent(self, event):
+        if self.handle_fracture_pick_key(event):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def get_state(self):
         state = super().get_state()
         state["type"] = "data"
+        state["fractures"] = [
+            {key: value for key, value in fracture.items() if key != "item"}
+            for fracture in self.fracture_annotations
+        ]
         for curve in self.plot_widget.curves:
             info = curve.get('info', {}).copy()
             state["curves"].append(info)

@@ -378,6 +378,29 @@ class MainWindow(QMainWindow):
             if hasattr(widget, 'set_horizontal_scale'):
                 widget.set_horizontal_scale(factor)
 
+    def _active_log_widget(self):
+        active_sub = self.mdi_area.activeSubWindow()
+        if not active_sub:
+            return None
+        widget = active_sub.widget()
+        return widget if isinstance(widget, LogWidget) else None
+
+    def toggle_fracture_picking_mode(self, checked):
+        widget = self._active_log_widget()
+        if not widget:
+            if hasattr(self, 'fracture_pick_action'):
+                self.fracture_pick_action.setChecked(False)
+            QMessageBox.warning(self, "Fracture", "Please select a plot window first.")
+            return
+        widget.set_fracture_picking_enabled(checked)
+
+    def handle_clear_fractures(self):
+        widget = self._active_log_widget()
+        if not widget:
+            QMessageBox.warning(self, "Fracture", "Please select a plot window first.")
+            return
+        widget.clear_fracture_annotations()
+
     def toggle_explorer(self, checked):
         if hasattr(self, 'explorer_dock'):
             self.explorer_dock.setVisible(checked)
@@ -1021,6 +1044,9 @@ class MainWindow(QMainWindow):
     def _on_mdi_subwindow_activated(self, *_args):
         self._update_workspace_launchpad_visibility()
         self._refresh_ai_effective_context_info()
+        widget = self._active_log_widget()
+        if hasattr(self, 'fracture_pick_action'):
+            self.fracture_pick_action.setChecked(bool(widget and getattr(widget, 'fracture_picking_enabled', False)))
 
     def _refresh_ai_effective_context_info(self):
         ai_widget = getattr(getattr(self, "_ai_plugin", None), "ai_widget", None)

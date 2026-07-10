@@ -1,5 +1,5 @@
-from PySide6.QtWidgets import (QWidget, QScrollArea, QHBoxLayout, QComboBox, 
-                               QPushButton, QSizePolicy, QMenu, QGraphicsOpacityEffect)
+from PySide6.QtWidgets import (QWidget, QScrollArea, QHBoxLayout, QVBoxLayout, QComboBox,
+                               QPushButton, QSizePolicy, QMenu, QGraphicsOpacityEffect, QLabel)
 from PySide6.QtCore import Qt, Signal, QEvent, QRect, QPoint, QPointF, QTimer
 from PySide6.QtGui import (QPainter, QColor, QFont, QPen, QAction)
 import numpy as np
@@ -219,3 +219,166 @@ class FloatingHeaderToggle(QPushButton):
 
     def enterEvent(self, event): self.opacity_effect.setOpacity(1.0); super().enterEvent(event)
     def leaveEvent(self, event): self.opacity_effect.setOpacity(0); super().leaveEvent(event)
+
+
+class FracturePickingPanel(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.log_widget = parent
+        self.setObjectName("FracturePickingPanel")
+        self._target_update_blocked = False
+        self.setFixedSize(286, 132)
+        self.setAttribute(Qt.WA_StyledBackground)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(9, 7, 9, 7)
+        layout.setSpacing(5)
+
+        title = QLabel("Fracture Picking")
+        title.setObjectName("FracturePickingPanelTitle")
+        layout.addWidget(title)
+
+        type_row = QHBoxLayout()
+        type_row.setContentsMargins(0, 0, 0, 0)
+        type_row.setSpacing(7)
+        type_label = QLabel("Type")
+        type_label.setObjectName("FracturePickingPanelLabel")
+        type_label.setFixedWidth(64)
+        type_row.addWidget(type_label)
+        self.type_combo = QComboBox()
+        self.type_combo.addItems(["Conductive", "Resistive"])
+        self.type_combo.setToolTip("Fracture type")
+        self.type_combo.currentTextChanged.connect(self._on_type_changed)
+        type_row.addWidget(self.type_combo, 1)
+        layout.addLayout(type_row)
+
+        target_row = QHBoxLayout()
+        target_row.setContentsMargins(0, 0, 0, 0)
+        target_row.setSpacing(7)
+        target_label = QLabel("Display on")
+        target_label.setObjectName("FracturePickingPanelLabel")
+        target_label.setFixedWidth(64)
+        target_row.addWidget(target_label)
+        self.target_combo = QComboBox()
+        self.target_combo.setToolTip("Track where finished fracture picks are displayed")
+        self.target_combo.currentIndexChanged.connect(self._on_target_changed)
+        target_row.addWidget(self.target_combo, 1)
+        layout.addLayout(target_row)
+
+        self._style_combo_popup(self.type_combo)
+        self._style_combo_popup(self.target_combo)
+
+        finish_row = QHBoxLayout()
+        finish_row.setContentsMargins(4, 0, 4, 0)
+        finish_row.setSpacing(6)
+        self.finish_button = QPushButton("Finish")
+        self.finish_button.setToolTip("Finish current fracture (Space / Enter)")
+        self.finish_button.clicked.connect(self._finish_current)
+        finish_row.addWidget(self.finish_button)
+        layout.addLayout(finish_row)
+
+        row2 = QHBoxLayout()
+        row2.setContentsMargins(0, 0, 0, 0)
+        row2.setSpacing(12)
+        self.undo_button = QPushButton("Undo")
+        self.undo_button.setToolTip("Undo current pick point (Backspace)")
+        self.undo_button.clicked.connect(self._undo_point)
+        row2.addWidget(self.undo_button)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setToolTip("Cancel current fracture (Esc)")
+        self.cancel_button.clicked.connect(self._cancel_current)
+        row2.addWidget(self.cancel_button)
+        layout.addLayout(row2)
+
+        self.setStyleSheet("""
+            #FracturePickingPanel {
+                background-color: rgba(38, 42, 46, 210);
+                border: 1px solid rgba(255, 255, 255, 120);
+                border-radius: 8px;
+            }
+            #FracturePickingPanelTitle {
+                color: white;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            #FracturePickingPanelLabel {
+                color: rgba(255, 255, 255, 210);
+                font-size: 12px;
+            }
+            #FracturePickingPanel QComboBox,
+            #FracturePickingPanel QPushButton {
+                min-height: 22px;
+                color: white;
+                background-color: rgba(255, 255, 255, 28);
+                border: 1px solid rgba(255, 255, 255, 80);
+                border-radius: 5px;
+                padding: 1px 7px;
+            }
+            #FracturePickingPanel QPushButton:hover,
+            #FracturePickingPanel QComboBox:hover {
+                background-color: rgba(255, 255, 255, 45);
+            }
+            #FracturePickingPanel QComboBox::drop-down {
+                width: 24px;
+                border-left: 1px solid rgba(255, 255, 255, 55);
+                background-color: rgba(255, 255, 255, 22);
+                border-top-right-radius: 5px;
+                border-bottom-right-radius: 5px;
+            }
+            #FracturePickingPanel QComboBox::down-arrow {
+                width: 0px;
+                height: 0px;
+            }
+        """)
+
+    def _style_combo_popup(self, combo):
+        combo.view().setStyleSheet("""
+            QListView {
+                color: white;
+                background-color: rgb(58, 62, 66);
+                border: 1px solid rgba(255, 255, 255, 100);
+                outline: 0;
+                padding: 3px;
+                selection-background-color: rgb(84, 91, 98);
+                selection-color: white;
+            }
+            QListView::item {
+                min-height: 24px;
+                padding: 3px 8px;
+            }
+            QListView::item:hover {
+                background-color: rgb(76, 83, 90);
+            }
+        """)
+
+    def _on_type_changed(self, text):
+        if self.log_widget and hasattr(self.log_widget, "set_fracture_pick_type"):
+            self.log_widget.set_fracture_pick_type(text)
+
+    def set_target_tracks(self, labels, current_index):
+        self._target_update_blocked = True
+        try:
+            self.target_combo.clear()
+            self.target_combo.addItems(labels or ["Auto"])
+            if labels:
+                self.target_combo.setCurrentIndex(max(0, min(int(current_index), len(labels) - 1)))
+        finally:
+            self._target_update_blocked = False
+
+    def _on_target_changed(self, index):
+        if self._target_update_blocked:
+            return
+        if self.log_widget and hasattr(self.log_widget, "set_fracture_target_track_index"):
+            self.log_widget.set_fracture_target_track_index(index)
+
+    def _finish_current(self):
+        if self.log_widget and hasattr(self.log_widget, "finish_current_fracture_pick"):
+            self.log_widget.finish_current_fracture_pick()
+
+    def _undo_point(self):
+        if self.log_widget and hasattr(self.log_widget, "undo_current_fracture_pick_point"):
+            self.log_widget.undo_current_fracture_pick_point()
+
+    def _cancel_current(self):
+        if self.log_widget and hasattr(self.log_widget, "cancel_current_fracture_pick"):
+            self.log_widget.cancel_current_fracture_pick()

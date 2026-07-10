@@ -135,7 +135,7 @@ def build_plot_spec_from_template(template_state: Dict[str, Any], db, well_id: O
                     for key in (
                         "name", "width", "grid_x", "grid_y", "depth_start", "depth_end",
                         "is_accum_fill", "label_font_family", "label_font_size",
-                        "label_mask_enabled", "label_mask_length",
+                        "label_mask_enabled", "label_mask_length", "fractures",
                     )
                     if key in track_state and track_state.get(key) is not None
                 }
@@ -186,7 +186,7 @@ def build_plot_spec_from_template(template_state: Dict[str, Any], db, well_id: O
                     for key in (
                         "name", "width", "grid_x", "grid_y", "depth_start", "depth_end",
                         "is_accum_fill", "label_font_family", "label_font_size",
-                        "label_mask_enabled", "label_mask_length",
+                        "label_mask_enabled", "label_mask_length", "fractures",
                     )
                     if key in track_state and track_state.get(key) is not None
                 }

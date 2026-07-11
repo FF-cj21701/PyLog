@@ -100,7 +100,7 @@ def load_curve_bundle_for_plot(
     if curve_data is None:
         return {"ok": False, "error": f"Failed to load curve data for ID: {curve_id}"}
 
-    depth_data, _best_match, error = _resolve_depth_for_curve(
+    depth_data, depth_row, error = _resolve_depth_for_curve(
         local_db,
         well_id,
         curve_id,
@@ -119,6 +119,7 @@ def load_curve_bundle_for_plot(
     curve_row = _find_curve_row(curves, curve_id)
     curve_name = curve_row[1] if curve_row else "Unknown"
     curve_unit = curve_row[2] if curve_row else ""
+    depth_unit = depth_row[2] if depth_row and len(depth_row) > 2 else ""
     val_min = curve_row[5] if curve_row and len(curve_row) > 5 and curve_row[5] is not None else 0.0
     val_max = curve_row[6] if curve_row and len(curve_row) > 6 and curve_row[6] is not None else 100.0
     is_image = getattr(curve_data, "ndim", 1) > 1
@@ -133,6 +134,7 @@ def load_curve_bundle_for_plot(
             "curve_id": curve_id,
             "name": curve_name,
             "unit": curve_unit,
+            "depth_unit": depth_unit,
             "is_image": is_image,
             "color": color,
             "line_width": 1.0,

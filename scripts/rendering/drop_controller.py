@@ -119,6 +119,8 @@ class DataDropController(QObject):
 
         prefs = {'cmap': DEFAULT_IMAGE_CMAP, 'null_color': DEFAULT_NULL_COLOR}
         db_p = db_path if db_path else lw.db.db_path
+        if isinstance(context, dict):
+            context["db_path"] = db_p
         worker = DataFetchWorker(db_p, well_id, curve_id, context, preferences=prefs)
         worker.signals.finished.connect(self.on_data_loaded)
         worker.signals.error.connect(lambda e: QMessageBox.critical(lw, "Error", e))
@@ -133,6 +135,10 @@ class DataDropController(QObject):
         if data is None: 
             self._check_loading_status()
             return
+        info = dict(info or {})
+        info["well_id"] = well_id
+        info["curve_id"] = curve_id
+        info["db_path"] = context.get("db_path") if isinstance(context, dict) else getattr(lw.db, "db_path", None)
         lw.update_depth_limits(depth)
         
         track = context

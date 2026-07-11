@@ -16,7 +16,7 @@ from core.app_config import app_config
 from ..ui.plot_dialogs import (UnifiedSettingsDialog, WellSelectionDialog, UnitEditDialog)
 from ..rendering.plot_components import (InteractivePlotWidget, HeaderWidget, SelectionOverlay, PainterDepthTrack, CachedGridItem)
 from ..ui.ui_components import (FloatingScaleControl, FloatingHeaderToggle, FracturePickingPanel, QuickAddZone, TrackSpacer, CustomScrollArea)
-from ..rendering.fracture_annotations import FRACTURE_TYPE_STYLES
+from ..rendering.fracture_annotations import FRACTURE_TYPE_STYLES, enrich_fracture_interpretation
 from ..data.export_manager import LogExporter
 from ..tracks.track_container import BaseTrackContainer, DepthTrackContainer, CurveTrackContainer, ImageTrackContainer
 from ..rendering.scroll_manager import ScrollManager
@@ -316,9 +316,62 @@ class LogWidget(QWidget):
                 self.fracture_panel.fit_to_parent()
             if not getattr(self.fracture_panel, '_user_moved', False):
                 self.fracture_panel.reset_position()
-            if getattr(self, 'fracture_picking_enabled', False):
+            if getattr(self, 'fracture_picking_enabled', False) and self._is_active_mdi_widget():
                 self.fracture_panel.show()
                 self.fracture_panel.raise_()
+            else:
+                self.fracture_panel.hide()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._ensure_mdi_activation_hook()
+        self._sync_fracture_panel_visibility()
+
+    def hideEvent(self, event):
+        if hasattr(self, 'fracture_panel'):
+            self.fracture_panel.hide()
+        super().hideEvent(event)
+
+    def event(self, event):
+        result = super().event(event)
+        if event.type() in (QEvent.WindowActivate, QEvent.WindowDeactivate):
+            self._sync_fracture_panel_visibility()
+        return result
+
+    def _is_active_mdi_widget(self):
+        window = self.window()
+        mdi_area = getattr(window, 'mdi_area', None)
+        if mdi_area is None:
+            return self.isVisible()
+        active_sub = mdi_area.activeSubWindow()
+        return bool(active_sub and active_sub.widget() is self and self.isVisible())
+
+    def _ensure_mdi_activation_hook(self):
+        if getattr(self, '_fracture_mdi_hooked', False):
+            return
+        window = self.window()
+        mdi_area = getattr(window, 'mdi_area', None)
+        if mdi_area is None:
+            return
+        try:
+            mdi_area.subWindowActivated.connect(self._on_mdi_subwindow_activated)
+            self._fracture_mdi_hooked = True
+        except Exception:
+            pass
+
+    def _on_mdi_subwindow_activated(self, sub_window):
+        if hasattr(self, 'fracture_panel') and (sub_window is None or sub_window.widget() is not self):
+            self.fracture_panel.hide()
+        self._sync_fracture_panel_visibility()
+
+    def _sync_fracture_panel_visibility(self):
+        if not hasattr(self, 'fracture_panel'):
+            return
+        if getattr(self, 'fracture_picking_enabled', False) and self._is_active_mdi_widget():
+            self.fracture_panel.show()
+            self.fracture_panel.raise_()
+        else:
+            self.fracture_panel.hide()
 
     def open_dialog(self, dlg):
         """Manage single active modeless dialog."""
@@ -486,13 +539,13 @@ class LogWidget(QWidget):
     def set_fracture_picking_enabled(self, enabled):
         self.fracture_picking_enabled = bool(enabled)
         self.refresh_fracture_target_tracks()
+        self._ensure_mdi_activation_hook()
         if self.fracture_picking_enabled:
-            self.fracture_panel.show()
-            self.fracture_panel.raise_()
+            self._sync_fracture_panel_visibility()
             self._show_fracture_status("Fracture picking: left-click image points, Space/Enter to finish, Esc to cancel.")
         else:
             self.cancel_current_fracture_pick(show_message=False)
-            self.fracture_panel.hide()
+            self._sync_fracture_panel_visibility()
             self._show_fracture_status("Fracture picking disabled.")
         for track in self.track_containers:
             if hasattr(track, "set_fracture_pick_enabled"):
@@ -603,6 +656,105 @@ class LogWidget(QWidget):
                 track.clear_fracture_annotations()
         self.cancel_current_fracture_pick(show_message=False)
         self._show_fracture_status("Fracture picks cleared.")
+
+    def collect_fracture_annotations(self):
+        annotations = []
+        for track in self.track_containers:
+            track_annotations = getattr(track, "fracture_annotations", None)
+            if not track_annotations:
+                continue
+            track_label = self._fracture_track_label(track)
+            image_curve = next((c for c in getattr(track.plot_widget, "curves", []) if c.get("is_image")), None)
+            image_info = image_curve.get("info", {}) if image_curve else {}
+            depth_unit = ""
+            if getattr(track.plot_widget, "curves", None):
+                depth_unit = track.plot_widget.curves[0].get("info", {}).get("depth_unit", "")
+            for annotation in track_annotations:
+                if not isinstance(annotation, dict):
+                    continue
+                item = enrich_fracture_interpretation(annotation)
+                item.setdefault("source_track_label", track_label)
+                item.setdefault("target_track_label", track_label)
+                item.setdefault("source_curve_id", image_info.get("curve_id"))
+                item.setdefault("source_curve_name", image_info.get("title") or image_info.get("name"))
+                item.setdefault("depth_unit", depth_unit)
+                annotations.append(item)
+        return annotations
+
+    def _infer_fracture_well_id(self):
+        for track in self.track_containers:
+            for curve in getattr(track.plot_widget, "curves", []):
+                info = curve.get("info", {})
+                if info.get("well_id") is not None:
+                    return int(info.get("well_id"))
+        try:
+            wells = self.db.get_wells() if self.db else []
+            if len(wells) == 1:
+                return int(wells[0][0])
+        except Exception:
+            pass
+        return None
+
+    def save_fracture_results(self):
+        well_id = self._infer_fracture_well_id()
+        annotations = self.collect_fracture_annotations()
+        db_path = getattr(self.db, "db_path", None)
+        if not db_path:
+            self._show_fracture_status("Cannot save fractures: no database path found.")
+            return []
+        if well_id is None:
+            self._show_fracture_status("Cannot save fractures: no well context found.")
+            return []
+        if not annotations:
+            self._show_fracture_status("No fracture results to save.")
+            return []
+        db = DBManager(db_path)
+        inserted = db.save_fracture_interpretations(well_id, annotations, replace=True)
+        self._show_fracture_status(f"Saved {len(inserted)} fracture result(s).")
+        return inserted
+
+    def load_fracture_results(self):
+        well_id = self._infer_fracture_well_id()
+        db_path = getattr(self.db, "db_path", None)
+        if not db_path:
+            self._show_fracture_status("Cannot load fractures: no database path found.")
+            return []
+        if well_id is None:
+            self._show_fracture_status("Cannot load fractures: no well context found.")
+            return []
+        db = DBManager(db_path)
+        annotations = db.get_fracture_interpretations(well_id)
+        if not annotations:
+            self._show_fracture_status("No saved fracture results found.")
+            return []
+        target_track = self.get_fracture_display_track()
+        if target_track is None:
+            self._show_fracture_status("Cannot load fractures: no image target track.")
+            return []
+        for track in self.track_containers:
+            if hasattr(track, "clear_fracture_annotations"):
+                track.clear_fracture_annotations()
+        by_label = {self._fracture_track_label(track): track for track in self._image_tracks_for_fracture_display()}
+        for annotation in annotations:
+            track = by_label.get(annotation.get("target_track_label")) or target_track
+            track.add_fracture_annotation(annotation)
+        self._show_fracture_status(f"Loaded {len(annotations)} fracture result(s).")
+        return annotations
+
+    def show_fracture_results(self):
+        from ..ui.dialogs.fracture_results_dialog import FractureResultsDialog
+
+        existing = getattr(self, "fracture_results_dialog", None)
+        if existing is not None and existing.isVisible():
+            existing.refresh()
+            existing.raise_()
+            existing.activateWindow()
+            return existing
+        self.fracture_results_dialog = FractureResultsDialog(self, self.window())
+        self.fracture_results_dialog.show()
+        self.fracture_results_dialog.raise_()
+        self.fracture_results_dialog.activateWindow()
+        return self.fracture_results_dialog
 
     def _show_fracture_status(self, message):
         try:

@@ -129,6 +129,35 @@ Item {
         }
     }
 
+    component InfoButton: Rectangle {
+        id: infoButton
+        property string label: ""
+        signal clicked()
+
+        height: 32
+        radius: 6
+        color: infoMouse.containsMouse ? root.buttonHoverColor : root.buttonBgColor
+        border.color: root.inputBorderColor
+        border.width: 1
+
+        Text {
+            anchors.fill: parent
+            text: infoButton.label
+            color: root.textColor
+            font.pixelSize: 12
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+        }
+
+        MouseArea {
+            id: infoMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            onClicked: infoButton.clicked()
+        }
+    }
+
     Rectangle {
         id: panel
         x: 0
@@ -273,6 +302,22 @@ Item {
                             width: parent.width
                             height: 1
                             color: root.dividerColor
+                        }
+
+                        Row {
+                            width: parent.width
+                            height: 34
+                            spacing: 22
+                            Item {
+                                width: 96
+                                height: parent.height
+                            }
+                            InfoButton {
+                                width: parent.width - 118
+                                anchors.verticalCenter: parent.verticalCenter
+                                label: "Results"
+                                onClicked: bridge.showResults()
+                            }
                         }
                     }
                 }

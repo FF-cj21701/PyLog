@@ -7,6 +7,7 @@ from scripts.rendering.fracture_annotations import (
     MIN_FRACTURE_PREVIEW_POINTS,
     MIN_FRACTURE_PICK_POINTS,
     build_fracture_annotation,
+    enrich_fracture_interpretation,
     sinusoidal_fracture_xy,
 )
 
@@ -74,6 +75,31 @@ def test_fracture_preview_can_fit_two_points():
     assert annotation["name"] == "Preview"
     assert len(x) == 19
     assert len(y) == 19
+
+
+def test_fracture_interpretation_fields_use_center_depth_and_image_azimuth():
+    annotation = build_fracture_annotation(
+        [[0, 1000.0], [90, 1000.2], [180, 1000.0], [270, 999.8]],
+    )
+
+    assert annotation["center_depth"] == pytest_approx(1000.0)
+    assert annotation["dip_height"] == pytest_approx(0.2)
+    assert annotation["image_azimuth"] == pytest_approx(90.0)
+    assert annotation["apparent_dip"] is None
+
+
+def test_fracture_interpretation_apparent_dip_uses_borehole_diameter():
+    annotation = enrich_fracture_interpretation(
+        {
+            "offset": 1000.0,
+            "sin_coeff": 0.2,
+            "cos_coeff": 0.0,
+            "amplitude": 0.2,
+        },
+        borehole_diameter=1.0,
+    )
+
+    assert annotation["apparent_dip"] == pytest_approx(math.degrees(math.atan2(0.4, 1.0)))
 
 
 def pytest_approx(value):

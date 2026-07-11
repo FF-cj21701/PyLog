@@ -3,6 +3,8 @@ import numpy as np
 import io
 import os
 import h5py
+import json
+import time
 from typing import List, Tuple, Optional, Any, Union
 from ..utils.logger import logger
 from ..utils.plot_value_utils import sanitize_invalid_plot_values
@@ -83,6 +85,28 @@ class DBManager:
         except sqlite3.OperationalError:
             cursor.execute("ALTER TABLE curves ADD COLUMN val_min REAL")
             cursor.execute("ALTER TABLE curves ADD COLUMN val_max REAL")
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS fracture_interpretations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                well_id INTEGER NOT NULL,
+                name TEXT,
+                interpretation_type TEXT,
+                source_curve_id INTEGER,
+                source_curve_name TEXT,
+                source_track_label TEXT,
+                target_track_label TEXT,
+                depth REAL,
+                amplitude REAL,
+                color TEXT,
+                line_width REAL,
+                payload_json TEXT NOT NULL,
+                created_at REAL,
+                updated_at REAL,
+                FOREIGN KEY(well_id) REFERENCES wells(id),
+                FOREIGN KEY(source_curve_id) REFERENCES curves(id)
+            )
+        ''')
         
         conn.commit()
         conn.close()
@@ -390,6 +414,80 @@ class DBManager:
             
         conn.close()
         return rows
+
+    def save_fracture_interpretations(self, well_id, annotations, replace=True):
+        """Persist fracture picking results for a well and return inserted row IDs."""
+        if self.db_path is None:
+            return []
+        now = time.time()
+        rows = []
+        for annotation in annotations or []:
+            if not isinstance(annotation, dict):
+                continue
+            payload = annotation.copy()
+            name = payload.get("name") or "Fracture"
+            rows.append((
+                int(well_id),
+                name,
+                payload.get("fracture_type"),
+                payload.get("source_curve_id"),
+                payload.get("source_curve_name"),
+                payload.get("source_track_label"),
+                payload.get("target_track_label"),
+                payload.get("center_depth", payload.get("offset")),
+                payload.get("dip_height", payload.get("amplitude")),
+                payload.get("color"),
+                payload.get("line_width"),
+                json.dumps(payload, ensure_ascii=False),
+                now,
+                now,
+            ))
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            if replace:
+                cursor.execute("DELETE FROM fracture_interpretations WHERE well_id=?", (int(well_id),))
+            inserted = []
+            for row in rows:
+                cursor.execute('''
+                    INSERT INTO fracture_interpretations (
+                        well_id, name, interpretation_type, source_curve_id, source_curve_name,
+                        source_track_label, target_track_label, depth, amplitude, color,
+                        line_width, payload_json, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', row)
+                inserted.append(cursor.lastrowid)
+            conn.commit()
+            return inserted
+        finally:
+            conn.close()
+
+    def get_fracture_interpretations(self, well_id):
+        """Load fracture picking results as annotation dictionaries."""
+        if self.db_path is None:
+            return []
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                SELECT id, payload_json FROM fracture_interpretations
+                WHERE well_id=?
+                ORDER BY depth IS NULL, depth, id
+            ''', (int(well_id),))
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
+        annotations = []
+        for row_id, payload_json in rows:
+            try:
+                payload = json.loads(payload_json or "{}")
+            except Exception:
+                continue
+            if isinstance(payload, dict):
+                payload["interpretation_id"] = row_id
+                annotations.append(payload)
+        return annotations
 
     def save_curve(self, well_id, name, unit, data_array, folder_id=None):
         """Mandatory HDF5 save for all curve data. Legacy BLOB storage is bypassed."""

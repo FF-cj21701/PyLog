@@ -391,6 +391,11 @@ class FracturePickingBridge(QObject):
             self.log_widget.clear_fracture_annotations()
 
     @Slot()
+    def showResults(self):
+        if self.log_widget and hasattr(self.log_widget, "show_fracture_results"):
+            self.log_widget.show_fracture_results()
+
+    @Slot()
     def exitMode(self):
         if self.log_widget and hasattr(self.log_widget, "set_fracture_picking_enabled"):
             self.log_widget.set_fracture_picking_enabled(False)

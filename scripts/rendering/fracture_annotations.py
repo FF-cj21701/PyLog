@@ -72,6 +72,39 @@ def sinusoidal_fracture_xy(annotation: Dict[str, Any], samples: int = 361) -> Tu
     return x, y
 
 
+def enrich_fracture_interpretation(
+    annotation: Dict[str, Any],
+    *,
+    borehole_diameter: float | None = None,
+) -> Dict[str, Any]:
+    """Add the core interpretation fields used by the fracture results table."""
+    enriched = dict(annotation or {})
+    center_depth = float(enriched.get("offset", 0.0))
+    sin_coeff = float(enriched.get("sin_coeff", 0.0))
+    cos_coeff = float(enriched.get("cos_coeff", 0.0))
+    dip_height = float(enriched.get("amplitude", math.hypot(sin_coeff, cos_coeff)))
+    image_azimuth = (math.degrees(math.atan2(sin_coeff, cos_coeff)) + 360.0) % 360.0
+
+    apparent_dip = None
+    diameter = borehole_diameter
+    if diameter is None:
+        diameter = enriched.get("borehole_diameter") or enriched.get("avg_caliper")
+    try:
+        diameter = float(diameter)
+        if math.isfinite(diameter) and diameter > 0.0:
+            apparent_dip = math.degrees(math.atan2(2.0 * dip_height, diameter))
+    except Exception:
+        apparent_dip = None
+
+    enriched.update({
+        "center_depth": center_depth,
+        "dip_height": dip_height,
+        "image_azimuth": image_azimuth,
+        "apparent_dip": apparent_dip,
+    })
+    return enriched
+
+
 def build_fracture_annotation(
     points: Iterable[Sequence[float]],
     *,
@@ -89,4 +122,4 @@ def build_fracture_annotation(
         "color": color,
         "line_width": float(line_width),
     })
-    return annotation
+    return enrich_fracture_interpretation(annotation)

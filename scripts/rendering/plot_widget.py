@@ -314,7 +314,8 @@ class LogWidget(QWidget):
         if hasattr(self, 'fracture_panel'):
             if hasattr(self.fracture_panel, 'fit_to_parent'):
                 self.fracture_panel.fit_to_parent()
-            self.fracture_panel.move(max(8, self.width() - self.fracture_panel.width() - 28), 8)
+            if not getattr(self.fracture_panel, '_user_moved', False):
+                self.fracture_panel.reset_position()
             if getattr(self, 'fracture_picking_enabled', False):
                 self.fracture_panel.show()
                 self.fracture_panel.raise_()

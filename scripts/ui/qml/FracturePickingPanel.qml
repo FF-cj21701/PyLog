@@ -141,6 +141,21 @@ Item {
         border.width: 1
         clip: true
 
+        MouseArea {
+            id: dragArea
+            anchors.fill: parent
+            acceptedButtons: Qt.LeftButton
+            onPressed: function(mouse) {
+                bridge.beginDrag(mouse.x, mouse.y)
+            }
+            onPositionChanged: function(mouse) {
+                if (dragArea.pressed)
+                    bridge.dragTo(mouse.x, mouse.y)
+            }
+            onReleased: bridge.endDrag()
+            onCanceled: bridge.endDrag()
+        }
+
         Row {
             anchors.fill: parent
             anchors.leftMargin: bridge.collapsed ? 0 : 14

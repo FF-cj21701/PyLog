@@ -3,7 +3,7 @@ import os
 from PySide6.QtWidgets import (QWidget, QScrollArea, QHBoxLayout, QVBoxLayout, QComboBox,
                                QPushButton, QSizePolicy, QMenu, QGraphicsOpacityEffect)
 from PySide6.QtCore import Qt, Signal, QEvent, QRect, QPoint, QPointF, QTimer, QObject, Property, Slot, QUrl
-from PySide6.QtGui import (QPainter, QColor, QFont, QPen, QAction)
+from PySide6.QtGui import (QPainter, QColor, QFont, QPen, QAction, QCursor)
 from PySide6.QtQuickWidgets import QQuickWidget
 import numpy as np
 from core.app_config import app_config
@@ -390,6 +390,21 @@ class FracturePickingBridge(QObject):
         if self.log_widget and hasattr(self.log_widget, "set_fracture_picking_enabled"):
             self.log_widget.set_fracture_picking_enabled(False)
 
+    @Slot(float, float)
+    def beginDrag(self, x, y):
+        if self.panel and hasattr(self.panel, "begin_drag"):
+            self.panel.begin_drag(x, y)
+
+    @Slot(float, float)
+    def dragTo(self, x, y):
+        if self.panel and hasattr(self.panel, "drag_to"):
+            self.panel.drag_to(x, y)
+
+    @Slot()
+    def endDrag(self):
+        if self.panel and hasattr(self.panel, "end_drag"):
+            self.panel.end_drag()
+
 
 class FracturePickingPanel(QQuickWidget):
     def __init__(self, parent=None):
@@ -397,6 +412,9 @@ class FracturePickingPanel(QQuickWidget):
         self.log_widget = parent
         self._expanded_size = (480, 365)
         self._collapsed_size = (128, 365)
+        self._drag_start_panel_pos = None
+        self._drag_start_pointer = None
+        self._user_moved = False
         self.bridge = FracturePickingBridge(self, parent)
         self.bridge.collapsedChanged.connect(self._on_collapsed_changed)
 
@@ -425,14 +443,67 @@ class FracturePickingPanel(QQuickWidget):
     def fit_to_parent(self):
         size = self._collapsed_size if self.bridge.collapsed else self._expanded_size
         self.setFixedSize(*size)
+        if self._user_moved:
+            self._clamp_to_parent()
 
     def update_theme(self):
         self.bridge.refresh_theme()
         self._apply_host_background()
         self.update()
 
-    def _on_collapsed_changed(self, collapsed):
-        self.setFixedSize(*(self._collapsed_size if collapsed else self._expanded_size))
+    def reset_position(self):
+        self._user_moved = False
         parent = self.parentWidget()
         if parent:
             self.move(max(8, parent.width() - self.width() - 28), 8)
+
+    def _bounded_pos(self, x, y):
+        parent = self.parentWidget()
+        if not parent:
+            return int(x), int(y)
+        margin = 8
+        max_x = max(margin, parent.width() - self.width() - margin)
+        max_y = max(margin, parent.height() - self.height() - margin)
+        return (
+            max(margin, min(int(round(x)), max_x)),
+            max(margin, min(int(round(y)), max_y)),
+        )
+
+    def _clamp_to_parent(self):
+        x, y = self._bounded_pos(self.x(), self.y())
+        self.move(x, y)
+
+    def begin_drag(self, x, y):
+        self._drag_start_panel_pos = self.pos()
+        global_pos = QCursor.pos()
+        if global_pos.isNull():
+            global_pos = self.mapToGlobal(QPoint(int(round(float(x))), int(round(float(y)))))
+        self._drag_start_pointer = global_pos
+        self._user_moved = True
+
+    def drag_to(self, x, y):
+        if self._drag_start_panel_pos is None or self._drag_start_pointer is None:
+            self.begin_drag(x, y)
+            return
+        global_pos = QCursor.pos()
+        if global_pos.isNull():
+            global_pos = self.mapToGlobal(QPoint(int(round(float(x))), int(round(float(y)))))
+        dx = global_pos.x() - self._drag_start_pointer.x()
+        dy = global_pos.y() - self._drag_start_pointer.y()
+        new_x = self._drag_start_panel_pos.x() + dx
+        new_y = self._drag_start_panel_pos.y() + dy
+        bounded_x, bounded_y = self._bounded_pos(new_x, new_y)
+        self.move(bounded_x, bounded_y)
+        self.raise_()
+
+    def end_drag(self):
+        self._drag_start_panel_pos = None
+        self._drag_start_pointer = None
+        self._clamp_to_parent()
+
+    def _on_collapsed_changed(self, collapsed):
+        self.setFixedSize(*(self._collapsed_size if collapsed else self._expanded_size))
+        if self._user_moved:
+            self._clamp_to_parent()
+        else:
+            self.reset_position()

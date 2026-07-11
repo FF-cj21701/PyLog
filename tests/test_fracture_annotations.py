@@ -41,6 +41,18 @@ def test_fracture_annotation_keeps_type_and_color():
     assert annotation["color"] == "#FF2D2D"
 
 
+def test_fracture_styles_include_bedding_type():
+    annotation = build_fracture_annotation(
+        [[0, 1000.0], [90, 1000.1], [180, 1000.2]],
+        fracture_type="Bedding",
+        color=FRACTURE_TYPE_STYLES["Bedding"]["color"],
+    )
+
+    assert FRACTURE_TYPE_STYLES["Bedding"]["label"] == "Bedding"
+    assert annotation["fracture_type"] == "Bedding"
+    assert annotation["color"] == "#52D273"
+
+
 def test_fracture_fit_rejects_incomplete_two_point_pick():
     import pytest
 

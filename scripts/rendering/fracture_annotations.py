@@ -11,6 +11,7 @@ MIN_FRACTURE_PREVIEW_POINTS = 2
 FRACTURE_TYPE_STYLES = {
     "Conductive": {"color": "#00E5FF", "label": "Conductive"},
     "Resistive": {"color": "#FF2D2D", "label": "Resistive"},
+    "Bedding": {"color": "#52D273", "label": "Bedding"},
 }
 
 

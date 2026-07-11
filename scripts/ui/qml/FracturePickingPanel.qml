@@ -236,7 +236,7 @@ Item {
                             PickCombo {
                                 width: parent.width - 118
                                 anchors.verticalCenter: parent.verticalCenter
-                                model: ["Conductive", "Resistive"]
+                                model: bridge.fractureTypeLabels
                                 onActivated: bridge.setFractureType(currentText)
                             }
                         }

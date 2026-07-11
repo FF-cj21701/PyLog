@@ -7,6 +7,7 @@ from PySide6.QtGui import (QPainter, QColor, QFont, QPen, QAction, QCursor)
 from PySide6.QtQuickWidgets import QQuickWidget
 import numpy as np
 from core.app_config import app_config
+from scripts.rendering.fracture_annotations import FRACTURE_TYPE_STYLES
 
 class QuickAddZone(QWidget):
     def __init__(self, log_widget, parent=None):
@@ -272,6 +273,10 @@ class FracturePickingBridge(QObject):
     @Property(bool, notify=collapsedChanged)
     def collapsed(self):
         return self._collapsed
+
+    @Property("QStringList", constant=True)
+    def fractureTypeLabels(self):
+        return [str(style.get("label", key)) for key, style in FRACTURE_TYPE_STYLES.items()]
 
     @Property(str, notify=themeChanged)
     def panelBg(self):

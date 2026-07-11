@@ -230,6 +230,7 @@ class FracturePickingBridge(QObject):
     currentTargetIndexChanged = Signal()
     collapsedChanged = Signal(bool)
     themeChanged = Signal()
+    boreholeDiameterChanged = Signal()
 
     def __init__(self, panel, log_widget):
         super().__init__(panel)
@@ -277,6 +278,12 @@ class FracturePickingBridge(QObject):
     @Property("QStringList", constant=True)
     def fractureTypeLabels(self):
         return [str(style.get("label", key)) for key, style in FRACTURE_TYPE_STYLES.items()]
+
+    @Property(str, notify=boreholeDiameterChanged)
+    def boreholeDiameterText(self):
+        if self.log_widget and hasattr(self.log_widget, "fracture_borehole_diameter_in"):
+            return f"{float(self.log_widget.fracture_borehole_diameter_in):g}"
+        return "8"
 
     @Property(str, notify=themeChanged)
     def panelBg(self):
@@ -360,6 +367,12 @@ class FracturePickingBridge(QObject):
         if self.log_widget and hasattr(self.log_widget, "set_fracture_target_track_index"):
             self.log_widget.set_fracture_target_track_index(index)
 
+    @Slot(str)
+    def setBoreholeDiameter(self, text):
+        if self.log_widget and hasattr(self.log_widget, "set_fracture_borehole_diameter_in"):
+            if self.log_widget.set_fracture_borehole_diameter_in(text):
+                self.boreholeDiameterChanged.emit()
+
     @Slot()
     def finish(self):
         if self.log_widget and hasattr(self.log_widget, "finish_current_fracture_pick"):
@@ -420,8 +433,8 @@ class FracturePickingPanel(QQuickWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.log_widget = parent
-        self._expanded_size = (480, 365)
-        self._collapsed_size = (128, 365)
+        self._expanded_size = (480, 430)
+        self._collapsed_size = (128, 430)
         self._drag_start_panel_pos = None
         self._drag_start_pointer = None
         self._user_moved = False

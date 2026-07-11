@@ -129,6 +129,25 @@ Item {
         }
     }
 
+    component PickField: TextField {
+        id: field
+        height: 34
+        font.pixelSize: 12
+        color: root.textColor
+        selectedTextColor: "#ffffff"
+        selectionColor: root.blueColor
+        verticalAlignment: TextInput.AlignVCenter
+        leftPadding: 12
+        rightPadding: 12
+
+        background: Rectangle {
+            radius: 6
+            color: root.inputBgColor
+            border.color: field.activeFocus ? root.blueColor : root.inputBorderColor
+            border.width: 1
+        }
+    }
+
     component InfoButton: Rectangle {
         id: infoButton
         property string label: ""
@@ -295,6 +314,55 @@ Item {
                                 model: bridge.targetLabels
                                 currentIndex: bridge.currentTargetIndex
                                 onActivated: bridge.setTargetIndex(index)
+                            }
+                        }
+
+                        Rectangle {
+                            width: parent.width
+                            height: 1
+                            color: root.dividerColor
+                        }
+
+                        Row {
+                            width: parent.width
+                            height: 50
+                            spacing: 22
+                            Text {
+                                width: 96
+                                height: parent.height
+                                text: "Borehole Dia."
+                                color: root.textColor
+                                font.pixelSize: 14
+                                font.bold: true
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                            }
+                            Row {
+                                width: parent.width - 118
+                                height: parent.height
+                                spacing: 8
+                                PickField {
+                                    id: boreholeDiameterField
+                                    width: parent.width - 28
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: bridge.boreholeDiameterText
+                                    inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                    validator: DoubleValidator {
+                                        bottom: 0.001
+                                        top: 999.0
+                                        decimals: 3
+                                        notation: DoubleValidator.StandardNotation
+                                    }
+                                    onEditingFinished: bridge.setBoreholeDiameter(text)
+                                }
+                                Text {
+                                    width: 20
+                                    height: parent.height
+                                    text: "in"
+                                    color: root.mutedColor
+                                    font.pixelSize: 12
+                                    verticalAlignment: Text.AlignVCenter
+                                }
                             }
                         }
 

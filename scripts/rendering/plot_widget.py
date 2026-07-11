@@ -199,6 +199,7 @@ class LogWidget(QWidget):
         self.fracture_pick_type = "Conductive"
         self.active_fracture_track = None
         self.fracture_target_track = None
+        self.fracture_borehole_diameter_in = 8.0
         
         # Use a per-plot thread pool so one window's template/image work
         # cannot starve unrelated plot windows via the global pool.
@@ -601,6 +602,30 @@ class LogWidget(QWidget):
             self.fracture_target_track = tracks[index]
             self._show_fracture_status(f"Fractures will display on: {self._fracture_track_label(self.fracture_target_track)}")
 
+    def set_fracture_borehole_diameter_in(self, value):
+        try:
+            diameter = float(str(value).strip())
+        except Exception:
+            self._show_fracture_status("Invalid borehole diameter. Keeping previous value.")
+            return False
+        if not math.isfinite(diameter) or diameter <= 0.0:
+            self._show_fracture_status("Invalid borehole diameter. Keeping previous value.")
+            return False
+        self.fracture_borehole_diameter_in = diameter
+        self._show_fracture_status(f"Borehole diameter set to {diameter:g} in.")
+        return True
+
+    def _fracture_borehole_diameter_for_depth_unit(self, depth_unit):
+        unit = str(depth_unit or "").strip().lower()
+        diameter_in = float(getattr(self, "fracture_borehole_diameter_in", 8.0))
+        if unit in {"m", "meter", "meters", "metre", "metres"}:
+            return diameter_in * 0.0254
+        if unit in {"ft", "feet", "foot"}:
+            return diameter_in / 12.0
+        if unit in {"in", "inch", "inches"}:
+            return diameter_in
+        return None
+
     def get_fracture_display_track(self, fallback=None):
         tracks = self._image_tracks_for_fracture_display()
         if self.fracture_target_track in tracks:
@@ -672,12 +697,14 @@ class LogWidget(QWidget):
             for annotation in track_annotations:
                 if not isinstance(annotation, dict):
                     continue
-                item = enrich_fracture_interpretation(annotation)
+                diameter = self._fracture_borehole_diameter_for_depth_unit(depth_unit)
+                item = enrich_fracture_interpretation(annotation, borehole_diameter=diameter)
                 item.setdefault("source_track_label", track_label)
                 item.setdefault("target_track_label", track_label)
                 item.setdefault("source_curve_id", image_info.get("curve_id"))
                 item.setdefault("source_curve_name", image_info.get("title") or image_info.get("name"))
                 item.setdefault("depth_unit", depth_unit)
+                item.setdefault("borehole_diameter_in", getattr(self, "fracture_borehole_diameter_in", 8.0))
                 annotations.append(item)
         return annotations
 

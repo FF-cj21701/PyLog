@@ -8,11 +8,24 @@ Item {
     height: 365
     clip: false
 
-    property color textColor: "#101828"
-    property color mutedColor: "#475467"
-    property color dividerColor: "#d9e0ea"
-    property color blueColor: "#2f7cdc"
-    property color dangerColor: "#e52620"
+    property color textColor: bridge.themeText
+    property color mutedColor: bridge.themeMuted
+    property color dividerColor: bridge.themeDivider
+    property color panelBgColor: bridge.panelBg
+    property color panelBorderColor: bridge.panelBorder
+    property color inputBgColor: bridge.inputBg
+    property color inputBorderColor: bridge.inputBorder
+    property color buttonBgColor: bridge.buttonBg
+    property color buttonHoverColor: bridge.buttonHover
+    property color blueColor: bridge.primaryColor
+    property color blueHoverColor: bridge.primaryHoverColor
+    property color dangerColor: bridge.dangerColor
+    property color accentLightColor: bridge.accentLightColor
+
+    Rectangle {
+        anchors.fill: parent
+        color: root.panelBgColor
+    }
 
     component ToolButton: Rectangle {
         id: buttonRoot
@@ -24,8 +37,8 @@ Item {
         width: parent ? parent.width : 110
         height: primary ? 58 : 32
         radius: 7
-        color: primary ? root.blueColor : (mouseArea.containsMouse ? "#f3f7fd" : "#ffffff")
-        border.color: primary ? "#246cc8" : "#d3dbe6"
+        color: primary ? root.blueColor : (mouseArea.containsMouse ? root.buttonHoverColor : root.buttonBgColor)
+        border.color: primary ? root.blueHoverColor : root.inputBorderColor
         border.width: 1
 
         Text {
@@ -54,8 +67,8 @@ Item {
 
         background: Rectangle {
             radius: 6
-            color: "#ffffff"
-            border.color: combo.activeFocus ? root.blueColor : "#cdd6e2"
+            color: root.inputBgColor
+            border.color: combo.activeFocus ? root.blueColor : root.inputBorderColor
             border.width: 1
         }
 
@@ -73,7 +86,7 @@ Item {
             x: combo.width - width - 12
             y: (combo.height - height) / 2
             text: "v"
-            color: "#40516a"
+            color: root.mutedColor
             font.pixelSize: 12
             font.bold: true
         }
@@ -90,8 +103,8 @@ Item {
                 currentIndex: combo.highlightedIndex
             }
             background: Rectangle {
-                color: "#ffffff"
-                border.color: "#cdd6e2"
+                color: root.inputBgColor
+                border.color: root.inputBorderColor
                 radius: 6
             }
         }
@@ -103,7 +116,7 @@ Item {
 
             contentItem: Text {
                 text: modelData
-                color: highlighted ? "#1f5faf" : root.textColor
+                color: highlighted ? root.blueColor : root.textColor
                 font.pixelSize: 12
                 verticalAlignment: Text.AlignVCenter
                 elide: Text.ElideRight
@@ -111,7 +124,7 @@ Item {
 
             background: Rectangle {
                 radius: 4
-                color: highlighted ? "#eaf2fd" : "transparent"
+                color: highlighted ? root.accentLightColor : "transparent"
             }
         }
     }
@@ -123,8 +136,8 @@ Item {
         width: bridge.collapsed ? 128 : root.width
         height: root.height
         radius: 10
-        color: "#f8fafc"
-        border.color: "#ccd5e0"
+        color: root.panelBgColor
+        border.color: root.panelBorderColor
         border.width: 1
         clip: true
 

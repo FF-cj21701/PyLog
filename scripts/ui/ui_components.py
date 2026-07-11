@@ -228,6 +228,7 @@ class FracturePickingBridge(QObject):
     targetLabelsChanged = Signal()
     currentTargetIndexChanged = Signal()
     collapsedChanged = Signal(bool)
+    themeChanged = Signal()
 
     def __init__(self, panel, log_widget):
         super().__init__(panel)
@@ -236,6 +237,29 @@ class FracturePickingBridge(QObject):
         self._target_labels = ["Auto"]
         self._current_target_index = 0
         self._collapsed = False
+        self._theme = {}
+        self.refresh_theme()
+
+    def _theme_color(self, token, default):
+        return app_config.get_theme_color(token, default) or default
+
+    def refresh_theme(self):
+        self._theme = {
+            "panelBg": self._theme_color("dialog_bg", "#FFFFFF"),
+            "panelBorder": self._theme_color("border_std", "#D0D0D0"),
+            "text": self._theme_color("text_main", "#101828"),
+            "muted": self._theme_color("text_dim", "#475467"),
+            "divider": self._theme_color("border_std", "#D9E0EA"),
+            "inputBg": self._theme_color("input_bg", "#FFFFFF"),
+            "inputBorder": self._theme_color("input_border", "#CDD6E2"),
+            "buttonBg": self._theme_color("button_bg", "#F0F0F0"),
+            "buttonHover": self._theme_color("button_hover", "#E0E0E0"),
+            "primary": self._theme_color("primary", "#2F7CDC"),
+            "primaryHover": self._theme_color("primary_hover", "#246CC8"),
+            "danger": self._theme_color("danger", "#E81123"),
+            "accentLight": self._theme_color("accent_light", "#EAF2FD"),
+        }
+        self.themeChanged.emit()
 
     @Property("QStringList", notify=targetLabelsChanged)
     def targetLabels(self):
@@ -248,6 +272,58 @@ class FracturePickingBridge(QObject):
     @Property(bool, notify=collapsedChanged)
     def collapsed(self):
         return self._collapsed
+
+    @Property(str, notify=themeChanged)
+    def panelBg(self):
+        return self._theme["panelBg"]
+
+    @Property(str, notify=themeChanged)
+    def panelBorder(self):
+        return self._theme["panelBorder"]
+
+    @Property(str, notify=themeChanged)
+    def themeText(self):
+        return self._theme["text"]
+
+    @Property(str, notify=themeChanged)
+    def themeMuted(self):
+        return self._theme["muted"]
+
+    @Property(str, notify=themeChanged)
+    def themeDivider(self):
+        return self._theme["divider"]
+
+    @Property(str, notify=themeChanged)
+    def inputBg(self):
+        return self._theme["inputBg"]
+
+    @Property(str, notify=themeChanged)
+    def inputBorder(self):
+        return self._theme["inputBorder"]
+
+    @Property(str, notify=themeChanged)
+    def buttonBg(self):
+        return self._theme["buttonBg"]
+
+    @Property(str, notify=themeChanged)
+    def buttonHover(self):
+        return self._theme["buttonHover"]
+
+    @Property(str, notify=themeChanged)
+    def primaryColor(self):
+        return self._theme["primary"]
+
+    @Property(str, notify=themeChanged)
+    def primaryHoverColor(self):
+        return self._theme["primaryHover"]
+
+    @Property(str, notify=themeChanged)
+    def dangerColor(self):
+        return self._theme["danger"]
+
+    @Property(str, notify=themeChanged)
+    def accentLightColor(self):
+        return self._theme["accentLight"]
 
     def set_target_tracks(self, labels, current_index):
         labels = [str(label) for label in (labels or ["Auto"])]
@@ -326,12 +402,22 @@ class FracturePickingPanel(QQuickWidget):
 
         self.setObjectName("FracturePickingPanel")
         self.setResizeMode(QQuickWidget.SizeRootObjectToView)
-        self.setClearColor(QColor(Qt.transparent))
+        self._apply_host_background()
         self.setAttribute(Qt.WA_AlwaysStackOnTop, True)
         self.rootContext().setContextProperty("bridge", self.bridge)
         qml_path = os.path.join(os.path.dirname(__file__), "qml", "FracturePickingPanel.qml")
         self.setSource(QUrl.fromLocalFile(qml_path))
         self.setFixedSize(*self._expanded_size)
+
+    def _apply_host_background(self):
+        bg = QColor(self.bridge.panelBg)
+        if not bg.isValid():
+            bg = app_config.get_theme_qcolor("dialog_bg", "#FFFFFF")
+        self.setClearColor(bg)
+        self.setAttribute(Qt.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WA_NoSystemBackground, False)
+        self.setAttribute(Qt.WA_OpaquePaintEvent, False)
+        self.setStyleSheet(f"background: {bg.name()}; border: none;")
 
     def set_target_tracks(self, labels, current_index):
         self.bridge.set_target_tracks(labels, current_index)
@@ -339,6 +425,11 @@ class FracturePickingPanel(QQuickWidget):
     def fit_to_parent(self):
         size = self._collapsed_size if self.bridge.collapsed else self._expanded_size
         self.setFixedSize(*size)
+
+    def update_theme(self):
+        self.bridge.refresh_theme()
+        self._apply_host_background()
+        self.update()
 
     def _on_collapsed_changed(self, collapsed):
         self.setFixedSize(*(self._collapsed_size if collapsed else self._expanded_size))

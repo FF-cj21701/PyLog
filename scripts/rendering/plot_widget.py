@@ -870,6 +870,9 @@ class LogWidget(QWidget):
         # Floating Scrollbar (Horizontal)
         if hasattr(self, 'h_sb_mgr'):
             self.h_sb_mgr.update_theme()
+
+        if hasattr(self, 'fracture_panel'):
+            self.fracture_panel.update_theme()
             
         # Propagate to all sub-tracks
         for track in getattr(self, 'track_containers', []):

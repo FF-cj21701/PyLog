@@ -4,14 +4,14 @@ from typing import Any, Dict, Iterable, List, Sequence, Tuple
 import numpy as np
 
 
-DEFAULT_FRACTURE_COLOR = "#00E5FF"
+DEFAULT_FRACTURE_COLOR = "#FF2D2D"
 DEFAULT_FRACTURE_WIDTH = 2.0
 MIN_FRACTURE_PICK_POINTS = 3
 MIN_FRACTURE_PREVIEW_POINTS = 2
 FRACTURE_TYPE_STYLES = {
-    "Conductive": {"color": "#00E5FF", "label": "Conductive"},
+    "Conductive": {"color": "#0099CC", "label": "Conductive"},
     "Resistive": {"color": "#FF2D2D", "label": "Resistive"},
-    "Bedding": {"color": "#52D273", "label": "Bedding"},
+    "Bedding": {"color": "#16A951", "label": "Bedding"},
 }
 
 

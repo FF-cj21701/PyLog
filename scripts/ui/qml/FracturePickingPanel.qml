@@ -375,16 +375,22 @@ Item {
                         Row {
                             width: parent.width
                             height: 34
-                            spacing: 22
+                            spacing: 8
                             Item {
                                 width: 96
                                 height: parent.height
                             }
                             InfoButton {
-                                width: parent.width - 118
+                                width: (parent.width - 118 - 8) / 2
                                 anchors.verticalCenter: parent.verticalCenter
                                 label: "Results"
                                 onClicked: bridge.showResults()
+                            }
+                            InfoButton {
+                                width: (parent.width - 118 - 8) / 2
+                                anchors.verticalCenter: parent.verticalCenter
+                                label: "Tadpole"
+                                onClicked: bridge.showTadpoleTrack()
                             }
                         }
                     }
@@ -419,11 +425,6 @@ Item {
                     ToolButton {
                         label: "Undo"
                         onClicked: bridge.undo()
-                    }
-
-                    ToolButton {
-                        label: "Unselect"
-                        onClicked: bridge.clearSelection()
                     }
 
                     ToolButton {

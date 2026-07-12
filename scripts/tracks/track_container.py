@@ -3,17 +3,19 @@ import numpy as np
 from typing import Optional, List, Dict, Any, Union, Type
 from PySide6.QtWidgets import QFrame, QMenu, QStyleOption, QStyle, QSplitter, QApplication
 from PySide6.QtCore import Qt, QRectF, QRect, QPointF, Signal, QTimer
-from PySide6.QtGui import QPainter, QPen, QColor, QAction, QBrush
+from PySide6.QtGui import QPainter, QPen, QColor, QAction, QBrush, QFont
 from core.app_config import app_config
 
 from ..utils.colormap_utils import get_standard_colormap
 from ..rendering.plot_constants import AXIS_WIDTH
 from ..ui.plot_dialogs import UnifiedSettingsDialog
 from ..rendering.plot_components import (InteractivePlotWidget, HeaderWidget, SelectionOverlay, PainterDepthTrack)
+from ..rendering.track_widgets import TadpoleTrackWidget
 from ..rendering.image_manager import ImageTrackManager
 from ..rendering.fill_manager import FillManager
 from ..rendering.curve_manager import CurveManager
 from ..rendering.fracture_annotations import (
+    FRACTURE_TYPE_STYLES,
     MIN_FRACTURE_PREVIEW_POINTS,
     MIN_FRACTURE_PICK_POINTS,
     build_fracture_annotation,
@@ -171,12 +173,15 @@ class BaseTrackContainer(QFrame):
 
         add_depth_act = QAction("Add Depth Track", self)
         add_empty_act = QAction("Add Empty Track", self)
+        add_tadpole_act = QAction("Add Tadpole Track", self)
         lw = self.find_log_widget()
         if lw:
             add_depth_act.triggered.connect(lambda: lw.add_depth_track())
             add_empty_act.triggered.connect(lambda: lw.add_empty_track())
+            add_tadpole_act.triggered.connect(lambda: lw.show_tadpole_track() if hasattr(lw, "show_tadpole_track") else None)
         menu.addAction(add_depth_act)
         menu.addAction(add_empty_act)
+        menu.addAction(add_tadpole_act)
 
         fracture_act = QAction("Fracture Picking", self)
         fracture_act.triggered.connect(self.enter_fracture_picking_mode)
@@ -208,6 +213,15 @@ class BaseTrackContainer(QFrame):
         p.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
     
     def mousePressEvent(self, event):
+        log_widget = self.find_log_widget()
+        if (
+            event.button() == Qt.LeftButton
+            and log_widget
+            and getattr(log_widget, "fracture_picking_enabled", False)
+            and not hasattr(self, "fracture_annotations")
+            and hasattr(log_widget, "clear_fracture_interaction")
+        ):
+            log_widget.clear_fracture_interaction()
         self.interaction_handler.handle_mouse_press(event)
         super().mousePressEvent(event)
     
@@ -530,6 +544,183 @@ class DepthTrackContainer(BaseTrackContainer):
         self.header.update()
         self.plot_widget.update()
 
+
+class TadpoleLegendHeader(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.items = [{"name": "Tadpole"}]
+        self.fracture_types = []
+        self.is_auto_height = False
+        self.base_row_height = 122
+        self.setFixedHeight(122)
+        self.update_theme()
+
+    def update_theme(self):
+        self._bg = app_config.get_theme_qcolor("header_glass")
+        self._border = app_config.get_theme_qcolor("text_main")
+        self._text = app_config.get_theme_qcolor("text_main")
+        self._muted = app_config.get_theme_qcolor("text_dim")
+        self.update()
+
+    def set_title(self, title):
+        self.items[0]["name"] = title
+        self.update()
+
+    def set_unit(self, unit):
+        self.items[0]["unit"] = unit
+        self.update()
+
+    def set_range_visible(self, visible):
+        self.items[0]["range_visible"] = bool(visible)
+        self.update()
+
+    def set_fracture_types(self, fracture_types):
+        ordered = []
+        for key in ("Conductive", "Bedding", "Resistive"):
+            if key in fracture_types:
+                ordered.append(key)
+        for key in fracture_types:
+            if key not in ordered:
+                ordered.append(key)
+        if ordered != self.fracture_types:
+            self.fracture_types = ordered
+            self.update()
+
+    def adjust_height(self):
+        log_w = self.find_log_widget()
+        if log_w:
+            log_w.sync_header_heights()
+
+    def find_log_widget(self):
+        p = self.parent()
+        while p:
+            if hasattr(p, "sync_header_heights"):
+                return p
+            p = p.parent()
+        return None
+
+    def _draw_sample(self, painter, x, y, color, scale=1.0):
+        c = QColor(color)
+        pen = QPen(c, max(1.4, 1.8 * scale))
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.setBrush(QBrush(c))
+        painter.drawLine(QPointF(x, y), QPointF(x + 8 * scale, y - 11 * scale))
+        painter.drawEllipse(QPointF(x, y), 3.5 * scale, 3.5 * scale)
+
+    def _draw(self, painter, rect, scale=1.0, draw_border=True):
+        painter.save()
+        painter.translate(rect.topLeft())
+        w, h = rect.width(), rect.height()
+        painter.fillRect(0, 0, w, h, self._bg)
+        if draw_border:
+            painter.setPen(QPen(self._border, max(1.0, 1.0 * scale)))
+            painter.drawLine(QPointF(0, 0), QPointF(w, 0))
+            painter.drawLine(QPointF(0, h - 1), QPointF(w, h - 1))
+
+        font = QFont("Arial")
+        font.setPixelSize(int(11 * scale))
+        painter.setFont(font)
+        label_map = {
+            "Conductive": "Conductive fracture",
+            "Bedding": "Bedding",
+            "Resistive": "Resistive fracture",
+        }
+        labels = [(label_map.get(key, key), key) for key in self.fracture_types]
+        row_step = 27 * scale
+        y = h - 50 * scale
+        for label, key in reversed(labels):
+            color = FRACTURE_TYPE_STYLES.get(key, {}).get("color", app_config.get_theme_color("accent"))
+            self._draw_sample(painter, 12 * scale, y, color, scale=scale)
+            painter.setPen(QPen(QColor(color), max(1.0, 1.0 * scale)))
+            painter.drawText(QRectF(31 * scale, y - 12 * scale, w - 35 * scale, 20 * scale), Qt.AlignLeft | Qt.AlignVCenter, label)
+            y -= row_step
+
+        painter.setPen(QPen(QColor("#ff2d2d"), max(1.0, 1.0 * scale)))
+        title_font = QFont("Arial")
+        title_font.setPixelSize(int(12 * scale))
+        painter.setFont(title_font)
+        title_rect = QRectF(0, h - 35 * scale, w, 14 * scale)
+        painter.drawText(title_rect, Qt.AlignCenter, "Dip/deg")
+
+        scale_font = QFont("Arial")
+        scale_font.setPixelSize(int(10 * scale))
+        painter.setFont(scale_font)
+        plot_w = max(1.0, w - 1.0)
+        label_y = h - 19 * scale
+        label_w = 24 * scale
+        for dip in (0, 30, 60, 90):
+            x = dip / 90.0 * plot_w
+            if dip == 0:
+                x += 2.0 * scale + label_w / 2.0
+            elif dip == 90:
+                x -= 2.0 * scale + label_w / 2.0
+            painter.drawText(
+                QRectF(x - label_w / 2.0, label_y, label_w, 16 * scale),
+                Qt.AlignHCenter | Qt.AlignBottom,
+                str(dip),
+            )
+        painter.restore()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        self._draw(painter, self.rect())
+        painter.end()
+
+    def render_to(self, painter, rect, scale=1.0, scale_text=None, draw_border=True):
+        self._draw(painter, rect, scale=scale, draw_border=draw_border)
+
+
+class TadpoleTrackContainer(BaseTrackContainer):
+    """Track container for fracture tadpole interpretation display."""
+    def __init__(self, parent=None):
+        super().__init__(parent, plot_widget_class=TadpoleTrackWidget)
+        old_header = self.header
+        old_header.hide()
+        old_header.deleteLater()
+        self.header = TadpoleLegendHeader(self)
+        self.header.raise_()
+        self.track_name = "Tadpole"
+        self.setMinimumWidth(90)
+
+    def set_annotations(self, annotations):
+        self.plot_widget.set_annotations(annotations)
+        types = []
+        for annotation in annotations or []:
+            fracture_type = annotation.get("fracture_type")
+            if fracture_type and fracture_type not in types:
+                types.append(fracture_type)
+        if hasattr(self.header, "set_fracture_types"):
+            self.header.set_fracture_types(types)
+
+    def refresh_from_fractures(self):
+        lw = self.log_widget or self.find_log_widget()
+        annotations = lw.collect_fracture_annotations() if lw and hasattr(lw, "collect_fracture_annotations") else []
+        self.set_annotations(annotations)
+
+    def get_state(self):
+        state = super().get_state()
+        state["type"] = "tadpole"
+        return state
+
+    def add_curve(self, data, depth, info, rgb_full_bg=None):
+        pass
+
+    def add_curve_at_index(self, data, depth, info, index, rgb_full_bg=None):
+        pass
+
+    def remove_curve_at(self, idx):
+        pass
+
+    def apply_curve_settings(self, idx, settings, trigger_others=True, reload_data=True):
+        pass
+
+    def _refresh_z_orders(self):
+        pass
+
+    def _update_grid_visibility(self):
+        pass
+
 class CurveTrackContainer(BaseTrackContainer):
     """Standard track container for 1D log curves."""
     def __init__(self, parent=None):
@@ -743,6 +934,7 @@ class ImageTrackContainer(BaseTrackContainer):
         self._fracture_pick_points = []
         self._fracture_preview_item = None
         self._fracture_pick_scatter = None
+        self._fracture_drag_state = None
         self.plot_widget.fracture_annotations = self.fracture_annotations
         
     def add_curve(self, data: np.ndarray, depth: np.ndarray, info: Dict[str, Any], rgb_full_bg: Optional[QColor] = None) -> None:
@@ -962,6 +1154,10 @@ class ImageTrackContainer(BaseTrackContainer):
             annotation["source_curve_name"] = info.get("name")
         annotation["source_track_id"] = id(self)
         target_track.add_fracture_annotation(annotation)
+        if lw:
+            for track in getattr(lw, "track_containers", []):
+                if isinstance(track, TadpoleTrackContainer):
+                    track.refresh_from_fractures()
         self._fracture_pick_points = []
         self._clear_fracture_preview()
         self.plot_widget.update()
@@ -1056,14 +1252,41 @@ class ImageTrackContainer(BaseTrackContainer):
         hit_index = self._fracture_index_at_event(event, plot_widget)
         if hit_index is not None:
             append = bool(event.modifiers() & Qt.ControlModifier)
-            if lw and not append and hasattr(lw, "clear_fracture_selection"):
+            already_selected = hit_index in self._selected_fracture_indexes
+            if lw and not append and not already_selected and hasattr(lw, "clear_fracture_selection"):
                 lw.clear_fracture_selection()
-            self._toggle_fracture_selection(
-                hit_index,
-                append=append,
-            )
+            if append or not already_selected:
+                self._toggle_fracture_selection(
+                    hit_index,
+                    append=append,
+                )
+            else:
+                self._fracture_pick_points = []
+                self._clear_fracture_preview()
+                self._refresh_fracture_item_styles()
             if lw and hasattr(lw, "set_active_fracture_track"):
                 lw.set_active_fracture_track(self)
+            if hit_index in self._selected_fracture_indexes and not append:
+                start_depth = self._event_depth(event, plot_widget)
+                if start_depth is not None:
+                    self._fracture_drag_state = {
+                        "start_depth": start_depth,
+                        "indexes": sorted(self._selected_fracture_indexes),
+                        "start_offsets": {
+                            i: float(self.fracture_annotations[i].get("offset", 0.0))
+                            for i in self._selected_fracture_indexes
+                            if 0 <= i < len(self.fracture_annotations)
+                        },
+                        "start_points": {
+                            i: [
+                                [float(point[0]), float(point[1])]
+                                for point in self.fracture_annotations[i].get("points", [])
+                                if len(point) >= 2
+                            ]
+                            for i in self._selected_fracture_indexes
+                            if 0 <= i < len(self.fracture_annotations)
+                        },
+                    }
             return True
         if lw and hasattr(lw, "clear_fracture_selection"):
             lw.clear_fracture_selection()
@@ -1082,6 +1305,39 @@ class ImageTrackContainer(BaseTrackContainer):
             return True
         self._fracture_pick_points.append([x, y])
         self._update_fracture_preview()
+        return True
+
+    def handle_fracture_pick_mouse_move(self, event, plot_widget):
+        if not self._fracture_drag_state:
+            return False
+        current_depth = self._event_depth(event, plot_widget)
+        if current_depth is None:
+            return True
+        delta = current_depth - self._fracture_drag_state["start_depth"]
+        for index in self._fracture_drag_state["indexes"]:
+            if not (0 <= index < len(self.fracture_annotations)):
+                continue
+            annotation = self.fracture_annotations[index]
+            start_offset = self._fracture_drag_state["start_offsets"].get(index)
+            if start_offset is None:
+                continue
+            annotation["offset"] = start_offset + delta
+            annotation["center_depth"] = annotation["offset"]
+            if index in self._fracture_drag_state["start_points"]:
+                annotation["points"] = [
+                    [point[0], point[1] + delta]
+                    for point in self._fracture_drag_state["start_points"][index]
+                ]
+            self._update_fracture_item(index)
+        self.plot_widget.update()
+        self._refresh_tadpole_tracks()
+        return True
+
+    def handle_fracture_pick_mouse_release(self, event, plot_widget):
+        if not self._fracture_drag_state:
+            return False
+        self._fracture_drag_state = None
+        self._refresh_tadpole_tracks()
         return True
 
     def handle_fracture_pick_key(self, event):
@@ -1113,6 +1369,23 @@ class ImageTrackContainer(BaseTrackContainer):
             return lw.get_fracture_pick_style()
         return {"fracture_type": "Conductive", "color": "#00E5FF", "line_width": 2.0}
 
+    def _event_depth(self, event, plot_widget):
+        vb = plot_widget.getViewBox()
+        if not vb:
+            return None
+        scene_pos = plot_widget.mapToScene(event.position().toPoint())
+        view_pos = vb.mapSceneToView(scene_pos)
+        y = float(view_pos.y())
+        return y if np.isfinite(y) else None
+
+    def _refresh_tadpole_tracks(self):
+        lw = self.log_widget or self.find_log_widget()
+        if not lw:
+            return
+        for track in getattr(lw, "track_containers", []):
+            if isinstance(track, TadpoleTrackContainer):
+                track.refresh_from_fractures()
+
     def refresh_fracture_preview_style(self):
         if self._fracture_pick_points:
             self._update_fracture_preview()
@@ -1125,6 +1398,20 @@ class ImageTrackContainer(BaseTrackContainer):
         self.plot_widget.addItem(item)
         self._fracture_items.append(item)
         return item
+
+    def _update_fracture_item(self, index):
+        if not (0 <= index < len(self.fracture_annotations)):
+            return
+        if not (0 <= index < len(self._fracture_items)):
+            return
+        item = self._fracture_items[index]
+        if item is None:
+            return
+        x, y = sinusoidal_fracture_xy(self.fracture_annotations[index])
+        try:
+            item.setData(x, y)
+        except Exception:
+            pass
 
     def _fracture_pen(self, annotation, selected=False):
         width = float(annotation.get("line_width", 2.0))

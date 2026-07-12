@@ -94,7 +94,10 @@ class TrackSpacer(QWidget):
     
     def mousePressEvent(self, event):
         log_widget = self.find_log_widget()
-        if log_widget: log_widget.deselect_all_tracks()
+        if log_widget:
+            log_widget.deselect_all_tracks()
+            if hasattr(log_widget, "clear_fracture_interaction"):
+                log_widget.clear_fracture_interaction()
         super().mousePressEvent(event)
 
 class CustomScrollArea(QScrollArea):
@@ -407,6 +410,11 @@ class FracturePickingBridge(QObject):
     def showResults(self):
         if self.log_widget and hasattr(self.log_widget, "show_fracture_results"):
             self.log_widget.show_fracture_results()
+
+    @Slot()
+    def showTadpoleTrack(self):
+        if self.log_widget and hasattr(self.log_widget, "show_tadpole_track"):
+            self.log_widget.show_tadpole_track()
 
     @Slot()
     def exitMode(self):

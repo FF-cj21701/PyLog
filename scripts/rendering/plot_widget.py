@@ -18,7 +18,7 @@ from ..rendering.plot_components import (InteractivePlotWidget, HeaderWidget, Se
 from ..ui.ui_components import (FloatingScaleControl, FloatingHeaderToggle, FracturePickingPanel, QuickAddZone, TrackSpacer, CustomScrollArea)
 from ..rendering.fracture_annotations import FRACTURE_TYPE_STYLES, enrich_fracture_interpretation
 from ..data.export_manager import LogExporter
-from ..tracks.track_container import BaseTrackContainer, DepthTrackContainer, CurveTrackContainer, ImageTrackContainer
+from ..tracks.track_container import BaseTrackContainer, DepthTrackContainer, CurveTrackContainer, ImageTrackContainer, TadpoleTrackContainer
 from ..rendering.scroll_manager import ScrollManager
 
 # --- Main Widget ---
@@ -665,6 +665,7 @@ class LogWidget(QWidget):
             if hasattr(track, "delete_selected_fractures"):
                 total += track.delete_selected_fractures()
         if total:
+            self.refresh_tadpole_tracks()
             self._show_fracture_status(f"Deleted {total} selected fracture(s).")
         else:
             self._show_fracture_status("Select fracture lines before deleting.")
@@ -675,11 +676,17 @@ class LogWidget(QWidget):
             if hasattr(track, "clear_fracture_selection"):
                 track.clear_fracture_selection()
 
+    def clear_fracture_interaction(self):
+        self.cancel_current_fracture_pick(show_message=False)
+        self.clear_fracture_selection()
+        self._show_fracture_status("Fracture selection cleared.")
+
     def clear_fracture_annotations(self):
         for track in self.track_containers:
             if hasattr(track, "clear_fracture_annotations"):
                 track.clear_fracture_annotations()
         self.cancel_current_fracture_pick(show_message=False)
+        self.refresh_tadpole_tracks()
         self._show_fracture_status("Fracture picks cleared.")
 
     def collect_fracture_annotations(self):
@@ -765,6 +772,7 @@ class LogWidget(QWidget):
         for annotation in annotations:
             track = by_label.get(annotation.get("target_track_label")) or target_track
             track.add_fracture_annotation(annotation)
+        self.refresh_tadpole_tracks()
         self._show_fracture_status(f"Loaded {len(annotations)} fracture result(s).")
         return annotations
 
@@ -782,6 +790,27 @@ class LogWidget(QWidget):
         self.fracture_results_dialog.raise_()
         self.fracture_results_dialog.activateWindow()
         return self.fracture_results_dialog
+
+    def show_tadpole_track(self):
+        tadpole_track = next((track for track in self.track_containers if isinstance(track, TadpoleTrackContainer)), None)
+        if tadpole_track is None:
+            tadpole_track = TadpoleTrackContainer(self)
+            if hasattr(self, 'header_toggle'):
+                tadpole_track.header.setVisible(not self.header_toggle.isChecked())
+            self._add_track_to_layout(tadpole_track, width=150)
+        tadpole_track.refresh_from_fractures()
+        master_vb = self.get_master_viewbox()
+        if master_vb:
+            min_y, max_y = master_vb.viewRange()[1]
+            tadpole_track.sync_viewboxes(min_y, max_y)
+        tadpole_track.raise_()
+        self._show_fracture_status("Tadpole track refreshed.")
+        return tadpole_track
+
+    def refresh_tadpole_tracks(self):
+        for track in self.track_containers:
+            if isinstance(track, TadpoleTrackContainer):
+                track.refresh_from_fractures()
 
     def _show_fracture_status(self, message):
         try:
@@ -856,6 +885,14 @@ class LogWidget(QWidget):
             track.resize(60, track.height())
             track.setMinimumWidth(60)
             self._add_track_to_layout(track, index=index, width=60)
+        elif t_type == "tadpole":
+            track = TadpoleTrackContainer(self)
+            track.track_name = track_state.get("name") or "Tadpole"
+            if hasattr(self, 'header_toggle'):
+                default_visible = not self.header_toggle.isChecked()
+                track.header.setVisible(track_state.get("header_visible", default_visible))
+            self._add_track_to_layout(track, index=index, width=width)
+            track.refresh_from_fractures()
         else:
             is_accum = track_state.get("is_accum_fill", False)
             has_image = any(c.get("is_image", False) for c in track_state.get("curves", []))

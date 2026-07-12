@@ -51,7 +51,7 @@ def test_fracture_styles_include_bedding_type():
 
     assert FRACTURE_TYPE_STYLES["Bedding"]["label"] == "Bedding"
     assert annotation["fracture_type"] == "Bedding"
-    assert annotation["color"] == "#52D273"
+    assert annotation["color"] == FRACTURE_TYPE_STYLES["Bedding"]["color"]
 
 
 def test_fracture_fit_rejects_incomplete_two_point_pick():

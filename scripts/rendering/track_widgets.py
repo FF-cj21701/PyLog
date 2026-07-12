@@ -4,7 +4,7 @@ import math
 from typing import Tuple, Optional, Any, Union, Dict, List
 from PySide6.QtWidgets import (QWidget, QScrollArea, QPushButton, QComboBox, QHBoxLayout, 
                                QGraphicsOpacityEffect, QMenu, QSizePolicy, QGraphicsItem)
-from PySide6.QtCore import Qt, QRectF, QRect, QPointF, Signal, QEvent, QObject
+from PySide6.QtCore import Qt, QRectF, QRect, QPoint, QPointF, Signal, QEvent, QObject
 from PySide6.QtGui import (QPainter, QPen, QFont, QColor, QBrush, QImage, QPainterPath, QPixmap, QLinearGradient, QPolygonF)
 from ..utils.colormap_utils import get_standard_colormap
 from ..utils.plot_style_utils import DEFAULT_NULL_COLOR, normalize_fill_style
@@ -13,7 +13,7 @@ from .image_manager import ImageTrackManager
 from core.app_config import app_config
 
 from .graphics_items import get_physical_grid_steps, VerticalLoggingCurveItem, CachedGridItem
-from .fracture_annotations import sinusoidal_fracture_xy
+from .fracture_annotations import FRACTURE_TYPE_STYLES, sinusoidal_fracture_xy
 
 class PainterDepthTrack(QWidget):
     """
@@ -257,6 +257,201 @@ class PainterDepthTrack(QWidget):
     def setXRange(self, *args, **kwargs): pass
     def addItem(self, *args, **kwargs): pass
     def getViewBox(self): return None
+
+
+class _TadpoleViewBox:
+    def __init__(self, owner):
+        self.owner = owner
+        self._y_min = 0.0
+        self._y_max = 1.0
+
+    def setYRange(self, y_min, y_max, padding=0):
+        try:
+            y_min = float(y_min)
+            y_max = float(y_max)
+        except Exception:
+            return
+        if y_max <= y_min:
+            y_max = y_min + 1.0
+        changed = abs(y_min - self._y_min) > 1e-9 or abs(y_max - self._y_max) > 1e-9
+        self._y_min = y_min
+        self._y_max = y_max
+        if changed:
+            self.owner.update()
+
+    def setLimits(self, *args, **kwargs):
+        pass
+
+    def viewRange(self):
+        return [[0.0, 90.0], [self._y_min, self._y_max]]
+
+
+class TadpoleTrackWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.annotations = []
+        self.curves = []
+        self.curve_viewboxes = []
+        self.show_grid_x = True
+        self.show_grid_y = True
+        self._viewbox = _TadpoleViewBox(self)
+        self.update_theme()
+
+    def update_theme(self):
+        self._bg_brush = QBrush(app_config.get_theme_qcolor("plot_bg"))
+        self._grid_pen = QPen(app_config.get_theme_qcolor("grid_major"), 0.6)
+        self._minor_grid_pen = QPen(app_config.get_theme_qcolor("grid_minor"), 0.4)
+        self._border_pen = QPen(app_config.get_theme_qcolor("track_divider"), 1)
+        self._text_pen = QPen(app_config.get_theme_qcolor("text_dim"), 1)
+        self.update()
+
+    def set_annotations(self, annotations):
+        self.annotations = [dict(item) for item in (annotations or [])]
+        self.update()
+
+    def getViewBox(self):
+        return self._viewbox
+
+    def setYRange(self, y_min, y_max, padding=0):
+        self._viewbox.setYRange(y_min, y_max, padding=padding)
+
+    def set_grid_style(self, x, y):
+        self.show_grid_x = bool(x)
+        self.show_grid_y = bool(y)
+        self.update()
+
+    def clear(self):
+        self.annotations = []
+        self.update()
+
+    def setFrameShape(self, *args):
+        pass
+
+    def _depth_to_y(self, depth, min_y, max_y, height):
+        span = max_y - min_y
+        if span <= 0:
+            return None
+        return (float(depth) - min_y) / span * height
+
+    def _draw_grid(self, painter, width, height, min_y, max_y, scale=1.0):
+        if self.show_grid_x:
+            plot_w = max(1.0, width - 1.0)
+            for dip in range(10, 90, 10):
+                x = dip / 90.0 * plot_w
+                is_major = dip in (30, 60)
+                color = app_config.get_theme_qcolor("grid_major" if is_major else "grid_minor")
+                pen_width = max(0.5, (0.6 if is_major else 0.35) * scale)
+                painter.setPen(QPen(color, pen_width))
+                painter.drawLine(QPointF(x, 0), QPointF(x, height))
+        if not self.show_grid_y:
+            return
+        view_span = max_y - min_y
+        if view_span <= 0:
+            return
+        major_step, minor_step = get_physical_grid_steps(view_span, height, scale=scale)
+        curr = math.floor(min_y / major_step) * major_step
+        while curr <= max_y + major_step:
+            if min_y <= curr <= max_y:
+                y = self._depth_to_y(curr, min_y, max_y, height)
+                painter.setPen(QPen(app_config.get_theme_qcolor("grid_major"), max(0.5, 0.6 * scale)))
+                painter.drawLine(QPointF(0, y), QPointF(width, y))
+            minor = curr + minor_step
+            while minor < curr + major_step - minor_step * 0.1:
+                if min_y <= minor <= max_y:
+                    y = self._depth_to_y(minor, min_y, max_y, height)
+                    painter.setPen(QPen(app_config.get_theme_qcolor("grid_minor"), max(0.3, 0.4 * scale)))
+                    painter.drawLine(QPointF(0, y), QPointF(width, y))
+                minor += minor_step
+            curr += major_step
+
+    def _draw_tadpole(self, painter, x, y, azimuth, apparent_dip, color, scale=1.0):
+        radius = max(3.0, 4.0 * scale)
+        length = max(11.0, (12.0 + min(90.0, max(0.0, apparent_dip)) / 90.0 * 10.0) * scale)
+        radians = math.radians(float(azimuth or 0.0))
+        dx = math.sin(radians) * length
+        dy = -math.cos(radians) * length
+        pen = QPen(QColor(color), max(1.4, 1.7 * scale))
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.setBrush(QBrush(QColor(color)))
+        painter.drawLine(QPointF(x, y), QPointF(x + dx, y + dy))
+        painter.drawEllipse(QPointF(x, y), radius, radius)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        try:
+            painter.fillRect(self.rect(), self._bg_brush)
+            width = self.width()
+            height = self.height()
+            _, (min_y, max_y) = self._viewbox.viewRange()
+            self._draw_grid(painter, width, height, min_y, max_y)
+            painter.setPen(self._border_pen)
+            painter.drawLine(QPointF(0, 0), QPointF(max(0, width - 1), 0))
+            painter.drawLine(QPointF(0, max(0, height - 1)), QPointF(max(0, width - 1), max(0, height - 1)))
+            painter.drawLine(QPointF(0, 0), QPointF(0, max(0, height - 1)))
+
+            plot_w = max(1.0, width - 1.0)
+            for annotation in self.annotations:
+                try:
+                    depth = float(annotation.get("center_depth", annotation.get("offset")))
+                    dip = float(annotation.get("apparent_dip"))
+                except Exception:
+                    continue
+                if not math.isfinite(depth) or not math.isfinite(dip):
+                    continue
+                y = self._depth_to_y(depth, min_y, max_y, height)
+                if y is None or y < -16 or y > height + 16:
+                    continue
+                x = max(0.0, min(90.0, dip)) / 90.0 * plot_w
+                fracture_type = annotation.get("fracture_type", "Conductive")
+                style = FRACTURE_TYPE_STYLES.get(fracture_type, {})
+                color = annotation.get("color") or style.get("color") or app_config.get_theme_color("accent")
+                self._draw_tadpole(painter, x, y, annotation.get("image_azimuth", 0.0), dip, color)
+        finally:
+            painter.end()
+
+    def mousePressEvent(self, event):
+        if self.parent() and hasattr(self.parent(), 'select_track'):
+            self.parent().setFocus()
+            append = bool(event.modifiers() & Qt.ControlModifier)
+            self.parent().select_track(append=append)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def render_to(self, painter, rect, min_y, max_y, scale=1.0, draw_border=True):
+        painter.save()
+        try:
+            painter.translate(rect.topLeft())
+            width = rect.width()
+            height = rect.height()
+            painter.setClipRect(0, 0, width, height)
+            painter.fillRect(0, 0, width, height, app_config.get_theme_qcolor("plot_bg"))
+            self._draw_grid(painter, width, height, min_y, max_y, scale=scale)
+            if draw_border:
+                painter.setPen(QPen(app_config.get_theme_qcolor("track_divider"), max(1.0, 1.0 * scale)))
+                painter.drawRect(0, 0, max(0, width - 1), max(0, height - 1))
+
+            plot_w = max(1.0, width - 1.0)
+            for annotation in self.annotations:
+                try:
+                    depth = float(annotation.get("center_depth", annotation.get("offset")))
+                    dip = float(annotation.get("apparent_dip"))
+                except Exception:
+                    continue
+                if not math.isfinite(depth) or not math.isfinite(dip):
+                    continue
+                y = self._depth_to_y(depth, min_y, max_y, height)
+                if y is None or y < -16 * scale or y > height + 16 * scale:
+                    continue
+                x = max(0.0, min(90.0, dip)) / 90.0 * plot_w
+                fracture_type = annotation.get("fracture_type", "Conductive")
+                style = FRACTURE_TYPE_STYLES.get(fracture_type, {})
+                color = annotation.get("color") or style.get("color") or app_config.get_theme_color("accent")
+                self._draw_tadpole(painter, x, y, annotation.get("image_azimuth", 0.0), dip, color, scale=scale)
+        finally:
+            painter.restore()
 
 
 class InteractivePlotWidget(pg.PlotWidget):
@@ -648,6 +843,11 @@ class InteractivePlotWidget(pg.PlotWidget):
         super().keyPressEvent(event)
 
     def mouseMoveEvent(self, event):
+        parent = self.parent()
+        if parent and hasattr(parent, 'handle_fracture_pick_mouse_move'):
+            if parent.handle_fracture_pick_mouse_move(event, self):
+                event.accept()
+                return
         if getattr(self, '_mmb_zooming', False):
             dy = event.position().y() - self._mmb_start_pos.y()
             scale = 1.1 ** (dy / 50.0)
@@ -662,6 +862,11 @@ class InteractivePlotWidget(pg.PlotWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        parent = self.parent()
+        if parent and hasattr(parent, 'handle_fracture_pick_mouse_release'):
+            if parent.handle_fracture_pick_mouse_release(event, self):
+                event.accept()
+                return
         if getattr(self, '_mmb_zooming', False):
             self._mmb_zooming = False
             event.accept(); return

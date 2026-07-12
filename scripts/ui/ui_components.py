@@ -412,6 +412,11 @@ class FracturePickingBridge(QObject):
             self.log_widget.show_fracture_results()
 
     @Slot()
+    def saveResults(self):
+        if self.log_widget and hasattr(self.log_widget, "save_fracture_results"):
+            self.log_widget.save_fracture_results()
+
+    @Slot()
     def showTadpoleTrack(self):
         if self.log_widget and hasattr(self.log_widget, "show_tadpole_track"):
             self.log_widget.show_tadpole_track()

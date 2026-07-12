@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QTableView,
+    QAbstractItemView,
     QMenu,
     QGraphicsOpacityEffect,
     QSizePolicy,
@@ -27,6 +28,7 @@ from PySide6.QtCore import QItemSelection, QItemSelectionModel
 
 from core.app_config import app_config
 from scripts.data.db_manager import DBManager
+from scripts.data.static_table_data import StaticRowsTableModel
 from scripts.data.table_data import MultiCurveTableModel, MultiCurveDataFetchWorker, copy_table_selection_to_clipboard
 from scripts.ui.curve_table_helpers import (
     apply_empty_curve_table_layout,
@@ -85,6 +87,9 @@ class DataViewerWidget(QWidget):
         self._header_selection_active = False
         self._dirty = False
         self._baseline_columns = []
+        self._static_table_mode = False
+        self._static_table_title = ""
+        self._static_table_metadata = {}
         self._setup_ui()
         self.update_theme()
 
@@ -123,6 +128,32 @@ class DataViewerWidget(QWidget):
         self.sb_mgr = FloatingScrollbarManager(self.table)
         self._apply_empty_table_layout()
         self._update_actions_state()
+
+    def _bind_table_model(self, model):
+        self.model = model
+        self.table.setModel(self.model)
+        selection_model = self.table.selectionModel()
+        if selection_model is not None:
+            selection_model.selectionChanged.connect(self._emit_workspace_state_changed)
+        self.model.dataChanged.connect(self._on_model_data_changed)
+
+    def _reset_header_state(self):
+        self._selected_header_columns.clear()
+        self._current_header_column = None
+        self._header_anchor_column = None
+        self._header_selection_active = False
+
+    def _ensure_curve_model(self):
+        if isinstance(self.model, MultiCurveTableModel):
+            return
+        self._static_table_mode = False
+        self._static_table_title = ""
+        self._static_table_metadata = {}
+        self._reset_header_state()
+        self._bind_table_model(MultiCurveTableModel(self))
+        self.table.setEditTriggers(
+            QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed | QAbstractItemView.AnyKeyPressed
+        )
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_V and event.modifiers() & Qt.ControlModifier:
@@ -209,6 +240,11 @@ class DataViewerWidget(QWidget):
         if not db_path:
             ThemeDialog.message(self, "Data Viewer", "Curve source database is missing.", icon_type="warning")
             return
+        if self._static_table_mode:
+            if not self._confirm_discard_changes("Replace the current table with curve data?"):
+                return
+            self._curve_entries.clear()
+            self._ensure_curve_model()
 
         if well_name is None or curve_name is None:
             from scripts.data.db_manager import DBManager
@@ -365,6 +401,7 @@ class DataViewerWidget(QWidget):
         ThemeDialog.message(self, "Data Viewer", message, icon_type="warning")
 
     def _rebuild_model(self):
+        self._ensure_curve_model()
         if not self._curve_entries:
             self._depth_union = np.array([], dtype=float)
             self.model.reset_data()
@@ -446,12 +483,40 @@ class DataViewerWidget(QWidget):
     def clear_data(self):
         if not self._confirm_discard_changes("Clear all curves from this Data Viewer?"):
             return
+        self._ensure_curve_model()
         self._curve_entries.clear()
         self._rebuild_model()
+
+    def load_static_table(self, title, headers, rows, metadata=None):
+        """Load a read-only table such as fracture picking results."""
+        if not self._confirm_discard_changes("Replace the current Data Viewer content?"):
+            return
+        self._static_table_mode = True
+        self._static_table_title = str(title or "Table")
+        self._static_table_metadata = dict(metadata or {})
+        self._curve_entries.clear()
+        self._depth_union = np.array([], dtype=float)
+        self._baseline_columns = []
+        self._dirty = False
+        self._reset_header_state()
+        self._bind_table_model(StaticRowsTableModel(headers, rows, self))
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.resizeColumnsToContents()
+        self.actions_pill.hide()
+        self._emit_workspace_state_changed()
+
+    def static_table_metadata(self):
+        if not self._static_table_mode:
+            return {}
+        return dict(self._static_table_metadata)
 
     def load_single_curve_data(self, well_name, curve_name, depth, data, folder_path=""):
         if not self._confirm_discard_changes("Replace the current Data Viewer content?"):
             return
+        self._ensure_curve_model()
+        self.table.setEditTriggers(
+            QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed | QAbstractItemView.AnyKeyPressed
+        )
         folder_name = folder_path.split("/")[-1] if folder_path else ""
 
         self._curve_entries = [{
@@ -509,7 +574,7 @@ class DataViewerWidget(QWidget):
         return {
             "active_window_type": "data_viewer",
             "depth_range": self._workspace_depth_range(),
-            "curve_count": len(self.model.columns),
+            "curve_count": 0 if self._static_table_mode else len(self.model.columns),
             "selected_curves": self._workspace_curve_names(),
             "has_unsaved_changes": bool(self._dirty),
             "table": table,
@@ -585,6 +650,11 @@ class DataViewerWidget(QWidget):
         return [(start, end) for start, end in merged]
 
     def _workspace_column_label(self, column):
+        if self._static_table_mode:
+            names = self._workspace_column_names()
+            if 0 <= column < len(names):
+                return names[column]
+            return f"Column {column + 1}"
         if column == 0:
             return "Row"
         if column == 1:
@@ -624,12 +694,16 @@ class DataViewerWidget(QWidget):
         return stats
 
     def _workspace_column_names(self):
+        if self._static_table_mode and hasattr(self.model, "column_names"):
+            return self.model.column_names()
         names = ["Row", "Depth"]
         for column in self.model.columns:
             names.append(str(column.get("label") or column.get("tooltip") or "Curve").strip())
         return names
 
     def _workspace_curve_names(self):
+        if self._static_table_mode:
+            return []
         names = []
         for column in self.model.columns:
             name = str(column.get("label") or "").strip()
@@ -676,6 +750,8 @@ class DataViewerWidget(QWidget):
         ]
 
     def _workspace_depth_range(self):
+        if self._static_table_mode:
+            return None
         values = np.asarray(self._depth_union, dtype=float)
         if values.size == 0:
             return None
@@ -737,6 +813,8 @@ class DataViewerWidget(QWidget):
         return changed
 
     def _selected_curve_column_indexes(self):
+        if self._static_table_mode:
+            return []
         if self._selected_header_columns:
             return sorted({column - 2 for column in self._selected_header_columns if column > 1}, reverse=True)
         selection_model = self.table.selectionModel()
@@ -831,6 +909,8 @@ class DataViewerWidget(QWidget):
         self.workspaceStateChanged.emit()
 
     def _compute_is_dirty(self):
+        if self._static_table_mode:
+            return False
         return bool(self._get_modified_column_indexes())
 
     def _get_modified_column_indexes(self):
@@ -873,7 +953,7 @@ class DataViewerWidget(QWidget):
         self._update_actions_state()
 
     def _update_actions_state(self):
-        has_content = self.model.columnCount() > 2
+        has_content = (not self._static_table_mode) and self.model.columnCount() > 2
         self.actions_pill.setVisible(has_content)
         self.actions_pill.set_dirty(self._dirty)
         self.actions_pill.setEnabled(has_content)
@@ -1197,7 +1277,7 @@ class DataViewerWidget(QWidget):
         has_curve_columns = bool(self._selected_curve_column_indexes())
         copy_action.setEnabled(has_cells)
         remove_action.setEnabled(has_curve_columns)
-        clear_action.setEnabled(bool(self._curve_entries))
+        clear_action.setEnabled((not self._static_table_mode) and bool(self._curve_entries))
 
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
         if chosen == copy_action:

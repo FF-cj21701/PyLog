@@ -35,7 +35,7 @@ Item {
         signal clicked()
 
         width: parent ? parent.width : 110
-        height: primary ? 58 : 32
+        height: primary ? 58 : 30
         radius: 7
         color: primary ? root.blueColor : (mouseArea.containsMouse ? root.buttonHoverColor : root.buttonBgColor)
         border.color: primary ? root.blueHoverColor : root.inputBorderColor
@@ -413,7 +413,7 @@ Item {
                     anchors.fill: parent
                     anchors.leftMargin: 16
                     anchors.topMargin: 0
-                    spacing: 8
+                    spacing: 6
 
                     ToolButton {
                         label: "Finish"
@@ -441,6 +441,11 @@ Item {
                     ToolButton {
                         label: "Cancel"
                         onClicked: bridge.cancel()
+                    }
+
+                    ToolButton {
+                        label: "Save"
+                        onClicked: bridge.saveResults()
                     }
 
                     ToolButton {

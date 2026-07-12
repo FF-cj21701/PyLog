@@ -11,6 +11,12 @@ from PySide6.QtWidgets import (
 from ..base_dialog import ThemeDialog
 from ..curve_table_helpers import configure_curve_table_view, enable_styled_background
 from ..theme_manager import ThemeManager
+from scripts.data.fracture_table_data import (
+    FRACTURE_TABLE_HEADERS,
+    build_fracture_table_data,
+    format_fracture_table_value,
+    fracture_table_headers_for,
+)
 
 
 class _FractureResultsModel(QAbstractTableModel):
@@ -58,7 +64,7 @@ class _FractureResultsModel(QAbstractTableModel):
 class FractureResultsDialog(ThemeDialog):
     """Table view for fracture picking results in the active plot."""
 
-    HEADERS = ["Center Depth", "Type", "Dip Height", "Image Azimuth (deg)", "Apparent Dip (deg)", "Source"]
+    HEADERS = FRACTURE_TABLE_HEADERS
 
     def __init__(self, log_widget, parent=None):
         super().__init__(parent)
@@ -109,17 +115,8 @@ class FractureResultsDialog(ThemeDialog):
         annotations = []
         if self.log_widget and hasattr(self.log_widget, "collect_fracture_annotations"):
             annotations = self.log_widget.collect_fracture_annotations()
-        rows = []
-        for annotation in annotations:
-            rows.append([
-                self._fmt(annotation.get("center_depth", annotation.get("offset"))),
-                annotation.get("fracture_type", ""),
-                self._fmt(annotation.get("dip_height", annotation.get("amplitude"))),
-                self._fmt(annotation.get("image_azimuth")),
-                self._fmt(annotation.get("apparent_dip")),
-                annotation.get("source_curve_name") or annotation.get("source_track_label") or "",
-            ])
-        self.model.set_results(self._headers_for(annotations), rows)
+        headers, rows = build_fracture_table_data(annotations)
+        self.model.set_results(headers, rows)
         self.summary.setText(f"{len(annotations)} fracture result(s)")
         self.table.resizeColumnsToContents()
 
@@ -140,21 +137,8 @@ class FractureResultsDialog(ThemeDialog):
 
     @staticmethod
     def _fmt(value):
-        try:
-            return f"{float(value):.3f}"
-        except Exception:
-            return ""
+        return format_fracture_table_value(value)
 
     @classmethod
     def _headers_for(cls, annotations):
-        depth_unit = ""
-        for annotation in annotations or []:
-            depth_unit = str(annotation.get("depth_unit") or "").strip()
-            if depth_unit:
-                break
-        if not depth_unit:
-            return cls.HEADERS
-        headers = list(cls.HEADERS)
-        headers[0] = f"Center Depth ({depth_unit})"
-        headers[2] = f"Dip Height ({depth_unit})"
-        return headers
+        return fracture_table_headers_for(annotations)

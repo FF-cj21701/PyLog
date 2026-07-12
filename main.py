@@ -37,6 +37,12 @@ from scripts.data.import_workers import ImportWorker, ExportWorker
 from scripts.ui.dialogs.import_dialogs import DLISImportDialog
 from scripts.ui.dialogs.export_dialogs import DLISExportDialog, DLISExportResultDialog
 from scripts.data.dlis_exporter import export_well_to_dlis
+from scripts.data.fracture_table_data import (
+    FRACTURE_TABLE_TITLE,
+    FRACTURE_TABLE_TYPE,
+    fracture_table_metadata,
+    load_fracture_table_data,
+)
 from scripts.ui.widgets.data_viewer_widget import DataViewerWidget
 from scripts.ui.widgets.html_preview_widget import HtmlPreviewWidget, is_html_previewable
 from scripts.ui.widgets.workspace_launchpad_widget import WorkspaceLaunchpadWidget
@@ -636,7 +642,12 @@ class MainWindow(QMainWindow):
 
     def handle_tree_item_double_clicked(self, item, column):
         data = item.data(0, Qt.UserRole)
-        if not data or data.get('type') != 'curve':
+        if not data:
+            return
+        if data.get('type') == 'fracture_table':
+            self.handle_open_fracture_table(data)
+            return
+        if data.get('type') != 'curve':
             return
             
         curve_id = data['id']
@@ -681,6 +692,11 @@ class MainWindow(QMainWindow):
 
     def handle_open_data_viewer(self, items_data):
         """Open a data viewer page and enqueue selected curves."""
+        fracture_tables = [d for d in items_data if d.get('type') == 'fracture_table']
+        if fracture_tables:
+            self.handle_open_fracture_table(fracture_tables[0])
+            return
+
         curves = [d for d in items_data if d.get('type') == 'curve']
         if not curves:
             return
@@ -699,6 +715,62 @@ class MainWindow(QMainWindow):
             )
 
         self.statusBar().showMessage(f"Data Viewer: queued {len(curves)} curves.", 3000)
+
+    def handle_open_fracture_table(self, table_data):
+        """Open saved fracture picking results in Data Viewer."""
+        db_path = table_data.get('db_path')
+        well_id = table_data.get('well_id')
+        if not db_path or well_id is None:
+            ThemeDialog.message(self, "Data Viewer", "Fracture table source is missing.", icon_type="warning")
+            return
+
+        _annotations, headers, rows = load_fracture_table_data(db_path, well_id)
+        if not rows:
+            ThemeDialog.message(self, "Data Viewer", "No saved fracture picking results were found.", icon_type="info")
+            return
+
+        widget = self.new_data_viewer_window()
+        if not widget:
+            return
+        title = table_data.get('name') or FRACTURE_TABLE_TITLE
+        widget.load_static_table(
+            title,
+            headers,
+            rows,
+            metadata=fracture_table_metadata(db_path, well_id),
+        )
+
+        sub = widget.parent()
+        while sub is not None and not isinstance(sub, QMdiSubWindow):
+            sub = sub.parent()
+        if sub is not None:
+            sub.setWindowTitle(f"Data Viewer {self._data_viewer_count} - {title}")
+
+        self.statusBar().showMessage(f"Data Viewer: opened {len(rows)} fracture result(s).", 3000)
+
+    def refresh_open_fracture_tables(self, db_path, well_id):
+        """Reload open Data Viewer pages that show the saved fracture table."""
+        try:
+            well_id = int(well_id)
+        except Exception:
+            return
+        target_db_path = os.path.abspath(db_path)
+        _annotations, headers, rows = load_fracture_table_data(db_path, well_id)
+        refreshed = 0
+        for sub in self.mdi_area.subWindowList():
+            widget = sub.widget()
+            if not isinstance(widget, DataViewerWidget):
+                continue
+            metadata = widget.static_table_metadata()
+            if (
+                metadata.get("type") == FRACTURE_TABLE_TYPE
+                and os.path.abspath(metadata.get("db_path", "")) == target_db_path
+                and int(metadata.get("well_id", -1)) == well_id
+            ):
+                widget.load_static_table(FRACTURE_TABLE_TITLE, headers, rows, metadata=metadata)
+                refreshed += 1
+        if refreshed:
+            self.statusBar().showMessage(f"Data Viewer: refreshed {refreshed} fracture table(s).", 3000)
 
     def handle_launchpad_plot_drop(self, curves):
         if not curves:

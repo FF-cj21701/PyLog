@@ -6,7 +6,8 @@ import os
 from PySide6.QtWidgets import (QMenu,
                                 QTreeWidgetItem, QStyle, QDialog)
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPen, QPixmap
+from core.app_config import app_config
 from scripts.data.db_manager import DBManager
 from scripts.utils.logger import logger
 from scripts.utils.well_queries import DEPTH_MNEMONICS
@@ -34,6 +35,24 @@ class TreeController:
     def _can_paste_into(self, db_path):
         clipboard = getattr(self.mw, 'explorer_clipboard', None)
         return bool(clipboard and clipboard.get('db_path') == db_path)
+
+    def _table_group_icon(self):
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        try:
+            border = QColor(app_config.get_theme_color("text_main"))
+            fill = QColor(app_config.get_theme_color("accent_light"))
+            fill.setAlpha(120)
+            painter.setBrush(fill)
+            painter.setPen(QPen(border, 1.1))
+            painter.drawRoundedRect(2, 3, 12, 10, 1.5, 1.5)
+            painter.drawLine(2, 8, 14, 8)
+            painter.drawLine(8, 3, 8, 13)
+        finally:
+            painter.end()
+        return QIcon(pixmap)
 
     def _build_blank_area_menu(self, menu):
         self._add_action(menu, "New Well", self.handle_new_well)
@@ -96,11 +115,15 @@ class TreeController:
         menu.addSeparator()
         self._add_action(menu, "Delete Curve", lambda: self.handle_delete_curve_bulk(valid_items_data))
 
+    def _build_fracture_table_menu(self, menu, data, valid_items_data):
+        self._add_action(menu, "Open Table", lambda: self.mw.handle_open_fracture_table(data))
+
     def _build_single_item_menu(self, menu, data, valid_items_data):
         builders = {
             'well': self._build_well_menu,
             'folder': self._build_folder_menu,
             'curve': self._build_curve_menu,
+            'fracture_table': self._build_fracture_table_menu,
         }
         builder = builders.get(data.get('type'))
         if builder:
@@ -759,6 +782,37 @@ class TreeController:
         
         try:
             db = DBManager(db_path)
+
+            if data['type'] == 'well':
+                tables_node = QTreeWidgetItem(item)
+                tables_node.setText(0, "Tables")
+                tables_node.setText(1, "Group")
+                tables_node.setText(2, "")
+                tables_node.setData(0, Qt.UserRole, {
+                    'type': 'table_group',
+                    'id': f"tables:{well_id}",
+                    'name': "Tables",
+                    'well_id': well_id,
+                    'db_path': db_path,
+                    'loaded': True,
+                })
+                tables_node.setIcon(0, self._table_group_icon())
+
+                fracture_rows = db.get_fracture_interpretations(well_id)
+                if fracture_rows:
+                    fracture_node = QTreeWidgetItem(tables_node)
+                    fracture_node.setText(0, "Fracture Picks")
+                    fracture_node.setText(1, "Table")
+                    fracture_node.setText(2, f"{len(fracture_rows)} rows")
+                    fracture_node.setData(0, Qt.UserRole, {
+                        'type': 'fracture_table',
+                        'id': f"fracture_table:{well_id}",
+                        'name': "Fracture Picks",
+                        'well_id': well_id,
+                        'db_path': db_path,
+                        'loaded': True,
+                    })
+                    fracture_node.setIcon(0, self._table_group_icon())
             
             # 1. Fetch Folders
             folders = db.get_folders(well_id)

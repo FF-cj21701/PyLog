@@ -1,4 +1,5 @@
 import pyqtgraph as pg
+import os
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QMessageBox, 
                                QLabel, QFrame, QDialog, QFormLayout, QSpinBox, 
                                QDoubleSpinBox, QComboBox, QDialogButtonBox, QPushButton, 
@@ -20,6 +21,7 @@ from ..rendering.fracture_annotations import FRACTURE_TYPE_STYLES, enrich_fractu
 from ..data.export_manager import LogExporter
 from ..tracks.track_container import BaseTrackContainer, DepthTrackContainer, CurveTrackContainer, ImageTrackContainer, TadpoleTrackContainer
 from ..rendering.scroll_manager import ScrollManager
+from ..utils.logger import logger
 
 # --- Main Widget ---
 
@@ -710,12 +712,17 @@ class LogWidget(QWidget):
                 item.setdefault("target_track_label", track_label)
                 item.setdefault("source_curve_id", image_info.get("curve_id"))
                 item.setdefault("source_curve_name", image_info.get("title") or image_info.get("name"))
+                item.setdefault("source_db_path", image_info.get("db_path"))
+                item.setdefault("source_well_id", image_info.get("well_id"))
                 item.setdefault("depth_unit", depth_unit)
                 item.setdefault("borehole_diameter_in", getattr(self, "fracture_borehole_diameter_in", 8.0))
                 annotations.append(item)
         return annotations
 
-    def _infer_fracture_well_id(self):
+    def _infer_fracture_well_id(self, annotations=None):
+        for annotation in annotations or []:
+            if annotation.get("source_well_id") is not None:
+                return int(annotation.get("source_well_id"))
         for track in self.track_containers:
             for curve in getattr(track.plot_widget, "curves", []):
                 info = curve.get("info", {})
@@ -729,10 +736,23 @@ class LogWidget(QWidget):
             pass
         return None
 
+    def _infer_fracture_db_path(self, annotations=None):
+        for annotation in annotations or []:
+            db_path = annotation.get("source_db_path")
+            if db_path:
+                return db_path
+        for track in self.track_containers:
+            for curve in getattr(track.plot_widget, "curves", []):
+                info = curve.get("info", {})
+                db_path = info.get("db_path")
+                if db_path:
+                    return db_path
+        return getattr(self.db, "db_path", None)
+
     def save_fracture_results(self):
-        well_id = self._infer_fracture_well_id()
         annotations = self.collect_fracture_annotations()
-        db_path = getattr(self.db, "db_path", None)
+        well_id = self._infer_fracture_well_id(annotations)
+        db_path = self._infer_fracture_db_path(annotations)
         if not db_path:
             self._show_fracture_status("Cannot save fractures: no database path found.")
             return []
@@ -744,12 +764,25 @@ class LogWidget(QWidget):
             return []
         db = DBManager(db_path)
         inserted = db.save_fracture_interpretations(well_id, annotations, replace=True)
-        self._show_fracture_status(f"Saved {len(inserted)} fracture result(s).")
+        self.set_db_source(db_path)
+        self._show_fracture_status(f"Saved {len(inserted)} fracture result(s) to {os.path.basename(db_path)}.")
+        self._refresh_fracture_tables_after_save(db_path, well_id)
         return inserted
+
+    def _refresh_fracture_tables_after_save(self, db_path, well_id):
+        try:
+            window = self.window()
+            if window and hasattr(window, "refresh_open_fracture_tables"):
+                window.refresh_open_fracture_tables(db_path, well_id)
+            controller = getattr(window, "tree_controller", None)
+            if controller and hasattr(controller, "refresh_tree"):
+                controller.refresh_tree()
+        except Exception:
+            logger.exception("Failed to refresh explorer after saving fracture results")
 
     def load_fracture_results(self):
         well_id = self._infer_fracture_well_id()
-        db_path = getattr(self.db, "db_path", None)
+        db_path = self._infer_fracture_db_path()
         if not db_path:
             self._show_fracture_status("Cannot load fractures: no database path found.")
             return []

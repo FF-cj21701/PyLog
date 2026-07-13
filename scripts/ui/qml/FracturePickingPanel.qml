@@ -4,8 +4,12 @@ import QtQuick.Layouts 1.15
 
 Item {
     id: root
-    width: bridge.collapsed ? 128 : 480
-    height: 365
+    readonly property int panelPadding: 14
+    readonly property int actionButtonWidth: 78
+    readonly property int actionDividerGap: 14
+
+    width: bridge.collapsed ? actionButtonWidth + panelPadding * 2 : 440
+    height: 470
     clip: false
 
     property color textColor: bridge.themeText
@@ -17,6 +21,9 @@ Item {
     property color inputBorderColor: bridge.inputBorder
     property color buttonBgColor: bridge.buttonBg
     property color buttonHoverColor: bridge.buttonHover
+    property color specialButtonBgColor: bridge.specialButtonBg
+    property color specialButtonHoverColor: bridge.specialButtonHover
+    property color specialButtonTextColor: bridge.specialButtonText
     property color blueColor: bridge.primaryColor
     property color blueHoverColor: bridge.primaryHoverColor
     property color dangerColor: bridge.dangerColor
@@ -32,19 +39,24 @@ Item {
         property string label: ""
         property color accent: root.blueColor
         property bool primary: false
+        property bool softAccent: false
         signal clicked()
 
         width: parent ? parent.width : 110
         height: primary ? 58 : 30
         radius: 7
-        color: primary ? root.blueColor : (mouseArea.containsMouse ? root.buttonHoverColor : root.buttonBgColor)
+        color: primary ? root.blueColor
+              : softAccent ? (mouseArea.containsMouse ? root.specialButtonHoverColor : root.specialButtonBgColor)
+              : (mouseArea.containsMouse ? root.buttonHoverColor : root.buttonBgColor)
         border.color: primary ? root.blueHoverColor : root.inputBorderColor
         border.width: 1
 
         Text {
             anchors.fill: parent
             text: buttonRoot.label
-            color: buttonRoot.primary ? "#ffffff" : (buttonRoot.accent === root.dangerColor ? root.dangerColor : root.textColor)
+            color: buttonRoot.primary ? "#ffffff"
+                   : buttonRoot.softAccent ? root.specialButtonTextColor
+                   : (buttonRoot.accent === root.dangerColor ? root.dangerColor : root.textColor)
             font.pixelSize: buttonRoot.primary ? 14 : 12
             font.bold: buttonRoot.primary
             horizontalAlignment: Text.AlignHCenter
@@ -57,6 +69,18 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
             onClicked: buttonRoot.clicked()
+        }
+    }
+
+    component ButtonGroupSeparator: Item {
+        width: parent ? parent.width : 86
+        height: 8
+
+        Rectangle {
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width
+            height: 1
+            color: root.dividerColor
         }
     }
 
@@ -181,7 +205,7 @@ Item {
         id: panel
         x: 0
         y: 0
-        width: bridge.collapsed ? 128 : root.width
+        width: root.width
         height: root.height
         radius: 10
         color: root.panelBgColor
@@ -206,11 +230,8 @@ Item {
 
         Row {
             anchors.fill: parent
-            anchors.leftMargin: bridge.collapsed ? 0 : 14
-            anchors.rightMargin: 14
-            anchors.topMargin: 14
-            anchors.bottomMargin: 14
-            spacing: 14
+            anchors.margins: root.panelPadding
+            spacing: bridge.collapsed ? 0 : root.actionDividerGap
 
             Item {
                 id: infoPanel
@@ -372,47 +393,37 @@ Item {
                             color: root.dividerColor
                         }
 
-                        Row {
-                            width: parent.width
-                            height: 34
-                            spacing: 8
-                            Item {
-                                width: 96
-                                height: parent.height
-                            }
-                            InfoButton {
-                                width: (parent.width - 118 - 8) / 2
-                                anchors.verticalCenter: parent.verticalCenter
-                                label: "Results"
-                                onClicked: bridge.showResults()
-                            }
-                            InfoButton {
-                                width: (parent.width - 118 - 8) / 2
-                                anchors.verticalCenter: parent.verticalCenter
-                                label: "Tadpole"
-                                onClicked: bridge.showTadpoleTrack()
-                            }
-                        }
                     }
+                }
+
+                InfoButton {
+                    width: 96
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    label: "Results"
+                    onClicked: bridge.showResults()
                 }
             }
 
             Item {
                 id: actionPanel
-                width: 114
+                width: bridge.collapsed
+                       ? root.actionButtonWidth
+                       : root.actionButtonWidth + root.actionDividerGap + 1
                 height: parent.height
 
                 Rectangle {
                     width: 1
                     height: parent.height
                     color: root.dividerColor
-                    visible: true
+                    visible: !bridge.collapsed
                 }
 
                 Column {
-                    anchors.fill: parent
-                    anchors.leftMargin: 16
-                    anchors.topMargin: 0
+                    id: actionColumn
+                    width: root.actionButtonWidth
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
                     spacing: 6
 
                     ToolButton {
@@ -421,6 +432,8 @@ Item {
                         ToolTip.visible: false
                         onClicked: bridge.finish()
                     }
+
+                    ButtonGroupSeparator {}
 
                     ToolButton {
                         label: "Undo"
@@ -443,10 +456,27 @@ Item {
                         onClicked: bridge.cancel()
                     }
 
+                    ButtonGroupSeparator {}
+
                     ToolButton {
                         label: "Save"
                         onClicked: bridge.saveResults()
                     }
+
+                    ToolButton {
+                        label: "Load"
+                        onClicked: bridge.loadResults()
+                    }
+
+                    ButtonGroupSeparator {}
+
+                    ToolButton {
+                        label: "Tadpole"
+                        softAccent: true
+                        onClicked: bridge.showTadpoleTrack()
+                    }
+
+                    ButtonGroupSeparator {}
 
                     ToolButton {
                         label: "Settings"

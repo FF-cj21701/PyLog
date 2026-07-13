@@ -259,6 +259,9 @@ class FracturePickingBridge(QObject):
             "inputBorder": self._theme_color("input_border", "#CDD6E2"),
             "buttonBg": self._theme_color("button_bg", "#F0F0F0"),
             "buttonHover": self._theme_color("button_hover", "#E0E0E0"),
+            "specialButtonBg": self._theme_color("special_button_bg", "#FFE8EF"),
+            "specialButtonHover": self._theme_color("special_button_hover", "#FFD9E3"),
+            "specialButtonText": self._theme_color("special_button_text", "#5C1F32"),
             "primary": self._theme_color("primary", "#2F7CDC"),
             "primaryHover": self._theme_color("primary_hover", "#246CC8"),
             "danger": self._theme_color("danger", "#E81123"),
@@ -323,6 +326,18 @@ class FracturePickingBridge(QObject):
     @Property(str, notify=themeChanged)
     def buttonHover(self):
         return self._theme["buttonHover"]
+
+    @Property(str, notify=themeChanged)
+    def specialButtonBg(self):
+        return self._theme["specialButtonBg"]
+
+    @Property(str, notify=themeChanged)
+    def specialButtonHover(self):
+        return self._theme["specialButtonHover"]
+
+    @Property(str, notify=themeChanged)
+    def specialButtonText(self):
+        return self._theme["specialButtonText"]
 
     @Property(str, notify=themeChanged)
     def primaryColor(self):
@@ -417,6 +432,11 @@ class FracturePickingBridge(QObject):
             self.log_widget.save_fracture_results()
 
     @Slot()
+    def loadResults(self):
+        if self.log_widget and hasattr(self.log_widget, "load_fracture_results"):
+            self.log_widget.load_fracture_results()
+
+    @Slot()
     def showTadpoleTrack(self):
         if self.log_widget and hasattr(self.log_widget, "show_tadpole_track"):
             self.log_widget.show_tadpole_track()
@@ -446,8 +466,8 @@ class FracturePickingPanel(QQuickWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.log_widget = parent
-        self._expanded_size = (480, 430)
-        self._collapsed_size = (128, 430)
+        self._expanded_size = (440, 470)
+        self._collapsed_size = (106, 470)
         self._drag_start_panel_pos = None
         self._drag_start_pointer = None
         self._user_moved = False
@@ -538,8 +558,8 @@ class FracturePickingPanel(QQuickWidget):
         self._clamp_to_parent()
 
     def _on_collapsed_changed(self, collapsed):
+        right_edge = self.x() + self.width()
+        top = self.y()
         self.setFixedSize(*(self._collapsed_size if collapsed else self._expanded_size))
-        if self._user_moved:
-            self._clamp_to_parent()
-        else:
-            self.reset_position()
+        x, y = self._bounded_pos(right_edge - self.width(), top)
+        self.move(x, y)

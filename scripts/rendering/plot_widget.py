@@ -766,10 +766,10 @@ class LogWidget(QWidget):
         inserted = db.save_fracture_interpretations(well_id, annotations, replace=True)
         self.set_db_source(db_path)
         self._show_fracture_status(f"Saved {len(inserted)} fracture result(s) to {os.path.basename(db_path)}.")
-        self._refresh_fracture_tables_after_save(db_path, well_id)
+        self._refresh_fracture_tables(db_path, well_id)
         return inserted
 
-    def _refresh_fracture_tables_after_save(self, db_path, well_id):
+    def _refresh_fracture_tables(self, db_path, well_id):
         try:
             window = self.window()
             if window and hasattr(window, "refresh_open_fracture_tables"):
@@ -778,7 +778,7 @@ class LogWidget(QWidget):
             if controller and hasattr(controller, "refresh_tree"):
                 controller.refresh_tree()
         except Exception:
-            logger.exception("Failed to refresh explorer after saving fracture results")
+            logger.exception("Failed to refresh fracture result tables")
 
     def load_fracture_results(self):
         well_id = self._infer_fracture_well_id()
@@ -807,6 +807,7 @@ class LogWidget(QWidget):
             track.add_fracture_annotation(annotation)
         self.refresh_tadpole_tracks()
         self._show_fracture_status(f"Loaded {len(annotations)} fracture result(s).")
+        self._refresh_fracture_tables(db_path, well_id)
         return annotations
 
     def show_fracture_results(self):

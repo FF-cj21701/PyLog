@@ -54,6 +54,9 @@ class AppConfig:
         "input_border": "#CCCCCC",
         "button_bg": "{bg_dim}",
         "button_hover": "{border_std}",
+        "special_button_bg": "#FFE8EF",
+        "special_button_hover": "#FFD9E3",
+        "special_button_text": "#5C1F32",
         
         "accent": "{color_accent}",
         "accent_light": "{color_accent_soft}",
@@ -120,6 +123,9 @@ class AppConfig:
         "input_border": "#454545",
         "button_bg": "{bg_dim}",
         "button_hover": "#3E3E42",
+        "special_button_bg": "#3A2A30",
+        "special_button_hover": "#49323A",
+        "special_button_text": "#F0D8DF",
         
         "accent": "{color_accent}",
         "accent_light": "{color_accent_soft}",
@@ -180,6 +186,9 @@ class AppConfig:
         "input_border": "#552A58",
         "button_bg": "{bg_dim}",
         "button_hover": "#452449",
+        "special_button_bg": "#4A1A2C",
+        "special_button_hover": "#5A2238",
+        "special_button_text": "#FFEAF3",
         
         "accent": "{color_accent}",
         "accent_light": "{color_accent_soft}",
@@ -240,6 +249,9 @@ class AppConfig:
         "input_border": "#000000",
         "button_bg": "{bg_dim}",
         "button_hover": "#CFCAB6",
+        "special_button_bg": "#F7E3E8",
+        "special_button_hover": "#EED1DA",
+        "special_button_text": "#121212",
         
         "accent": "{color_accent}",
         "accent_light": "{color_accent_soft}",

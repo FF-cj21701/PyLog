@@ -24,6 +24,12 @@
 - Rebuilt the floating Fracture Picking panel in QML with draggable positioning, collapsible settings, fixed symmetric margins, grouped controls, global theme integration, and a right-edge-preserving collapse direction.
 - Centralized panel dimensions, margins, and action-button width in QML; the Python host now reads the QML size properties instead of duplicating layout constants.
 - Hardened result formatting so invalid and non-finite numeric values remain blank and unknown depth units are not guessed.
+- Related Python files:
+  - entry points and theme configuration: `main.py`, `core/app_config.py`
+  - picking, rendering, and track integration: `scripts/rendering/fracture_annotations.py`, `scripts/rendering/plot_widget.py`, `scripts/rendering/track_widgets.py`, `scripts/rendering/drop_controller.py`, `scripts/tracks/track_container.py`
+  - panel and result UI: `scripts/ui/ui_components.py`, `scripts/ui/dialogs/fracture_results_dialog.py`, `scripts/ui/widgets/data_viewer_widget.py`
+  - persistence, tables, and tree integration: `scripts/data/db_manager.py`, `scripts/data/fracture_table_data.py`, `scripts/data/static_table_data.py`, `scripts/ui/tree_controller.py`, `scripts/utils/curve_loading.py`
+  - regression tests: `tests/test_fracture_annotations.py`, `tests/test_fracture_persistence.py`, `tests/test_fracture_plot_workflow.py`, `tests/test_fracture_table_data.py`
 - Added regression coverage for sinusoidal fitting, interpretation fields, borehole conversion, persistence replacement/append/clear behavior, result-table formatting, and QML-host size synchronization. The full suite now passes 409 tests.
 
 ## [2026-07-09] - On-demand Tool Discovery and Workspace Path Guards / 工具按需发现与工作区路径保护

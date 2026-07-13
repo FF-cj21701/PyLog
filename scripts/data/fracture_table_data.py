@@ -1,3 +1,5 @@
+import math
+
 from scripts.data.db_manager import DBManager
 
 
@@ -15,9 +17,10 @@ FRACTURE_TABLE_HEADERS = [
 
 def format_fracture_table_value(value):
     try:
-        return f"{float(value):.3f}"
+        number = float(value)
     except Exception:
         return ""
+    return f"{number:.3f}" if math.isfinite(number) else ""
 
 
 def fracture_table_headers_for(annotations):

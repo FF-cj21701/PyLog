@@ -466,8 +466,6 @@ class FracturePickingPanel(QQuickWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.log_widget = parent
-        self._expanded_size = (440, 470)
-        self._collapsed_size = (106, 470)
         self._drag_start_panel_pos = None
         self._drag_start_pointer = None
         self._user_moved = False
@@ -481,7 +479,14 @@ class FracturePickingPanel(QQuickWidget):
         self.rootContext().setContextProperty("bridge", self.bridge)
         qml_path = os.path.join(os.path.dirname(__file__), "qml", "FracturePickingPanel.qml")
         self.setSource(QUrl.fromLocalFile(qml_path))
-        self.setFixedSize(*self._expanded_size)
+        self.setFixedSize(*self._qml_panel_size(collapsed=False))
+
+    def _qml_panel_size(self, collapsed):
+        root = self.rootObject()
+        if root is None:
+            raise RuntimeError("Fracture picking QML root object is unavailable.")
+        width_property = "collapsedWidth" if collapsed else "expandedWidth"
+        return int(root.property(width_property)), int(root.property("panelHeight"))
 
     def _apply_host_background(self):
         bg = QColor(self.bridge.panelBg)
@@ -497,8 +502,7 @@ class FracturePickingPanel(QQuickWidget):
         self.bridge.set_target_tracks(labels, current_index)
 
     def fit_to_parent(self):
-        size = self._collapsed_size if self.bridge.collapsed else self._expanded_size
-        self.setFixedSize(*size)
+        self.setFixedSize(*self._qml_panel_size(self.bridge.collapsed))
         if self._user_moved:
             self._clamp_to_parent()
 
@@ -560,6 +564,6 @@ class FracturePickingPanel(QQuickWidget):
     def _on_collapsed_changed(self, collapsed):
         right_edge = self.x() + self.width()
         top = self.y()
-        self.setFixedSize(*(self._collapsed_size if collapsed else self._expanded_size))
+        self.setFixedSize(*self._qml_panel_size(collapsed))
         x, y = self._bounded_pos(right_edge - self.width(), top)
         self.move(x, y)

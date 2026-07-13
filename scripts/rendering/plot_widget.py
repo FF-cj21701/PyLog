@@ -202,6 +202,7 @@ class LogWidget(QWidget):
         self.active_fracture_track = None
         self.fracture_target_track = None
         self.fracture_borehole_diameter_in = 8.0
+        self._fracture_results_dirty = False
         
         # Use a per-plot thread pool so one window's template/image work
         # cannot starve unrelated plot windows via the global pool.
@@ -667,6 +668,7 @@ class LogWidget(QWidget):
             if hasattr(track, "delete_selected_fractures"):
                 total += track.delete_selected_fractures()
         if total:
+            self._fracture_results_dirty = True
             self.refresh_tadpole_tracks()
             self._show_fracture_status(f"Deleted {total} selected fracture(s).")
         else:
@@ -684,9 +686,15 @@ class LogWidget(QWidget):
         self._show_fracture_status("Fracture selection cleared.")
 
     def clear_fracture_annotations(self):
+        had_annotations = any(
+            bool(getattr(track, "fracture_annotations", None))
+            for track in self.track_containers
+        )
         for track in self.track_containers:
             if hasattr(track, "clear_fracture_annotations"):
                 track.clear_fracture_annotations()
+        if had_annotations:
+            self._fracture_results_dirty = True
         self.cancel_current_fracture_pick(show_message=False)
         self.refresh_tadpole_tracks()
         self._show_fracture_status("Fracture picks cleared.")
@@ -759,13 +767,18 @@ class LogWidget(QWidget):
         if well_id is None:
             self._show_fracture_status("Cannot save fractures: no well context found.")
             return []
-        if not annotations:
+        if not annotations and not getattr(self, "_fracture_results_dirty", False):
             self._show_fracture_status("No fracture results to save.")
             return []
         db = DBManager(db_path)
         inserted = db.save_fracture_interpretations(well_id, annotations, replace=True)
+        self._fracture_results_dirty = False
         self.set_db_source(db_path)
-        self._show_fracture_status(f"Saved {len(inserted)} fracture result(s) to {os.path.basename(db_path)}.")
+        if inserted:
+            message = f"Saved {len(inserted)} fracture result(s) to {os.path.basename(db_path)}."
+        else:
+            message = f"Cleared saved fracture results from {os.path.basename(db_path)}."
+        self._show_fracture_status(message)
         self._refresh_fracture_tables(db_path, well_id)
         return inserted
 
@@ -805,6 +818,7 @@ class LogWidget(QWidget):
         for annotation in annotations:
             track = by_label.get(annotation.get("target_track_label")) or target_track
             track.add_fracture_annotation(annotation)
+        self._fracture_results_dirty = False
         self.refresh_tadpole_tracks()
         self._show_fracture_status(f"Loaded {len(annotations)} fracture result(s).")
         self._refresh_fracture_tables(db_path, well_id)

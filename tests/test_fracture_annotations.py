@@ -102,6 +102,19 @@ def test_fracture_interpretation_apparent_dip_uses_borehole_diameter():
     assert annotation["apparent_dip"] == pytest_approx(math.degrees(math.atan2(0.4, 1.0)))
 
 
+def test_fracture_interpretation_rejects_invalid_borehole_diameter():
+    source = {
+        "offset": 1000.0,
+        "sin_coeff": 0.2,
+        "cos_coeff": 0.0,
+        "amplitude": 0.2,
+    }
+
+    assert enrich_fracture_interpretation(source, borehole_diameter=0)["apparent_dip"] is None
+    assert enrich_fracture_interpretation(source, borehole_diameter=-1)["apparent_dip"] is None
+    assert enrich_fracture_interpretation(source, borehole_diameter=math.nan)["apparent_dip"] is None
+
+
 def pytest_approx(value):
     import pytest
 

@@ -3,6 +3,29 @@
 - This changelog now uses bilingual titles and English body text for long-term encoding stability.
 - Some older entries were historically affected by mojibake. Those sections were normalized into readable English summaries while preserving dates and main themes.
 
+## [2026-07-13] - Fracture Picking Workflow / 裂缝拾取工作流
+
+- Added a dedicated Fracture Picking mode available from the top-level Fracture menu and image-track context menus.
+- Added continuous manual sinusoidal fracture picking with live preview, finish, undo, cancel, and minimum-point validation.
+- Added conductive, resistive, and bedding interpretation types with type-specific colors and selectable display target tracks, including cross-track picking and display.
+- Added fracture selection and editing workflows:
+  - single and additive multi-selection
+  - delete selected and clear-all actions
+  - vertical drag adjustment for selected fractures
+  - click-away cancellation for selections and in-progress picks
+- Added interpretation result calculation and display for center depth, fracture type, dip height, image azimuth, apparent dip, and source curve.
+- Added configurable borehole diameter input with an 8-inch default and depth-unit-aware apparent-dip calculation.
+- Added Tadpole Track support with dynamic type legends, theme-aware colors, dip scale/grid rendering, and live synchronization after picking, editing, deletion, and loading.
+- Added persistent fracture result storage:
+  - a Tables group and fracture table entry in the well-data tree
+  - Data Viewer integration for fracture result tables
+  - Save and Load actions backed by the project database
+  - safe empty-save behavior that clears persisted results only after an explicit in-memory delete or clear operation
+- Rebuilt the floating Fracture Picking panel in QML with draggable positioning, collapsible settings, fixed symmetric margins, grouped controls, global theme integration, and a right-edge-preserving collapse direction.
+- Centralized panel dimensions, margins, and action-button width in QML; the Python host now reads the QML size properties instead of duplicating layout constants.
+- Hardened result formatting so invalid and non-finite numeric values remain blank and unknown depth units are not guessed.
+- Added regression coverage for sinusoidal fitting, interpretation fields, borehole conversion, persistence replacement/append/clear behavior, result-table formatting, and QML-host size synchronization. The full suite now passes 409 tests.
+
 ## [2026-07-09] - On-demand Tool Discovery and Workspace Path Guards / 工具按需发现与工作区路径保护
 
 - Replaced always-exposed full tool schemas with a compact discovery flow:

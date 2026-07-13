@@ -66,6 +66,33 @@ class FracturePersistenceTests(unittest.TestCase):
 
         self.assertEqual([item["name"] for item in loaded], ["Second"])
 
+    def test_save_empty_results_clears_existing_well_results(self):
+        annotation = build_fracture_annotation(
+            [[0, 1000.0], [90, 1000.1], [180, 1000.2]],
+        )
+        self.db.save_fracture_interpretations(self.well_id, [annotation])
+
+        inserted = self.db.save_fracture_interpretations(self.well_id, [], replace=True)
+
+        self.assertEqual(inserted, [])
+        self.assertEqual(self.db.get_fracture_interpretations(self.well_id), [])
+
+    def test_save_with_replace_false_appends_results(self):
+        first = build_fracture_annotation(
+            [[0, 1000.0], [90, 1000.1], [180, 1000.2]],
+            name="First",
+        )
+        second = build_fracture_annotation(
+            [[0, 1001.0], [90, 1001.1], [180, 1001.2]],
+            name="Second",
+        )
+
+        self.db.save_fracture_interpretations(self.well_id, [first])
+        self.db.save_fracture_interpretations(self.well_id, [second], replace=False)
+
+        loaded = self.db.get_fracture_interpretations(self.well_id)
+        self.assertEqual([item["name"] for item in loaded], ["First", "Second"])
+
 
 if __name__ == "__main__":
     unittest.main()

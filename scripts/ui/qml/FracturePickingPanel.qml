@@ -7,9 +7,12 @@ Item {
     readonly property int panelPadding: 14
     readonly property int actionButtonWidth: 78
     readonly property int actionDividerGap: 14
+    readonly property int expandedWidth: 440
+    readonly property int collapsedWidth: actionButtonWidth + panelPadding * 2
+    readonly property int panelHeight: 470
 
-    width: bridge.collapsed ? actionButtonWidth + panelPadding * 2 : 440
-    height: 470
+    width: bridge.collapsed ? collapsedWidth : expandedWidth
+    height: panelHeight
     clip: false
 
     property color textColor: bridge.themeText
@@ -235,7 +238,7 @@ Item {
 
             Item {
                 id: infoPanel
-                width: bridge.collapsed ? 0 : parent.width - actionPanel.width - 14
+                width: bridge.collapsed ? 0 : parent.width - actionPanel.width - root.actionDividerGap
                 height: parent.height
                 visible: !bridge.collapsed
                 enabled: !bridge.collapsed

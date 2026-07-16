@@ -96,6 +96,7 @@
             <!-- Tags will be added here -->
         </div>
         <div class="input-wrapper">
+            <div id="image-preview-container" class="image-preview-container" aria-label="Attached images"></div>
             <div class="input-header">
                 <div id="message-input" contenteditable="true" placeholder="Ask AI Assistant..." role="textbox"
                     aria-multiline="true">
@@ -103,13 +104,14 @@
             </div>
             <div class="input-footer">
                 <div class="footer-left">
-                    <button class="footer-btn" title="Add File">
+                    <button id="attach-image-btn" class="footer-btn" title="Add image" aria-label="Add image">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                             stroke-linecap="round" stroke-linejoin="round">
                             <line x1="12" y1="5" x2="12" y2="19"></line>
                             <line x1="5" y1="12" x2="19" y2="12"></line>
                         </svg>
                     </button>
+                    <input id="image-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
                 </div>
                 <div class="footer-right">
                     <button id="send-btn" class="send-btn" disabled>

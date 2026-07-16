@@ -69,6 +69,7 @@ class AsyncAIWorker(QObject):
         verification_coordinator=None,
         initial_active_tool_names=None,
         on_tools_loaded=None,
+        images=None,
     ):
         super().__init__()
         self.api_key = api_key
@@ -91,6 +92,7 @@ class AsyncAIWorker(QObject):
         self.active_tool_names = set(self.BASE_ACTIVE_TOOL_NAMES)
         self.active_tool_names.update(str(name) for name in (initial_active_tool_names or []) if str(name).strip())
         self.on_tools_loaded = on_tools_loaded
+        self.images = list(images or [])
         self.token_usage_events = []
         self._install_runtime_discovery_tools()
         self.tool_dispatcher = self.tool_manager
@@ -146,7 +148,18 @@ class AsyncAIWorker(QObject):
         for role, content in history_to_use:
             safe_content = content if content is not None else ""
             messages.append({"role": role, "content": safe_content})
-        messages.append({"role": "user", "content": self.prompt})
+        user_content = self.prompt
+        if self.images:
+            user_content = [{"type": "text", "text": self.prompt or "Analyze the attached image(s)."}]
+            for image in self.images:
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": image.get("data_url"),
+                        "detail": image.get("detail", "auto"),
+                    },
+                })
+        messages.append({"role": "user", "content": user_content})
         return messages
 
     def _build_tool_configs(self):
@@ -170,17 +183,29 @@ class AsyncAIWorker(QObject):
         self.tools = self.tool_manager.tools
 
     def _search_tools(self, query="", domain=None, capability=None, limit=5):
+        try:
+            compact_limit = max(1, min(int(limit or 5), 5))
+        except (TypeError, ValueError):
+            compact_limit = 5
         results = self.tool_manager.search_specs(
             query=query,
             domain=domain,
             capability=capability,
-            limit=limit,
+            limit=compact_limit,
         )
+        compact_results = []
         for item in results:
             name = item.get("name")
-            item["already_loaded"] = name in self.active_tool_names
-            item["can_call_now"] = name in self.active_tool_names
-        return results
+            compact_results.append({
+                "name": name,
+                "description": str(item.get("description") or "")[:240],
+                "category": item.get("category"),
+                "domain_tags": list(item.get("domain_tags") or [])[:4],
+                "capability_tags": list(item.get("capability_tags") or [])[:6],
+                "already_loaded": name in self.active_tool_names,
+                "can_call_now": name in self.active_tool_names,
+            })
+        return compact_results
 
     def _load_tools(self, names):
         requested = [str(name).strip() for name in (names or []) if str(name).strip()]

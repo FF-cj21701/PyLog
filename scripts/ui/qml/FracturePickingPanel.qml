@@ -9,7 +9,7 @@ Item {
     readonly property int actionDividerGap: 14
     readonly property int expandedWidth: 440
     readonly property int collapsedWidth: actionButtonWidth + panelPadding * 2
-    readonly property int panelHeight: 470
+    readonly property int panelHeight: 504
 
     width: bridge.collapsed ? collapsedWidth : expandedWidth
     height: panelHeight
@@ -43,6 +43,7 @@ Item {
         property color accent: root.blueColor
         property bool primary: false
         property bool softAccent: false
+        property bool actionEnabled: true
         signal clicked()
 
         width: parent ? parent.width : 110
@@ -53,6 +54,7 @@ Item {
               : (mouseArea.containsMouse ? root.buttonHoverColor : root.buttonBgColor)
         border.color: primary ? root.blueHoverColor : root.inputBorderColor
         border.width: 1
+        opacity: actionEnabled ? 1.0 : 0.45
 
         Text {
             anchors.fill: parent
@@ -71,6 +73,7 @@ Item {
             id: mouseArea
             anchors.fill: parent
             hoverEnabled: true
+            enabled: buttonRoot.actionEnabled
             onClicked: buttonRoot.clicked()
         }
     }
@@ -406,6 +409,27 @@ Item {
                     label: "Results"
                     onClicked: bridge.showResults()
                 }
+
+                Text {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.rightMargin: 108
+                    anchors.bottom: parent.bottom
+                    height: 32
+                    text: bridge.autoDetectionStatus
+                    color: root.mutedColor
+                    font.pixelSize: 11
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: bridge.autoDetectionStatus.length > 0
+                        hoverEnabled: true
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: bridge.showAutoDetectionMonitor()
+                    }
+                }
             }
 
             Item {
@@ -432,6 +456,7 @@ Item {
                     ToolButton {
                         label: "Finish"
                         primary: true
+                        actionEnabled: !bridge.autoDetectionRunning
                         ToolTip.visible: false
                         onClicked: bridge.finish()
                     }
@@ -440,34 +465,46 @@ Item {
 
                     ToolButton {
                         label: "Undo"
+                        actionEnabled: !bridge.autoDetectionRunning
                         onClicked: bridge.undo()
                     }
 
                     ToolButton {
                         label: "Delete"
+                        actionEnabled: !bridge.autoDetectionRunning
                         accent: root.dangerColor
                         onClicked: bridge.deleteSelected()
                     }
 
                     ToolButton {
                         label: "Clear All"
+                        actionEnabled: !bridge.autoDetectionRunning
                         onClicked: bridge.clearAll()
                     }
 
                     ToolButton {
                         label: "Cancel"
+                        actionEnabled: !bridge.autoDetectionRunning
                         onClicked: bridge.cancel()
+                    }
+
+                    ToolButton {
+                        label: bridge.autoDetectionButtonText
+                        softAccent: true
+                        onClicked: bridge.toggleAutoDetection()
                     }
 
                     ButtonGroupSeparator {}
 
                     ToolButton {
                         label: "Save"
+                        actionEnabled: !bridge.autoDetectionRunning
                         onClicked: bridge.saveResults()
                     }
 
                     ToolButton {
                         label: "Load"
+                        actionEnabled: !bridge.autoDetectionRunning
                         onClicked: bridge.loadResults()
                     }
 
@@ -476,6 +513,7 @@ Item {
                     ToolButton {
                         label: "Tadpole"
                         softAccent: true
+                        actionEnabled: !bridge.autoDetectionRunning
                         onClicked: bridge.showTadpoleTrack()
                     }
 

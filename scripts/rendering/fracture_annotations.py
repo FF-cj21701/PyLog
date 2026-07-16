@@ -72,6 +72,50 @@ def sinusoidal_fracture_xy(annotation: Dict[str, Any], samples: int = 361) -> Tu
     return x, y
 
 
+def fracture_parameters(annotation: Dict[str, Any]) -> Dict[str, float]:
+    """Return the human-facing c, A, phase representation of a fitted fracture."""
+    sin_coeff = float(annotation.get("sin_coeff", 0.0))
+    cos_coeff = float(annotation.get("cos_coeff", 0.0))
+    return {
+        "center_depth_m": float(annotation.get("offset", annotation.get("center_depth", 0.0))),
+        "amplitude_m": float(math.hypot(sin_coeff, cos_coeff)),
+        "phase_deg": float(math.degrees(math.atan2(cos_coeff, sin_coeff)) % 360.0),
+    }
+
+
+def annotation_from_fracture_parameters(center_depth_m, amplitude_m, phase_deg) -> Dict[str, float]:
+    center = float(center_depth_m)
+    amplitude = abs(float(amplitude_m))
+    phase = float(phase_deg) % 360.0
+    radians = math.radians(phase)
+    return {
+        "offset": center,
+        "sin_coeff": amplitude * math.cos(radians),
+        "cos_coeff": amplitude * math.sin(radians),
+        "amplitude": amplitude,
+    }
+
+
+def canonical_fracture_points(center_depth_m, amplitude_m, phase_deg) -> List[List[float]]:
+    """Generate seam, extrema, and mid-slope points from absolute sine parameters."""
+    fit = annotation_from_fracture_parameters(center_depth_m, amplitude_m, phase_deg)
+    phase = float(phase_deg) % 360.0
+    azimuths = {
+        0.0,
+        360.0,
+        (-phase) % 360.0,
+        (90.0 - phase) % 360.0,
+        (180.0 - phase) % 360.0,
+        (270.0 - phase) % 360.0,
+    }
+    points = []
+    for azimuth in sorted(azimuths):
+        radians = math.radians(azimuth)
+        depth = fit["offset"] + fit["sin_coeff"] * math.sin(radians) + fit["cos_coeff"] * math.cos(radians)
+        points.append([float(azimuth), float(depth)])
+    return points
+
+
 def enrich_fracture_interpretation(
     annotation: Dict[str, Any],
     *,

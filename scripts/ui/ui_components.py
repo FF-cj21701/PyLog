@@ -234,6 +234,7 @@ class FracturePickingBridge(QObject):
     collapsedChanged = Signal(bool)
     themeChanged = Signal()
     boreholeDiameterChanged = Signal()
+    autoDetectionChanged = Signal()
 
     def __init__(self, panel, log_widget):
         super().__init__(panel)
@@ -242,6 +243,8 @@ class FracturePickingBridge(QObject):
         self._target_labels = ["Auto"]
         self._current_target_index = 0
         self._collapsed = False
+        self._auto_detection_running = False
+        self._auto_detection_status = ""
         self._theme = {}
         self.refresh_theme()
 
@@ -290,6 +293,18 @@ class FracturePickingBridge(QObject):
         if self.log_widget and hasattr(self.log_widget, "fracture_borehole_diameter_in"):
             return f"{float(self.log_widget.fracture_borehole_diameter_in):g}"
         return "8"
+
+    @Property(bool, notify=autoDetectionChanged)
+    def autoDetectionRunning(self):
+        return self._auto_detection_running
+
+    @Property(str, notify=autoDetectionChanged)
+    def autoDetectionButtonText(self):
+        return "Stop AI" if self._auto_detection_running else "AI Pick"
+
+    @Property(str, notify=autoDetectionChanged)
+    def autoDetectionStatus(self):
+        return self._auto_detection_status
 
     @Property(str, notify=themeChanged)
     def panelBg(self):
@@ -367,6 +382,15 @@ class FracturePickingBridge(QObject):
         if changed_index:
             self.currentTargetIndexChanged.emit()
 
+    def set_auto_detection_state(self, running, status=""):
+        running = bool(running)
+        status = str(status or "")
+        if running == self._auto_detection_running and status == self._auto_detection_status:
+            return
+        self._auto_detection_running = running
+        self._auto_detection_status = status
+        self.autoDetectionChanged.emit()
+
     @Slot(bool)
     def setCollapsed(self, collapsed):
         collapsed = bool(collapsed)
@@ -442,8 +466,26 @@ class FracturePickingBridge(QObject):
             self.log_widget.show_tadpole_track()
 
     @Slot()
+    def toggleAutoDetection(self):
+        if not self.log_widget:
+            return
+        if self._auto_detection_running and hasattr(self.log_widget, "cancel_ai_fracture_detection"):
+            self.log_widget.cancel_ai_fracture_detection()
+        elif hasattr(self.log_widget, "start_ai_fracture_detection"):
+            self.log_widget.start_ai_fracture_detection()
+
+    @Slot()
+    def showAutoDetectionMonitor(self):
+        if self.log_widget and hasattr(self.log_widget, "show_ai_pick_monitor"):
+            self.log_widget.show_ai_pick_monitor()
+
+    @Slot()
     def exitMode(self):
-        if self.log_widget and hasattr(self.log_widget, "set_fracture_picking_enabled"):
+        if not self.log_widget:
+            return
+        if self._auto_detection_running and hasattr(self.log_widget, "cancel_ai_fracture_detection"):
+            self.log_widget.cancel_ai_fracture_detection()
+        if hasattr(self.log_widget, "set_fracture_picking_enabled"):
             self.log_widget.set_fracture_picking_enabled(False)
 
     @Slot(float, float)

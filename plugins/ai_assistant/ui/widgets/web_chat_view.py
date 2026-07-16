@@ -535,7 +535,7 @@ class WebChatView(QWebEngineView):
         else:
             self._pending_scripts.append(js)
 
-    def append_message(self, role, content, reasoning=None, tools=None, summary=None, is_html=False, callback=None, cards=None):
+    def append_message(self, role, content, reasoning=None, tools=None, summary=None, is_html=False, callback=None, cards=None, images=None):
         """添加消息到聊天界面。
         
         Args:
@@ -554,10 +554,11 @@ class WebChatView(QWebEngineView):
         safe_tools = json.dumps(tools) if tools else "null"
         safe_steps = json.dumps(self._current_message_steps) if role == 'ai' and self._current_message_steps else "null"
         safe_cards = json.dumps(cards) if cards else "null"
+        safe_images = json.dumps(images) if images else "null"
         safe_summary = json.dumps(summary) if summary else "null"
         safe_is_html = "true" if is_html else "false"
         
-        js = f"appendMessage({safe_role}, {safe_content}, {safe_ts}, {safe_reasoning}, {safe_tools}, {safe_summary}, null, {safe_steps}, {safe_is_html}, {safe_cards});"
+        js = f"appendMessage({safe_role}, {safe_content}, {safe_ts}, {safe_reasoning}, {safe_tools}, {safe_summary}, null, {safe_steps}, {safe_is_html}, {safe_cards}, {safe_images});"
         self._run_js(js, callback=callback)
         
         # 如果是AI消息，标记为活跃状态

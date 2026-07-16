@@ -222,6 +222,35 @@ p {
     flex-direction: column;
 }
 
+.connection-stack {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    gap: 18px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.check-field {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+}
+
+.check-field input {
+    width: auto;
+}
+
+.vision-independent-fields {
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border-color);
+}
+
+.vision-independent-fields.hidden {
+    display: none;
+}
+
 .card {
     min-width: 0;
     background: var(--bg-secondary);

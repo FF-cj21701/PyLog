@@ -48,7 +48,7 @@ function parseToolCalls(content) {
 
 
         // Append a message to the chat view
-        function appendMessage(role, content, timestamp, reasoning = null, tools = null, summary = null, processLogs = null, steps = null, isHtml = false, cards = null) {
+        function appendMessage(role, content, timestamp, reasoning = null, tools = null, summary = null, processLogs = null, steps = null, isHtml = false, cards = null, images = null) {
             dehydrateOldMessages(15);
             const msgWrapper = document.createElement('div');
             msgWrapper.className = role === 'system' ? 'system-message' : `message ${role}-message`;
@@ -78,13 +78,32 @@ function parseToolCalls(content) {
                 renderAiDetails(bubble, reasoning, tools, summary, processLogs, steps, content || '', cards);
                 answerBlock.classList.remove('is-hidden');
             } else {
+                renderUserMessageImages(bubble, images);
                 const contentDiv = document.createElement('div');
                 contentDiv.className = 'content';
                 contentDiv.innerHTML = processMessageContent(content, isHtml);
+                if (!content) contentDiv.classList.add('is-empty');
                 bubble.appendChild(contentDiv);
             }
             chatContainer.appendChild(msgWrapper);
             scrollToBottom(role === 'user');
+        }
+
+        function renderUserMessageImages(bubble, images) {
+            const validImages = Array.isArray(images)
+                ? images.filter(image => image && /^data:image\/(png|jpeg|webp|gif);base64,/i.test(image.data_url || ''))
+                : [];
+            if (!validImages.length) return;
+            const grid = document.createElement('div');
+            grid.className = 'user-message-images';
+            validImages.forEach((image, index) => {
+                const img = document.createElement('img');
+                img.src = image.data_url;
+                img.alt = image.name || `Attached image ${index + 1}`;
+                img.loading = 'lazy';
+                grid.appendChild(img);
+            });
+            bubble.appendChild(grid);
         }
 
         // Update the active AI message
@@ -497,6 +516,9 @@ function parseToolCalls(content) {
             window.__activeAiMessageEl = null;
             chatContainer.innerHTML = '';
             clearSelectionContext();
+            selectedImages = [];
+            renderImagePreviews();
+            updateSendButton();
             if (bridge) bridge.clearChat();
         }
 

@@ -14,13 +14,24 @@ def test_panel_host_reads_expanded_and_collapsed_sizes_from_qml_root():
     values = {
         "expandedWidth": 440,
         "collapsedWidth": 106,
-        "panelHeight": 470,
+        "panelHeight": 504,
     }
     root = SimpleNamespace(property=lambda name: values[name])
     panel = SimpleNamespace(rootObject=lambda: root)
 
-    assert FracturePickingPanel._qml_panel_size(panel, collapsed=False) == (440, 470)
-    assert FracturePickingPanel._qml_panel_size(panel, collapsed=True) == (106, 470)
+    assert FracturePickingPanel._qml_panel_size(panel, collapsed=False) == (440, 504)
+    assert FracturePickingPanel._qml_panel_size(panel, collapsed=True) == (106, 504)
+
+
+def test_fracture_panel_qml_exposes_ai_pick_action_and_status():
+    qml_path = os.path.join("scripts", "ui", "qml", "FracturePickingPanel.qml")
+    qml = open(qml_path, encoding="utf-8").read()
+
+    assert "bridge.autoDetectionButtonText" in qml
+    assert "bridge.toggleAutoDetection()" in qml
+    assert "bridge.autoDetectionStatus" in qml
+    assert 'label: "AI Test"' not in qml
+    assert "bridge.runDirectAiTest()" not in qml
 
 
 def test_borehole_diameter_converts_from_inches_to_depth_unit():

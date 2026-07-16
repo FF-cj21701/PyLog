@@ -44,6 +44,7 @@ class DummyTool:
         self,
         *,
         name: str,
+        description: str | None = None,
         side_effect_level: str = "none",
         is_verification_tool: bool = False,
         path_argument_names=None,
@@ -53,6 +54,7 @@ class DummyTool:
         source: str = "local",
     ):
         self.name = name
+        self.description = description or f"dummy tool {name}"
         self.side_effect_level = side_effect_level
         self.is_verification_tool = is_verification_tool
         self.path_argument_names = list(path_argument_names or ["filepath", "file_path"])
@@ -69,7 +71,7 @@ class DummyTool:
 
         return ToolSpec(
             name=self.name,
-            description=f"dummy tool {self.name}",
+            description=self.description,
             args_schema={},
             source=self.source,
             side_effect_level=self.side_effect_level,
@@ -1685,6 +1687,27 @@ class ToolManagerBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(read_entry["already_loaded"])
         self.assertTrue(read_entry["can_call_now"])
+
+    async def test_worker_search_caps_and_compacts_large_catalog_results(self):
+        tools = [
+            DummyTool(
+                name=f"fracture_tool_{index}",
+                description="fracture " + ("detail " * 100),
+                domain_tags=["geoscience"],
+                capability_tags=["fracture_detection"],
+                keywords=["fracture"],
+            )
+            for index in range(10)
+        ]
+        worker = AsyncAIWorker("key", "http://localhost/v1", "model", "fracture", tools=tools)
+
+        result = worker.tool_manager.find_tool("search_tools").execute(query="fracture", limit=10)
+
+        self.assertEqual(len(result["tools"]), 5)
+        self.assertNotIn("data", result)
+        self.assertLess(len(json.dumps(result)), 4000)
+        self.assertLessEqual(len(result["tools"][0]["description"]), 240)
+        self.assertNotIn("keywords", result["tools"][0])
 
     async def test_tool_selection_guidance_is_not_appended_twice(self):
         worker = AsyncAIWorker("key", "http://localhost/v1", "model", "hello", tools=[])

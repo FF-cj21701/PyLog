@@ -15,10 +15,13 @@ from ..rendering.image_manager import ImageTrackManager
 from ..rendering.fill_manager import FillManager
 from ..rendering.curve_manager import CurveManager
 from ..rendering.fracture_annotations import (
+    annotation_from_fracture_parameters,
+    canonical_fracture_points,
     FRACTURE_TYPE_STYLES,
     MIN_FRACTURE_PREVIEW_POINTS,
     MIN_FRACTURE_PICK_POINTS,
     build_fracture_annotation,
+    enrich_fracture_interpretation,
     sinusoidal_fracture_xy,
 )
 from ..utils.logger import logger
@@ -935,6 +938,9 @@ class ImageTrackContainer(BaseTrackContainer):
         self._fracture_preview_item = None
         self._fracture_pick_scatter = None
         self._fracture_drag_state = None
+        self._programmatic_fracture_session = None
+        self._ai_staged_fracture_annotations = []
+        self._ai_staged_fracture_items = []
         self.plot_widget.fracture_annotations = self.fracture_annotations
         
     def add_curve(self, data: np.ndarray, depth: np.ndarray, info: Dict[str, Any], rgb_full_bg: Optional[QColor] = None) -> None:
@@ -1114,6 +1120,7 @@ class ImageTrackContainer(BaseTrackContainer):
     def set_fracture_pick_enabled(self, enabled):
         self._fracture_pick_active = bool(enabled)
         if not enabled:
+            self.cancel_programmatic_fracture_pick()
             self._fracture_pick_points = []
             self._clear_fracture_preview()
 
@@ -1125,12 +1132,16 @@ class ImageTrackContainer(BaseTrackContainer):
         self._show_fracture_status("Fracture pick: left-click at least 3 points, Space/Enter to finish, Esc to cancel.")
 
     def cancel_fracture_pick(self, show_message=True):
+        if self._programmatic_fracture_session is not None:
+            return False
         self._fracture_pick_points = []
         self._clear_fracture_preview()
         if show_message:
             self._show_fracture_status("Current fracture pick canceled.")
 
     def finish_fracture_pick(self, continue_picking=False):
+        if self._programmatic_fracture_session is not None:
+            return False
         if len(self._fracture_pick_points) < MIN_FRACTURE_PICK_POINTS:
             self.cancel_fracture_pick(show_message=False)
             self._show_fracture_status("Not enough points for a fracture. Current pick canceled.")
@@ -1140,20 +1151,11 @@ class ImageTrackContainer(BaseTrackContainer):
         target_track = lw.get_fracture_display_track(fallback=self) if lw and hasattr(lw, "get_fracture_display_track") else self
         if target_track is None:
             target_track = self
-        annotation = build_fracture_annotation(
+        annotation = self._commit_fracture_points(
             self._fracture_pick_points,
-            fracture_type=style["fracture_type"],
-            color=style["color"],
-            line_width=style["line_width"],
-            name=f"Fracture {len(getattr(target_track, 'fracture_annotations', [])) + 1}",
+            style=style,
+            target_track=target_track,
         )
-        image_curve = next((c for c in self.plot_widget.curves if c.get('is_image')), None)
-        if image_curve:
-            info = image_curve.get("info", {})
-            annotation["source_curve_id"] = info.get("curve_id", info.get("id"))
-            annotation["source_curve_name"] = info.get("name")
-        annotation["source_track_id"] = id(self)
-        target_track.add_fracture_annotation(annotation)
         if lw:
             for track in getattr(lw, "track_containers", []):
                 if isinstance(track, TadpoleTrackContainer):
@@ -1167,13 +1169,222 @@ class ImageTrackContainer(BaseTrackContainer):
         self._show_fracture_status(f"Fracture pick added on {target_name}. Continue picking or disable Fracture mode.")
         return True
 
+    def _append_fracture_pick_point(self, azimuth_deg, depth):
+        try:
+            x = max(0.0, min(360.0, float(azimuth_deg)))
+            y = float(depth)
+        except (TypeError, ValueError):
+            return False
+        if not np.isfinite(x) or not np.isfinite(y):
+            return False
+        self._fracture_pick_points.append([x, y])
+        self._update_fracture_preview()
+        return True
+
+    def _commit_fracture_points(self, points, *, style, target_track=None, metadata=None):
+        target_track = target_track or self
+        annotation = build_fracture_annotation(
+            points,
+            fracture_type=style["fracture_type"],
+            color=style["color"],
+            line_width=style["line_width"],
+            name=f"Fracture {len(getattr(target_track, 'fracture_annotations', [])) + 1}",
+        )
+        image_curve = next((c for c in self.plot_widget.curves if c.get('is_image')), None)
+        if image_curve:
+            info = image_curve.get("info", {})
+            annotation["source_curve_id"] = info.get("curve_id", info.get("id"))
+            annotation["source_curve_name"] = info.get("title") or info.get("name")
+        annotation["source_track_id"] = id(self)
+        annotation.update(dict(metadata or {}))
+        annotation = enrich_fracture_interpretation(
+            annotation,
+            borehole_diameter=(metadata or {}).get("borehole_diameter_in"),
+        )
+        target_track.add_fracture_annotation(annotation)
+        return annotation
+
+    def begin_programmatic_fracture_pick(self, session_id, fracture_type, metadata=None):
+        if not session_id or fracture_type not in FRACTURE_TYPE_STYLES:
+            return False
+        style = FRACTURE_TYPE_STYLES[fracture_type]
+        metadata = dict(metadata or {})
+        self._programmatic_fracture_session = {
+            "session_id": str(session_id),
+            "fracture_type": fracture_type,
+            "style": {
+                "fracture_type": fracture_type,
+                "color": str(metadata.get("color") or style["color"]),
+                "line_width": float(metadata.get("line_width", 2.0)),
+            },
+            "metadata": metadata,
+        }
+        self._fracture_pick_active = True
+        self._fracture_pick_points = []
+        self._clear_fracture_preview()
+        return True
+
+    def append_programmatic_fracture_point(self, session_id, azimuth_deg, depth):
+        session = self._programmatic_fracture_session
+        if not session or session["session_id"] != str(session_id):
+            return False
+        return self._append_fracture_pick_point(azimuth_deg, depth)
+
+    def replace_programmatic_fracture_points(self, session_id, points):
+        session = self._programmatic_fracture_session
+        if not session or session["session_id"] != str(session_id):
+            return False
+        clean = []
+        for point in points or []:
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
+                continue
+            try:
+                x = max(0.0, min(360.0, float(point[0])))
+                y = float(point[1])
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(x) and np.isfinite(y):
+                clean.append([x, y])
+        self._fracture_pick_points = clean
+        self._update_fracture_preview()
+        return True
+
+    def replace_programmatic_fracture_parameters(
+        self,
+        session_id,
+        center_depth_m,
+        amplitude_m,
+        phase_deg,
+    ):
+        session = self._programmatic_fracture_session
+        if not session or session["session_id"] != str(session_id):
+            return False
+        try:
+            points = canonical_fracture_points(center_depth_m, amplitude_m, phase_deg)
+            parameters = annotation_from_fracture_parameters(center_depth_m, amplitude_m, phase_deg)
+        except (TypeError, ValueError):
+            return False
+        session["metadata"]["ai_final_parameters"] = {
+            "center_depth_m": float(parameters["offset"]),
+            "amplitude_m": float(parameters["amplitude"]),
+            "phase_deg": float(phase_deg) % 360.0,
+        }
+        return self.replace_programmatic_fracture_points(session_id, points)
+
+    def update_programmatic_fracture_metadata(self, session_id, metadata):
+        session = self._programmatic_fracture_session
+        if not session or session["session_id"] != str(session_id):
+            return False
+        session["metadata"].update(dict(metadata or {}))
+        return True
+
+    def commit_programmatic_fracture_pick(self, session_id):
+        session = self._programmatic_fracture_session
+        if not session or session["session_id"] != str(session_id):
+            return None
+        if len(self._fracture_pick_points) < MIN_FRACTURE_PICK_POINTS:
+            self.cancel_programmatic_fracture_pick(session_id)
+            return None
+        metadata = dict(session["metadata"])
+        metadata["final_points"] = [list(point) for point in self._fracture_pick_points]
+        annotation = self._commit_fracture_points(
+            self._fracture_pick_points,
+            style=session["style"],
+            target_track=self,
+            metadata=metadata,
+        )
+        self._programmatic_fracture_session = None
+        self._fracture_pick_points = []
+        self._clear_fracture_preview()
+        self.plot_widget.update()
+        self._refresh_tadpole_tracks()
+        return annotation
+
+    def stage_programmatic_fracture_pick(self, session_id):
+        session = self._programmatic_fracture_session
+        if not session or session["session_id"] != str(session_id):
+            return None
+        if len(self._fracture_pick_points) < MIN_FRACTURE_PICK_POINTS:
+            self.cancel_programmatic_fracture_pick(session_id)
+            return None
+        metadata = dict(session["metadata"])
+        metadata["final_points"] = [list(point) for point in self._fracture_pick_points]
+        annotation = build_fracture_annotation(
+            self._fracture_pick_points,
+            fracture_type=session["style"]["fracture_type"],
+            color=session["style"]["color"],
+            line_width=session["style"]["line_width"],
+            name=f"AI staged {len(self._ai_staged_fracture_annotations) + 1}",
+        )
+        annotation.update(metadata)
+        annotation = enrich_fracture_interpretation(
+            annotation,
+            borehole_diameter=metadata.get("borehole_diameter_in"),
+        )
+        self._programmatic_fracture_session = None
+        self._fracture_pick_points = []
+        self._clear_fracture_preview()
+        self._ai_staged_fracture_annotations.append(annotation)
+        self._ai_staged_fracture_items.append(self._add_ai_staged_fracture_item(annotation))
+        self.plot_widget.update()
+        return annotation
+
+    def set_ai_staged_fractures(self, annotations):
+        self.clear_ai_staged_fractures()
+        for annotation in annotations or []:
+            if not isinstance(annotation, dict) or annotation.get("type") != "sinusoidal_fracture":
+                continue
+            clean = dict(annotation)
+            self._ai_staged_fracture_annotations.append(clean)
+            self._ai_staged_fracture_items.append(self._add_ai_staged_fracture_item(clean))
+        self.plot_widget.update()
+        return list(self._ai_staged_fracture_annotations)
+
+    def clear_ai_staged_fractures(self):
+        for item in list(self._ai_staged_fracture_items):
+            try:
+                self.plot_widget.removeItem(item)
+            except Exception:
+                pass
+        self._ai_staged_fracture_items.clear()
+        self._ai_staged_fracture_annotations.clear()
+        self.plot_widget.update()
+
+    def commit_ai_staged_fractures(self, annotations=None):
+        selected = list(annotations) if annotations is not None else list(self._ai_staged_fracture_annotations)
+        self.clear_ai_staged_fractures()
+        committed = []
+        for annotation in selected:
+            clean = {
+                key: value for key, value in dict(annotation).items()
+                if not str(key).startswith("_") and key != "item"
+            }
+            clean["name"] = f"Fracture {len(self.fracture_annotations) + 1}"
+            self.add_fracture_annotation(clean)
+            committed.append(clean)
+        if committed:
+            self._refresh_tadpole_tracks()
+        return committed
+
+    def cancel_programmatic_fracture_pick(self, session_id=None):
+        session = self._programmatic_fracture_session
+        if session_id is not None and session and session["session_id"] != str(session_id):
+            return False
+        self._programmatic_fracture_session = None
+        self._fracture_pick_points = []
+        self._clear_fracture_preview()
+        return True
+
     def undo_fracture_pick_point(self):
+        if self._programmatic_fracture_session is not None:
+            return
         if not self._fracture_pick_points:
             return
         self._fracture_pick_points.pop()
         self._update_fracture_preview()
 
     def clear_fracture_annotations(self):
+        self.clear_ai_staged_fractures()
         for item in list(self._fracture_items):
             try:
                 self.plot_widget.removeItem(item)
@@ -1245,6 +1456,8 @@ class ImageTrackContainer(BaseTrackContainer):
         lw = self.log_widget or self.find_log_widget()
         if not getattr(lw, "fracture_picking_enabled", False):
             return False
+        if self._programmatic_fracture_session is not None:
+            return True
         if event.button() == Qt.RightButton:
             return False
         if event.button() != Qt.LeftButton:
@@ -1303,8 +1516,7 @@ class ImageTrackContainer(BaseTrackContainer):
         y = float(view_pos.y())
         if not np.isfinite(y):
             return True
-        self._fracture_pick_points.append([x, y])
-        self._update_fracture_preview()
+        self._append_fracture_pick_point(x, y)
         return True
 
     def handle_fracture_pick_mouse_move(self, event, plot_widget):
@@ -1344,6 +1556,8 @@ class ImageTrackContainer(BaseTrackContainer):
         lw = self.log_widget or self.find_log_widget()
         if not getattr(lw, "fracture_picking_enabled", False):
             return False
+        if self._programmatic_fracture_session is not None:
+            return True
         if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             self.finish_fracture_pick(continue_picking=True)
             return True
@@ -1364,6 +1578,8 @@ class ImageTrackContainer(BaseTrackContainer):
         return False
 
     def _current_fracture_style(self):
+        if self._programmatic_fracture_session is not None:
+            return self._programmatic_fracture_session["style"]
         lw = self.log_widget or self.find_log_widget()
         if lw and hasattr(lw, "get_fracture_pick_style"):
             return lw.get_fracture_pick_style()
@@ -1397,6 +1613,18 @@ class ImageTrackContainer(BaseTrackContainer):
         item.setZValue(50)
         self.plot_widget.addItem(item)
         self._fracture_items.append(item)
+        return item
+
+    def _add_ai_staged_fracture_item(self, annotation):
+        x, y = sinusoidal_fracture_xy(annotation)
+        color = QColor(annotation.get("color", "#00E5FF"))
+        item = pg.PlotDataItem(
+            x,
+            y,
+            pen=pg.mkPen(color, width=float(annotation.get("line_width", 2.0)), style=Qt.DashLine),
+        )
+        item.setZValue(52)
+        self.plot_widget.addItem(item)
         return item
 
     def _update_fracture_item(self, index):

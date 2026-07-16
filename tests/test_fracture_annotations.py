@@ -6,10 +6,35 @@ from scripts.rendering.fracture_annotations import (
     FRACTURE_TYPE_STYLES,
     MIN_FRACTURE_PREVIEW_POINTS,
     MIN_FRACTURE_PICK_POINTS,
+    annotation_from_fracture_parameters,
     build_fracture_annotation,
+    canonical_fracture_points,
     enrich_fracture_interpretation,
+    fracture_parameters,
     sinusoidal_fracture_xy,
 )
+
+
+def test_absolute_parameters_round_trip_through_existing_coefficients():
+    annotation = annotation_from_fracture_parameters(1005.25, 0.75, 215.0)
+    recovered = fracture_parameters(annotation)
+
+    assert recovered["center_depth_m"] == pytest_approx(1005.25)
+    assert recovered["amplitude_m"] == pytest_approx(0.75)
+    assert recovered["phase_deg"] == pytest_approx(215.0)
+
+
+def test_canonical_parameter_points_refit_to_the_same_sine():
+    points = canonical_fracture_points(1005.25, 0.75, 215.0)
+    annotation = build_fracture_annotation(points)
+    recovered = fracture_parameters(annotation)
+
+    assert 3 <= len(points) <= 7
+    assert points[0][0] == 0.0
+    assert points[-1][0] == 360.0
+    assert recovered["center_depth_m"] == pytest_approx(1005.25)
+    assert recovered["amplitude_m"] == pytest_approx(0.75)
+    assert recovered["phase_deg"] == pytest_approx(215.0)
 
 
 def test_sinusoidal_fracture_fit_recovers_fixed_period_trace():

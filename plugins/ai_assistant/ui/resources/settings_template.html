@@ -34,7 +34,9 @@
             </header>
 
             <section class="panel active" id="panel-connection">
+                <div class="connection-stack">
                 <div class="card">
+                    <div class="card-header"><h2>Chat Model</h2></div>
                     <div class="section-row">
                         <label>Active Profile</label>
                         <select id="profile-select"></select>
@@ -54,6 +56,45 @@
                         </div>
                     </div>
                     <div class="model-list" id="model-list"></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <h2>Vision Model</h2>
+                            <p class="section-hint">Independent connection for borehole image analysis.</p>
+                        </div>
+                    </div>
+                    <div class="form-grid">
+                        <label>Connection</label>
+                        <label class="check-field">
+                            <input id="vision-use-current-input" type="checkbox">
+                            <span>Use current AI profile</span>
+                        </label>
+                        <label>Override Model</label>
+                        <div class="inline-field">
+                            <input id="vision-model-input" type="text" placeholder="Use profile model">
+                            <button class="secondary-btn" id="fetch-vision-models-btn">Auto Fetch</button>
+                        </div>
+                        <label>Timeout (seconds)</label>
+                        <input id="vision-timeout-input" type="number" min="10" max="600">
+                        <label>Concurrency</label>
+                        <input id="vision-concurrency-input" type="number" min="1" max="8">
+                    </div>
+                    <div class="vision-independent-fields" id="vision-independent-fields">
+                        <div class="form-grid">
+                            <label>Provider</label>
+                            <select id="vision-provider-input">
+                                <option value="OpenAI">OpenAI</option>
+                                <option value="Custom / Other">Custom / Other</option>
+                            </select>
+                            <label>API Key</label>
+                            <input id="vision-api-key-input" type="password" autocomplete="off" placeholder="sk-...">
+                            <label>Base URL</label>
+                            <input id="vision-base-url-input" type="text" placeholder="https://api.openai.com/v1">
+                        </div>
+                    </div>
+                    <div class="model-list" id="vision-model-list"></div>
+                </div>
                 </div>
             </section>
 

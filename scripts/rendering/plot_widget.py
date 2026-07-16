@@ -18,10 +18,13 @@ from ..ui.plot_dialogs import (UnifiedSettingsDialog, WellSelectionDialog, UnitE
 from ..rendering.plot_components import (InteractivePlotWidget, HeaderWidget, SelectionOverlay, PainterDepthTrack, CachedGridItem)
 from ..ui.ui_components import (FloatingScaleControl, FloatingHeaderToggle, FracturePickingPanel, QuickAddZone, TrackSpacer, CustomScrollArea)
 from ..rendering.fracture_annotations import FRACTURE_TYPE_STYLES, enrich_fracture_interpretation
+from ..rendering.fracture_pick_scheduler import FracturePickPlaybackScheduler
 from ..data.export_manager import LogExporter
 from ..tracks.track_container import BaseTrackContainer, DepthTrackContainer, CurveTrackContainer, ImageTrackContainer, TadpoleTrackContainer
 from ..rendering.scroll_manager import ScrollManager
 from ..utils.logger import logger
+
+AI_PICK_FRACTURE_TYPES = ("Conductive", "Resistive")
 
 # --- Main Widget ---
 
@@ -31,6 +34,7 @@ from ..utils.logger import logger
 class LogWidget(QWidget):
     loadingFinished = Signal() # Emitted when all async data and image renders are done
     selectionChanged = Signal(list) # [NEW] Emitted when tracks or curves are selected (multi-selection support)
+    aiFractureResultsReady = Signal(str, str, object)
     
     def __init__(self, db_or_path, parent=None):
         super().__init__(parent)
@@ -203,6 +207,22 @@ class LogWidget(QWidget):
         self.fracture_target_track = None
         self.fracture_borehole_diameter_in = 8.0
         self._fracture_results_dirty = False
+        self._fracture_detection_run_id = None
+        self._last_fracture_detection_run_id = None
+        self._ai_pick_monitor_dialog = None
+        self._fracture_detection_timer = QTimer(self)
+        self._fracture_detection_timer.setInterval(250)
+        self._fracture_detection_timer.timeout.connect(self._poll_ai_fracture_detection)
+        self._fracture_playback_scheduler = FracturePickPlaybackScheduler(self)
+        self._fracture_playback_scheduler.statusChanged.connect(self._on_ai_playback_status)
+        self._fracture_playback_scheduler.finished.connect(self._on_ai_playback_finished)
+        self._fracture_playback_scheduler.cancelled.connect(self._on_ai_playback_cancelled)
+        self._fracture_playback_scheduler.failed.connect(self._on_ai_playback_failed)
+        self._fracture_playback_scheduler.diagnosticEvent.connect(self._on_ai_playback_diagnostic)
+        self.aiFractureResultsReady.connect(
+            self._start_ai_fracture_playback_from_worker,
+            Qt.QueuedConnection,
+        )
         
         # Use a per-plot thread pool so one window's template/image work
         # cannot starve unrelated plot windows via the global pool.
@@ -482,6 +502,21 @@ class LogWidget(QWidget):
 
     def closeEvent(self, event):
         """Cleanup when plot window is closed."""
+        if hasattr(self, "_fracture_playback_scheduler"):
+            self._fracture_playback_scheduler.cancel()
+        if hasattr(self, '_fracture_detection_timer'):
+            self._fracture_detection_timer.stop()
+        if getattr(self, '_fracture_detection_run_id', None):
+            try:
+                from plugins.ai_assistant.services.fracture_detection_service import get_fracture_detection_manager
+                get_fracture_detection_manager().cancel(self._fracture_detection_run_id)
+            except Exception:
+                pass
+        monitor = getattr(self, "_ai_pick_monitor_dialog", None)
+        if monitor is not None:
+            monitor._timer.stop()
+            monitor.deleteLater()
+            self._ai_pick_monitor_dialog = None
         if hasattr(self, 'sb_anim'):
             self.sb_anim.stop()
         if hasattr(self, 'scroll_timer'):
@@ -541,6 +576,12 @@ class LogWidget(QWidget):
         sb.setValue(sb.maximum())
 
     def set_fracture_picking_enabled(self, enabled):
+        if (
+            not enabled
+            and hasattr(self, "_fracture_playback_scheduler")
+            and self._fracture_playback_scheduler.active
+        ):
+            self.cancel_ai_fracture_detection()
         self.fracture_picking_enabled = bool(enabled)
         self.refresh_fracture_target_tracks()
         self._ensure_mdi_activation_hook()
@@ -1028,10 +1069,17 @@ class LogWidget(QWidget):
         details = {
             'window_title': self.windowTitle(),
             'well_name': self.windowTitle().replace("Plot: ", "").replace("Log Plot ", ""),
+            'visible_depth_range': None,
+            'borehole_diameter_in': float(getattr(self, 'fracture_borehole_diameter_in', 8.0)),
+            'existing_fracture_count': len(self.collect_fracture_annotations()),
             'tracks': []
         }
+        master_vb = self.get_master_viewbox() if hasattr(self, 'get_master_viewbox') else None
+        if master_vb:
+            visible = master_vb.viewRange()[1]
+            details['visible_depth_range'] = [float(visible[0]), float(visible[1])]
         
-        for track in self.track_containers:
+        for track_index, track in enumerate(self.track_containers):
             # [NEW] Prioritize custom track name (Track 1, Track 2...)
             track_name = getattr(track, 'track_name', None)
             if not track_name:
@@ -1042,22 +1090,414 @@ class LogWidget(QWidget):
                     track_name = "Track"
             
             track_info = {
+                'index': track_index,
                 'name': track_name,
+                'label': LogWidget._fracture_track_label(self, track) if any(
+                    curve.get('is_image') for curve in getattr(track.plot_widget, 'curves', [])
+                ) else track_name,
                 'curves': []
             }
             if hasattr(track, 'plot_widget') and hasattr(track.plot_widget, 'curves'):
                 for c in track.plot_widget.curves:
                     c_info = c.get('info', {})
                     c_name = c_info.get('title') or c_info.get('name') or "Unknown"
-                    track_info['curves'].append({
+                    is_image = bool(c.get('is_image', False))
+                    curve_info = {
                         'name': c_name,
                         'folder': c_info.get('folder'),
                         'unit': c_info.get('unit', ''),
                         'min': c_info.get('min', 0),
-                        'max': c_info.get('max', 100)
-                    })
+                        'max': c_info.get('max', 100),
+                        'is_image': is_image,
+                    }
+                    if is_image:
+                        data = c.get('data')
+                        depth = c.get('depth')
+                        shape = getattr(data, 'shape', ())
+                        curve_info.update({
+                            'shape': [int(value) for value in shape],
+                            'depth_range': [float(depth[0]), float(depth[-1])] if depth is not None and len(depth) else None,
+                            'depth_samples': int(len(depth)) if depth is not None else 0,
+                            'azimuth_range_deg': [0.0, 360.0],
+                            'display': {
+                                'cmap': c_info.get('cmap'),
+                                'log': bool(c_info.get('log', False)),
+                                'invert': bool(c_info.get('invert', False)),
+                            },
+                        })
+                    track_info['curves'].append(curve_info)
             details['tracks'].append(track_info)
         return details
+
+    def render_analysis_tracks(
+        self,
+        track_names,
+        depth_start,
+        depth_end,
+        width=1600,
+        height=1200,
+        *,
+        include_depth_track=False,
+        preserve_aspect=False,
+        respect_current_vertical_scale=False,
+    ):
+        """Render selected visible plot tracks for image-based analysis."""
+        from ..data.export_manager import PlotAnalysisRenderer
+
+        return PlotAnalysisRenderer(self).render(
+            track_names,
+            depth_start,
+            depth_end,
+            width=width,
+            height=height,
+            include_depth_track=include_depth_track,
+            preserve_aspect=preserve_aspect,
+            respect_current_vertical_scale=respect_current_vertical_scale,
+        )
+
+    def _set_ai_fracture_panel_state(self, running, status=""):
+        panel = getattr(self, "fracture_panel", None)
+        bridge = getattr(panel, "bridge", None)
+        if bridge and hasattr(bridge, "set_auto_detection_state"):
+            bridge.set_auto_detection_state(running, status)
+
+    def start_ai_fracture_detection(self):
+        """Run visual fracture detection for the panel's current target and viewport."""
+        if self._fracture_detection_run_id:
+            self._show_fracture_status("AI fracture detection is already running.")
+            return None
+        target = self.fracture_target_track
+        if target not in self._image_tracks_for_fracture_display():
+            target = self.get_fracture_display_track()
+        if target is None:
+            self._set_ai_fracture_panel_state(False, "No image track")
+            self._show_fracture_status("AI picking requires an image track.")
+            return None
+        viewbox = self.get_master_viewbox()
+        if viewbox is None:
+            self._set_ai_fracture_panel_state(False, "No depth range")
+            self._show_fracture_status("AI picking requires a visible depth range.")
+            return None
+
+        try:
+            import base64
+            from plugins.ai_assistant.services.fracture_detection_service import (
+                FractureDetectionRequest,
+                get_fracture_detection_manager,
+            )
+            from plugins.ai_assistant.services.fracture_vision_service import FractureVisionPipeline
+
+            depth_values = [float(value) for value in viewbox.viewRange()[1]]
+            depth_start, depth_end = min(depth_values), max(depth_values)
+            target_label = self._fracture_track_label(target)
+            request = FractureDetectionRequest.build(
+                window_id=self.windowTitle() or "Log Plot",
+                tracks=[target_label],
+                target_image_track=target_label,
+                depth_start=depth_start,
+                depth_end=depth_end,
+                fracture_types=AI_PICK_FRACTURE_TYPES,
+                borehole_diameter_in=self.fracture_borehole_diameter_in,
+                min_confidence=0.60,
+            )
+            self._set_ai_fracture_panel_state(True, "Preparing image...")
+            rendered = self.render_analysis_tracks(
+                request.tracks,
+                request.depth_start,
+                request.depth_end,
+                width=1600,
+                height=1600,
+                include_depth_track=True,
+                preserve_aspect=True,
+                respect_current_vertical_scale=True,
+            )
+            input_payload = {
+                "data_url": "data:image/png;base64," + base64.b64encode(rendered["png_bytes"]).decode("ascii"),
+                "metadata": rendered["metadata"],
+            }
+            pipeline = FractureVisionPipeline()
+
+            def worker(run_request, context, analysis_input):
+                annotations = pipeline.detect(run_request, context, analysis_input)
+                if context.cancelled:
+                    return []
+                context.defer_completion()
+                context.update("playback", 0.90, "Preparing final candidate playback")
+                self.aiFractureResultsReady.emit(
+                    context.run_id,
+                    run_request.target_image_track,
+                    annotations,
+                )
+                return annotations
+
+            run = get_fracture_detection_manager().start(
+                request,
+                input_payload=input_payload,
+                worker=worker,
+            )
+            self._fracture_detection_run_id = run["run_id"]
+            self._last_fracture_detection_run_id = run["run_id"]
+            self._fracture_detection_timer.start()
+            if hasattr(self, "show_ai_pick_monitor"):
+                self.show_ai_pick_monitor(run["run_id"])
+            self._set_ai_fracture_panel_state(True, "AI: queued")
+            self._show_fracture_status(
+                f"AI picking started for {target_label}, {depth_start:.3f}-{depth_end:.3f}."
+            )
+            return run
+        except Exception as exc:
+            self._fracture_detection_run_id = None
+            self._fracture_detection_timer.stop()
+            self._set_ai_fracture_panel_state(False, f"AI failed: {exc}")
+            self._show_fracture_status(f"AI picking could not start: {exc}")
+            logger.exception("Failed to start AI fracture detection")
+            return None
+
+    def show_ai_pick_monitor(self, run_id=None):
+        selected_run_id = str(
+            run_id or self._fracture_detection_run_id or self._last_fracture_detection_run_id or ""
+        )
+        if not selected_run_id:
+            self._show_fracture_status("No AI Pick run is available to monitor.")
+            return None
+        from ..ui.dialogs.ai_pick_monitor_dialog import AIPickMonitorDialog
+
+        dialog = self._ai_pick_monitor_dialog
+        if dialog is None:
+            dialog = AIPickMonitorDialog(self, self.window())
+            self._ai_pick_monitor_dialog = dialog
+        dialog.show_for_run(selected_run_id)
+        return dialog
+
+    def cancel_ai_fracture_detection(self):
+        run_id = self._fracture_detection_run_id
+        if not run_id:
+            return
+        try:
+            from plugins.ai_assistant.services.fracture_detection_service import get_fracture_detection_manager
+            manager = get_fracture_detection_manager()
+            manager.cancel(run_id)
+            if not self._fracture_playback_scheduler.cancel():
+                self._set_ai_fracture_panel_state(True, "AI: cancelling...")
+        except Exception as exc:
+            self._set_ai_fracture_panel_state(False, f"Cancel failed: {exc}")
+
+    def _poll_ai_fracture_detection(self):
+        run_id = self._fracture_detection_run_id
+        if not run_id:
+            self._fracture_detection_timer.stop()
+            return
+        try:
+            from plugins.ai_assistant.services.fracture_detection_service import get_fracture_detection_manager
+            status = get_fracture_detection_manager().get_status(run_id)
+        except Exception as exc:
+            self._fracture_detection_run_id = None
+            self._fracture_detection_timer.stop()
+            self._set_ai_fracture_panel_state(False, f"AI failed: {exc}")
+            return
+
+        state = status.get("status")
+        if state not in {"completed", "cancelled", "failed"}:
+            progress = int(round(float(status.get("progress", 0.0)) * 100))
+            self._set_ai_fracture_panel_state(True, f"AI: {status.get('stage', 'running')} {progress}%")
+            return
+
+        self._fracture_detection_run_id = None
+        self._fracture_detection_timer.stop()
+        if state == "completed":
+            count = int(status.get("result_count", 0))
+            message = f"AI: {count} candidate(s)"
+        elif state == "cancelled":
+            message = "AI: cancelled"
+        else:
+            message = f"AI failed: {status.get('error') or status.get('message') or 'unknown error'}"
+        self._set_ai_fracture_panel_state(False, message)
+        self._show_fracture_status(message)
+
+    def _start_ai_fracture_playback_from_worker(self, run_id, target_image_track, annotations):
+        try:
+            self.start_ai_fracture_playback(run_id, target_image_track, annotations)
+        except Exception as exc:
+            self._set_ai_fracture_panel_state(False, f"Apply failed: {exc}")
+            self._show_fracture_status(f"AI fracture results could not be applied: {exc}")
+            try:
+                from plugins.ai_assistant.services.fracture_detection_service import get_fracture_detection_manager
+                get_fracture_detection_manager().fail(run_id, exc)
+            except Exception:
+                pass
+            logger.exception("Failed to apply AI fracture results")
+
+    def start_ai_fracture_playback(self, run_id, target_image_track, annotations):
+        """Atomically commit one audited AI batch on the GUI thread."""
+        target = next(
+            (
+                track for track in self._image_tracks_for_fracture_display()
+                if target_image_track in (getattr(track, "track_name", None), self._fracture_track_label(track))
+            ),
+            None,
+        )
+        if target is None:
+            raise ValueError(f"Target image track '{target_image_track}' was not found")
+        if self._fracture_playback_scheduler.active:
+            raise RuntimeError("AI fracture playback is already active in this plot")
+
+        from plugins.ai_assistant.services.fracture_detection_service import get_fracture_detection_manager
+
+        manager = get_fracture_detection_manager()
+        run_status = manager.get_status(run_id)
+        initial_discarded_count = int((run_status.get("diagnostics") or {}).get("discarded_count", 0))
+
+        ai_annotations = []
+        for annotation in annotations or []:
+            if not isinstance(annotation, dict):
+                continue
+            item = dict(annotation)
+            style = FRACTURE_TYPE_STYLES.get(item.get("fracture_type"))
+            if style:
+                item["color"] = style["color"]
+            ai_annotations.append(item)
+
+        self._fracture_detection_run_id = str(run_id)
+        self.set_active_fracture_track(target)
+        manager.update_playback(
+            run_id,
+            stage="gui_staging",
+            progress=0.97,
+            message="Preparing final AI fractures",
+            current_fracture_index=0,
+            total_fractures=len(ai_annotations),
+            applied_count=0,
+            needs_review_count=0,
+            staged_count=0,
+            discarded_count=initial_discarded_count,
+            audit_stage="completed",
+        )
+        self._set_ai_fracture_panel_state(True, "AI: preparing final fractures")
+        self._fracture_playback_scheduler.start(
+            run_id,
+            target,
+            ai_annotations,
+            target_validator=lambda item: item in self.track_containers,
+            cancel_requested=lambda: manager.get_status(run_id).get("cancel_requested", False),
+            initial_discarded_count=initial_discarded_count,
+        )
+        return {"ok": True, "queued_count": len(ai_annotations)}
+
+    def _on_ai_playback_status(self, run_id, details):
+        try:
+            from plugins.ai_assistant.services.fracture_detection_service import get_fracture_detection_manager
+            total = max(1, int(details.get("total_fractures", 0)))
+            current = max(0, int(details.get("current_fracture_index", 0)) - 1)
+            points = max(1, int(details.get("total_points", 0)))
+            point_index = int(details.get("current_point_index", 0))
+            stage_hint = details.get("stage")
+            if stage_hint == "committing":
+                progress = 0.99
+            else:
+                progress = 0.90 + 0.09 * min(1.0, (current + point_index / points) / total)
+            payload = dict(details)
+            stage = payload.pop("stage", "playback")
+            message = payload.pop("message", "AI commit")
+            get_fracture_detection_manager().update_playback(
+                run_id,
+                stage=stage,
+                progress=progress,
+                message=message,
+                **payload,
+            )
+            self._set_ai_fracture_panel_state(True, message)
+        except Exception as exc:
+            logger.warning("Unable to update AI fracture playback status: %s", exc)
+
+    def _on_ai_playback_diagnostic(self, run_id, event):
+        try:
+            from plugins.ai_assistant.services.fracture_detection_service import get_fracture_detection_manager
+            get_fracture_detection_manager().append_diagnostic_event(run_id, event)
+        except Exception as exc:
+            logger.warning("Unable to record AI fracture playback diagnostic: %s", exc)
+
+    def _on_ai_playback_finished(self, run_id, applied_count, needs_review_count, discarded_count):
+        from plugins.ai_assistant.services.fracture_detection_service import get_fracture_detection_manager
+        manager = get_fracture_detection_manager()
+        message = (
+            f"AI: completed, {applied_count} added, {discarded_count} discarded, "
+            f"{needs_review_count} needs review"
+        )
+        manager.update_playback(
+            run_id,
+            stage="completed",
+            progress=1.0,
+            message=message,
+            applied_count=applied_count,
+            needs_review_count=needs_review_count,
+            staged_count=applied_count,
+            discarded_count=discarded_count,
+            audit_stage="completed",
+        )
+        manager.complete(run_id, applied_count, message)
+        if applied_count:
+            self._fracture_results_dirty = True
+            self.refresh_tadpole_tracks()
+            results_dialog = getattr(self, "fracture_results_dialog", None)
+            if results_dialog is not None and hasattr(results_dialog, "refresh"):
+                results_dialog.refresh()
+        if self._fracture_detection_run_id == run_id:
+            self._fracture_detection_run_id = None
+        self._fracture_detection_timer.stop()
+        self._set_ai_fracture_panel_state(False, message)
+        self._show_fracture_status(message)
+
+    def _on_ai_playback_cancelled(self, run_id, applied_count):
+        from plugins.ai_assistant.services.fracture_detection_service import get_fracture_detection_manager
+        manager = get_fracture_detection_manager()
+        manager.update_playback(run_id, applied_count=applied_count)
+        manager.finish_cancelled(run_id)
+        if self._fracture_detection_run_id == run_id:
+            self._fracture_detection_run_id = None
+        self._fracture_detection_timer.stop()
+        self._set_ai_fracture_panel_state(False, "AI: cancelled, staged results cleared")
+
+    def _on_ai_playback_failed(self, run_id, error):
+        from plugins.ai_assistant.services.fracture_detection_service import get_fracture_detection_manager
+        get_fracture_detection_manager().fail(run_id, error)
+        if self._fracture_detection_run_id == run_id:
+            self._fracture_detection_run_id = None
+        self._fracture_detection_timer.stop()
+        self._set_ai_fracture_panel_state(False, f"AI failed: {error}")
+        self._show_fracture_status(f"AI playback failed: {error}")
+
+    def apply_ai_fracture_results(self, target_image_track, annotations):
+        """Append one completed AI detection batch to its designated image track."""
+        target = next(
+            (
+                track for track in self._image_tracks_for_fracture_display()
+                if target_image_track in (getattr(track, "track_name", None), self._fracture_track_label(track))
+            ),
+            None,
+        )
+        if target is None:
+            raise ValueError(f"Target image track '{target_image_track}' was not found")
+        image_curve = next((curve for curve in target.plot_widget.curves if curve.get("is_image")), None)
+        image_info = image_curve.get("info", {}) if image_curve else {}
+        applied = []
+        for annotation in annotations or []:
+            if not isinstance(annotation, dict) or annotation.get("type") != "sinusoidal_fracture":
+                continue
+            clean = dict(annotation)
+            clean["name"] = f"Fracture {len(target.fracture_annotations) + 1}"
+            clean["target_track_label"] = self._fracture_track_label(target)
+            clean.setdefault("source_track_label", self._fracture_track_label(target))
+            clean.setdefault("source_curve_id", image_info.get("curve_id", image_info.get("id")))
+            clean.setdefault("source_curve_name", image_info.get("title") or image_info.get("name"))
+            target.add_fracture_annotation(clean)
+            applied.append(clean)
+        if applied:
+            self._fracture_results_dirty = True
+            self.refresh_tadpole_tracks()
+            self._show_fracture_status(f"AI detection added {len(applied)} fracture candidate(s).")
+        else:
+            self._show_fracture_status("AI detection completed with no fracture candidates.")
+        return applied
 
     # --- [EXPORT] Delegated to LogExporter ---
     def export_plot(self):
@@ -1152,6 +1592,12 @@ class LogWidget(QWidget):
     def remove_track(self, container):
         """Safely remove a track and sync layout."""
         if container in self.track_containers:
+            if (
+                hasattr(self, "_fracture_playback_scheduler")
+                and self._fracture_playback_scheduler.active
+                and container is self.active_fracture_track
+            ):
+                self.cancel_ai_fracture_detection()
             self.track_containers.remove(container)
             if hasattr(container, 'cleanup'):
                 container.cleanup()

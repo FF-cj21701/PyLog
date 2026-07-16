@@ -84,7 +84,7 @@ class ChatService(QObject):
             self.execution_policy,
         )
 
-    def start_chat(self, user_text, context_data, history, mode="chat"):
+    def start_chat(self, user_text, context_data, history, mode="chat", images=None):
         profile_tool_names = self._script_edit_profile_tool_names(user_text, context_data)
         self._current_turn_initial_tool_names = set(self.active_tool_names) | set(profile_tool_names)
         prompt = self.compose_prompt(
@@ -95,9 +95,9 @@ class ChatService(QObject):
         self.task_state_machine.start_task(user_text, mode=mode)
 
         # Run the worker start in an async context so MCP tools can be fetched.
-        self._current_chat_task = asyncio.create_task(self._start_chat_async(prompt, history, mode))
+        self._current_chat_task = asyncio.create_task(self._start_chat_async(prompt, history, mode, images=images))
 
-    async def _start_chat_async(self, prompt, history, mode="chat"):
+    async def _start_chat_async(self, prompt, history, mode="chat", images=None):
         """Start a chat turn after refreshing per-turn MCP tools."""
         turn_tool_manager = ToolManager(self.tools)
 
@@ -119,6 +119,7 @@ class ChatService(QObject):
             mode=mode,
             all_tools=turn_tool_manager.tools,
             initial_active_tool_names=getattr(self, "_current_turn_initial_tool_names", getattr(self, "active_tool_names", set())),
+            images=images,
         )
 
     def stop(self):
@@ -146,6 +147,7 @@ class ChatService(QObject):
         mode="chat",
         all_tools=None,
         initial_active_tool_names=None,
+        images=None,
     ):
         api_key = self.config.get_api_key()
         base_url = self.config.get_base_url()
@@ -174,6 +176,7 @@ class ChatService(QObject):
             verification_coordinator=self.verification_coordinator,
             initial_active_tool_names=initial_active_tool_names or getattr(self, "active_tool_names", set()),
             on_tools_loaded=self._handle_tools_loaded,
+            images=images,
         )
 
         self.runtime = AgentRuntime(self.worker)

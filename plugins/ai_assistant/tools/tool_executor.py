@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import base64
 from PySide6.QtCore import QObject, Signal, Slot, Qt
 
 # Add the plugin root dynamically so internal imports remain robust.
@@ -76,6 +77,8 @@ class ToolExecutor(QObject):
     execute_apply_track_style = Signal(str)
     execute_save_curve = Signal(str)    # Curve save signal.
     execute_get_plot_details = Signal(str) # Window title payload.
+    execute_render_analysis_tracks = Signal(str)  # JSON render request.
+    execute_apply_fracture_detection_results = Signal(str)  # JSON result batch.
     
     # Result signals.
     tool_executed = Signal(str)
@@ -109,6 +112,8 @@ class ToolExecutor(QObject):
         self.execute_apply_track_style.connect(self._apply_track_style)
         self.execute_save_curve.connect(self._save_curve)
         self.execute_get_plot_details.connect(self._get_plot_details)
+        self.execute_render_analysis_tracks.connect(self._render_analysis_tracks)
+        self.execute_apply_fracture_detection_results.connect(self._apply_fracture_detection_results)
         self.execution_context = {}
         self.terminal_history = []
         self._last_script_editor_id = None
@@ -1048,4 +1053,57 @@ class ToolExecutor(QObject):
         except Exception as e:
             result = {"error": str(e)}
         
+        self.tool_executed.emit(json.dumps(result))
+
+    def _find_plot_widget(self, title):
+        if not self.main_window or not hasattr(self.main_window, "mdi_area"):
+            return None
+        for sub in self.main_window.mdi_area.subWindowList():
+            current = sub.windowTitle()
+            if current == title or current == f"Plot: {title}" or current == f"Log Plot {title}":
+                return sub.widget()
+        return None
+
+    @Slot(str)
+    def _render_analysis_tracks(self, payload_json):
+        try:
+            payload = json.loads(payload_json)
+            widget = self._find_plot_widget(payload.get("window_id"))
+            if widget is None or not hasattr(widget, "render_analysis_tracks"):
+                result = {"ok": False, "error": f"Plot window '{payload.get('window_id')}' was not found"}
+            else:
+                rendered = widget.render_analysis_tracks(
+                    payload.get("tracks"),
+                    payload.get("depth_start"),
+                    payload.get("depth_end"),
+                    width=payload.get("width", 1600),
+                    height=payload.get("height", 1600),
+                      include_depth_track=bool(payload.get("include_depth_track", False)),
+                      preserve_aspect=bool(payload.get("preserve_aspect", False)),
+                      respect_current_vertical_scale=bool(payload.get("respect_current_vertical_scale", False)),
+                  )
+                result = {
+                    "ok": True,
+                    "metadata": rendered["metadata"],
+                    "data_url": "data:image/png;base64," + base64.b64encode(rendered["png_bytes"]).decode("ascii"),
+                }
+        except Exception as exc:
+            result = {"ok": False, "error": str(exc)}
+        self.tool_executed.emit(json.dumps(result))
+
+    @Slot(str)
+    def _apply_fracture_detection_results(self, payload_json):
+        try:
+            payload = json.loads(payload_json)
+            widget = self._find_plot_widget(payload.get("window_id"))
+            if widget is None or not hasattr(widget, "start_ai_fracture_playback"):
+                result = {"ok": False, "error": f"Plot window '{payload.get('window_id')}' was not found"}
+            else:
+                result = widget.start_ai_fracture_playback(
+                    payload.get("run_id"),
+                    payload.get("target_image_track"),
+                    payload.get("annotations") or [],
+                )
+        except Exception as exc:
+            result = {"ok": False, "error": str(exc)}
         self.tool_executed.emit(json.dumps(result))

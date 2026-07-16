@@ -1,6 +1,8 @@
 
 import sys
 import os
+import base64
+import binascii
 import json
 import html
 import re
@@ -106,6 +108,48 @@ def normalize_chat_actual_text(text):
     cleaned, marker_contexts = _extract_marker_contexts(html.unescape(cleaned))
     contexts.extend(marker_contexts)
     return cleaned.strip(), contexts
+
+
+_CHAT_IMAGE_PATTERN = re.compile(
+    r"^data:(image/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=\r\n]+)$",
+    re.IGNORECASE,
+)
+
+
+def normalize_chat_images(images, max_images=4, max_image_bytes=10 * 1024 * 1024, max_total_bytes=20 * 1024 * 1024):
+    """Validate untrusted WebChannel image payloads before API forwarding."""
+    if not images:
+        return []
+    if not isinstance(images, list):
+        raise ValueError("Image attachments must be a list.")
+    if len(images) > max_images:
+        raise ValueError(f"A message can contain at most {max_images} images.")
+    normalized = []
+    total_bytes = 0
+    for index, image in enumerate(images):
+        if not isinstance(image, dict):
+            raise ValueError(f"Image {index + 1} has an invalid payload.")
+        data_url = str(image.get("data_url") or "").strip()
+        match = _CHAT_IMAGE_PATTERN.fullmatch(data_url)
+        if not match:
+            raise ValueError(f"Image {index + 1} is not a supported PNG, JPEG, WebP, or GIF data URL.")
+        try:
+            decoded_size = len(base64.b64decode(match.group(2), validate=True))
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError(f"Image {index + 1} contains invalid Base64 data.") from exc
+        if decoded_size <= 0 or decoded_size > max_image_bytes:
+            raise ValueError(f"Image {index + 1} must be between 1 byte and 10 MB.")
+        total_bytes += decoded_size
+        if total_bytes > max_total_bytes:
+            raise ValueError("Image attachments exceed the 20 MB message limit.")
+        normalized.append({
+            "name": os.path.basename(str(image.get("name") or f"image-{index + 1}")),
+            "mime_type": match.group(1).lower(),
+            "size": decoded_size,
+            "data_url": data_url,
+            "detail": "auto",
+        })
+    return normalized
 
 
 def sanitize_chat_actual_text(text):
@@ -331,13 +375,25 @@ class AIAssistantWidget(QWidget):
             display_text = data.get("display", text)
             rendered_by_client = bool(data.get("rendered", False))
             message_contexts = data.get("contexts") if isinstance(data.get("contexts"), list) else []
+            raw_images = data.get("images")
         except Exception:
             full_text = text
             display_text = text
             rendered_by_client = False
             message_contexts = []
+            raw_images = []
+
+        try:
+            message_images = normalize_chat_images(raw_images)
+        except ValueError as exc:
+            self.chat_view.set_sending_state(False)
+            self.chat_view.set_input_enabled(True)
+            self.append_system_message(f"Unable to attach image: {exc}")
+            return
 
         full_text, extracted_contexts = normalize_chat_actual_text(full_text)
+        if message_images and not full_text.strip():
+            full_text = "Analyze the attached image(s)."
         message_contexts = self._merge_context_items(list(message_contexts or []) + list(extracted_contexts or []))
 
         if full_text in [
@@ -358,7 +414,7 @@ class AIAssistantWidget(QWidget):
             self.chat_service.build_effective_context_summary(effective_context)
         )
         if not rendered_by_client:
-            self.chat_view.append_message("user", display_text, is_html=True)
+            self.chat_view.append_message("user", display_text, is_html=True, images=message_images)
         self.chat_view.set_input_enabled(False)
         self.memory.add_user_message(full_text)
 
@@ -374,7 +430,16 @@ class AIAssistantWidget(QWidget):
 
         def _start_chat_after_placeholder(_result=None):
             self._pending_mode = "chat"
-            self.chat_service.start_chat(full_text, effective_context, self.memory.get_recent_history(), mode=self.mode)
+            if message_images:
+                self.chat_service.start_chat(
+                    full_text,
+                    effective_context,
+                    self.memory.get_recent_history(),
+                    mode=self.mode,
+                    images=message_images,
+                )
+            else:
+                self.chat_service.start_chat(full_text, effective_context, self.memory.get_recent_history(), mode=self.mode)
 
         self.append_ai_message("", callback=_start_chat_after_placeholder)  # Placeholder
 

@@ -4,6 +4,16 @@ from PySide6.QtCore import QSettings
 from .mcp_integration import normalize_mcp_servers
 
 class AIConfig:
+    DEFAULT_VISION_CONFIG = {
+        "use_current_profile": True,
+        "provider": "OpenAI",
+        "api_key": "",
+        "base_url": "https://api.openai.com/v1",
+        "model": "",
+        "timeout_seconds": 120,
+        "concurrency": 2,
+    }
+
     def __init__(self):
         self.settings = QSettings("PyLog", "AIAssistant")
         self._migrate_legacy_settings()
@@ -97,6 +107,66 @@ class AIConfig:
 
     def is_configured(self):
         return bool(self.get_api_key())
+
+    def get_vision_config(self):
+        """Return the independent connection used by image-analysis workflows."""
+        raw = self.settings.value("vision_config", "{}")
+        try:
+            stored = json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+        except (TypeError, ValueError):
+            stored = {}
+        config = dict(self.DEFAULT_VISION_CONFIG)
+        if isinstance(stored, dict):
+            config.update(stored)
+        try:
+            config["timeout_seconds"] = max(10, min(600, int(config["timeout_seconds"])))
+        except (TypeError, ValueError):
+            config["timeout_seconds"] = self.DEFAULT_VISION_CONFIG["timeout_seconds"]
+        try:
+            config["concurrency"] = max(1, min(8, int(config["concurrency"])))
+        except (TypeError, ValueError):
+            config["concurrency"] = self.DEFAULT_VISION_CONFIG["concurrency"]
+        return config
+
+    def set_vision_config(self, config):
+        safe = dict(self.DEFAULT_VISION_CONFIG)
+        if isinstance(config, dict):
+            for key in safe:
+                if key in config:
+                    safe[key] = config[key]
+        safe["use_current_profile"] = bool(safe.get("use_current_profile", True))
+        safe["provider"] = str(safe.get("provider") or "OpenAI").strip()
+        safe["api_key"] = str(safe.get("api_key") or "").strip()
+        safe["base_url"] = str(safe.get("base_url") or "").strip()
+        safe["model"] = str(safe.get("model") or "").strip()
+        safe["timeout_seconds"] = max(10, min(600, int(safe["timeout_seconds"])))
+        safe["concurrency"] = max(1, min(8, int(safe["concurrency"])))
+        self.settings.setValue("vision_config", json.dumps(safe))
+
+    def get_resolved_vision_config(self):
+        """Resolve vision settings, falling back to the active chat profile when incomplete."""
+        vision = self.get_vision_config()
+        independent_ready = bool(
+            str(vision.get("api_key") or "").strip()
+            and str(vision.get("model") or "").strip()
+        )
+        if not vision.get("use_current_profile", True) and independent_ready:
+            return vision
+        profile = self.get_current_profile()
+        resolved = dict(vision)
+        resolved.update({
+            "provider": profile.get("provider", "Custom / Other"),
+            "api_key": profile.get("api_key", ""),
+            "base_url": profile.get("base_url", ""),
+            "model": vision.get("model", "") if vision.get("use_current_profile", True) else "",
+        })
+        if not str(resolved.get("model") or "").strip():
+            resolved["model"] = profile.get("model", "")
+        return resolved
+
+    def is_vision_configured(self):
+        config = self.get_resolved_vision_config()
+        return bool(config.get("api_key") and config.get("model"))
 
 
     def get_max_rounds(self):

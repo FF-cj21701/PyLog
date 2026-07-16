@@ -228,6 +228,7 @@ class SettingsBridge(AgentPageBridge):
         return {
             "profiles": self.config.get_profiles(),
             "current_profile": self.config.get_current_profile_name(),
+            "vision": self.config.get_vision_config(),
             "behavior": {
                 "max_rounds": self.config.get_max_rounds(),
                 "max_history": self.config.get_max_history(),
@@ -254,6 +255,10 @@ class SettingsBridge(AgentPageBridge):
         current_profile = str(payload.get("current_profile") or "").strip()
         if current_profile:
             self.config.set_current_profile_name(current_profile)
+
+        vision = payload.get("vision")
+        if isinstance(vision, dict):
+            self.config.set_vision_config(vision)
 
         behavior = payload.get("behavior") if isinstance(payload.get("behavior"), dict) else {}
         if "max_rounds" in behavior:

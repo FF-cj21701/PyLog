@@ -32,6 +32,8 @@ class SearchToolsTool(BaseTool):
                 "limit": {
                     "type": "integer",
                     "description": "Maximum number of matching tools to return. Defaults to 5.",
+                    "minimum": 1,
+                    "maximum": 5,
                     "nullable": True,
                 },
             },
@@ -53,7 +55,6 @@ class SearchToolsTool(BaseTool):
             "ok": True,
             "summary": f"Found {len(results)} matching tools",
             "tools": results,
-            "data": results,
         }
 
 

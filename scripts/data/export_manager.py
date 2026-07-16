@@ -10,6 +10,241 @@ from PySide6.QtSvg import QSvgGenerator
 from ..ui.base_dialog import ThemeDialog
 
 
+def _analysis_track_name(track, index):
+    name = str(getattr(track, "track_name", "") or "").strip()
+    if name:
+        return name
+    header = getattr(track, "header", None)
+    items = getattr(header, "items", None) or []
+    if items:
+        item = items[0]
+        return str(item.get("title") or item.get("name") or f"Track {index + 1}")
+    return f"Track {index + 1}"
+
+
+def _analysis_track_label(track, index):
+    name = _analysis_track_name(track, index)
+    curves = getattr(getattr(track, "plot_widget", None), "curves", None) or []
+    image_curve = next((curve for curve in curves if curve.get("is_image")), None)
+    if image_curve:
+        info = image_curve.get("info", {})
+        curve_name = str(info.get("title") or info.get("name") or "").strip()
+        if curve_name and curve_name != name:
+            return f"{name} / {curve_name}"
+    return name
+
+
+class PlotAnalysisRenderer:
+    """Render selected, already configured plot tracks into an in-memory image."""
+
+    def __init__(self, log_widget):
+        self.log_widget = log_widget
+
+    def render(
+        self,
+        track_names,
+        depth_start,
+        depth_end,
+        width=1600,
+        height=1200,
+        *,
+        include_depth_track=False,
+        preserve_aspect=False,
+        respect_current_vertical_scale=False,
+    ):
+        requested = list(dict.fromkeys(str(name).strip() for name in (track_names or []) if str(name).strip()))
+        if not requested:
+            raise ValueError("at least one analysis track is required")
+        start, end = float(depth_start), float(depth_end)
+        if start >= end:
+            raise ValueError("depth_start must be less than depth_end")
+        width, height = int(width), int(height)
+        if width < 320 or height < 320:
+            raise ValueError("analysis image width and height must be at least 320 pixels")
+
+        available = []
+        for index, track in enumerate(self.log_widget.track_containers):
+            name = _analysis_track_name(track, index)
+            label = _analysis_track_label(track, index)
+            available.append((track, name, label, index))
+        aliases = {
+            alias: item
+            for item in available
+            for alias in (item[1], item[2])
+        }
+        missing = [name for name in requested if name not in aliases]
+        if missing:
+            raise ValueError(f"analysis track(s) not found: {', '.join(missing)}")
+
+        selected_ids = {id(aliases[name][0]) for name in requested}
+        auto_depth_names = []
+        if include_depth_track:
+            from ..rendering.plot_components import PainterDepthTrack
+
+            depth_item = next(
+                (item for item in available if isinstance(getattr(item[0], "plot_widget", None), PainterDepthTrack)),
+                None,
+            )
+            if depth_item and id(depth_item[0]) not in selected_ids:
+                selected_ids.add(id(depth_item[0]))
+                auto_depth_names.append(depth_item[1])
+        selected = [item for item in available if id(item[0]) in selected_ids]
+        source_widths = [max(1, int(item[0].width())) for item in selected]
+        total_source_width = sum(source_widths)
+        source_header_height = 0
+        for track, _name, _label, _index in selected:
+            header = getattr(track, "header", None)
+            if header is not None:
+                if hasattr(header, "adjust_height"):
+                    header.adjust_height()
+                source_header_height = max(source_header_height, int(header.height()))
+        source_heights = []
+        for item in selected:
+            height_getter = getattr(item[0], "height", None)
+            source_heights.append(max(1, int(height_getter()))) if callable(height_getter) else None
+        source_height = max(source_heights or [height])
+        effective_source_height = float(source_height)
+        current_visible_depth_range = None
+        vertical_scale_applied = False
+        if respect_current_vertical_scale:
+            viewbox_getter = getattr(self.log_widget, "get_master_viewbox", None)
+            viewbox = viewbox_getter() if callable(viewbox_getter) else None
+            if viewbox is not None:
+                try:
+                    visible_start, visible_end = (float(value) for value in viewbox.viewRange()[1])
+                    visible_span = abs(visible_end - visible_start)
+                    requested_span = abs(end - start)
+                    if visible_span > 0:
+                        current_visible_depth_range = [visible_start, visible_end]
+                        source_plot_height = max(1.0, float(source_height - source_header_height))
+                        effective_source_height = source_header_height + source_plot_height * requested_span / visible_span
+                        vertical_scale_applied = True
+                except (AttributeError, IndexError, TypeError, ValueError):
+                    pass
+        requested_bounds = [width, height]
+        if preserve_aspect:
+            scale_to_bounds = min(width / total_source_width, height / effective_source_height)
+            width = max(1, int(round(total_source_width * scale_to_bounds)))
+            height = max(1, int(round(effective_source_height * scale_to_bounds)))
+        track_widths = [max(1, int(round(width * value / total_source_width))) for value in source_widths]
+        track_widths[-1] += width - sum(track_widths)
+        scale_factor = width / total_source_width
+
+        header_height = int(round(source_header_height * scale_factor))
+        header_height = min(header_height, max(0, height - 160))
+
+        image = QImage(width, height, QImage.Format_ARGB32)
+        output_dpi = 96.0 * scale_factor
+        dots_per_meter = int(round(output_dpi / 0.0254))
+        image.setDotsPerMeterX(dots_per_meter)
+        image.setDotsPerMeterY(dots_per_meter)
+        image.fill(app_config.get_theme_qcolor("plot_bg"))
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.TextAntialiasing)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        try:
+            self._render_tracks(painter, selected, track_widths, start, end, width, height, header_height, scale_factor)
+        finally:
+            painter.end()
+
+        tracks_metadata = []
+        left = 0
+        for (track, name, label, index), track_width in zip(selected, track_widths):
+            curves = getattr(getattr(track, "plot_widget", None), "curves", None) or []
+            curve_metadata = []
+            for curve in curves:
+                info = curve.get("info", {})
+                curve_metadata.append({
+                    "name": info.get("title") or info.get("name") or "Unknown",
+                    "unit": info.get("unit", ""),
+                    "minimum": info.get("min"),
+                    "maximum": info.get("max"),
+                    "is_image": bool(curve.get("is_image")),
+                })
+            tracks_metadata.append({
+                "index": index,
+                "name": name,
+                "label": label,
+                "is_image": any(curve["is_image"] for curve in curve_metadata),
+                "is_depth": type(getattr(track, "plot_widget", None)).__name__ == "PainterDepthTrack",
+                "pixel_left": left,
+                "pixel_right": left + track_width,
+                "pixel_width": track_width,
+                "curves": curve_metadata,
+            })
+            left += track_width
+
+        buffer = QBuffer()
+        buffer.open(QIODevice.WriteOnly)
+        image.save(buffer, "PNG")
+        png_bytes = bytes(buffer.data())
+        buffer.close()
+        return {
+            "image": image,
+            "png_bytes": png_bytes,
+            "metadata": {
+                "width": width,
+                "height": height,
+                "source_width": total_source_width,
+                "source_height": source_height,
+                "effective_source_height": effective_source_height,
+                "requested_bounds": requested_bounds,
+                "preserve_aspect": bool(preserve_aspect),
+                "respect_current_vertical_scale": bool(respect_current_vertical_scale),
+                "vertical_scale_applied": vertical_scale_applied,
+                "current_visible_depth_range": current_visible_depth_range,
+                "render_scale": width / total_source_width,
+                "output_dpi": output_dpi,
+                "auto_included_depth_tracks": auto_depth_names,
+                "header_height": header_height,
+                "plot_top": header_height,
+                "plot_bottom": height,
+                "depth_start": start,
+                "depth_end": end,
+                "theme": app_config.get_theme_name(),
+                "tracks": tracks_metadata,
+            },
+        }
+
+    def _render_tracks(self, painter, selected, track_widths, start, end, width, height, header_height, scale_factor):
+        from ..rendering.plot_components import PainterDepthTrack
+
+        scale_control = getattr(self.log_widget, "scale_control", None)
+        combo = getattr(scale_control, "combo", None)
+        scale_text = combo.currentText() if combo is not None else None
+        left = 0
+        for (track, _name, _label, _index), track_width in zip(selected, track_widths):
+            rect = QRect(left, 0, track_width, height)
+            depth_scale = scale_text if isinstance(track.plot_widget, PainterDepthTrack) else None
+            track.render_to(
+                painter,
+                rect,
+                start,
+                end,
+                scale=scale_factor,
+                scale_text=depth_scale,
+                draw_border=False,
+                header_h_override=header_height,
+            )
+            left += track_width
+
+        pen_width = max(1.0, 1.2 * scale_factor)
+        pen = QPen(app_config.get_theme_qcolor("track_divider"), pen_width)
+        pen.setCapStyle(Qt.FlatCap)
+        painter.setPen(pen)
+        offset = pen_width / 2.0
+        painter.drawLine(QPointF(offset, offset), QPointF(width - offset, offset))
+        painter.drawLine(QPointF(offset, header_height), QPointF(width - offset, header_height))
+        painter.drawLine(QPointF(offset, height - offset), QPointF(width - offset, height - offset))
+        painter.drawLine(QPointF(offset, offset), QPointF(offset, height - offset))
+        left = 0
+        for track_width in track_widths:
+            left += track_width
+            x = width - offset if left == width else left
+            painter.drawLine(QPointF(x, offset), QPointF(x, height - offset))
+
+
 
 class LogExportDialog(ThemeDialog):
     def __init__(self, current_range, global_range, defined_range=None, parent=None):

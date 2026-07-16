@@ -3,6 +3,7 @@
     let state = {
         profiles: [],
         current_profile: "",
+        vision: {},
         behavior: {},
         whitelist: [],
         mcp_servers: {},
@@ -68,12 +69,25 @@
         state.behavior.workspace_scope = $("workspace-scope-select").value || "project";
     }
 
+    function syncVisionFromInputs() {
+        state.vision = state.vision || {};
+        state.vision.use_current_profile = $("vision-use-current-input").checked;
+        state.vision.provider = $("vision-provider-input").value || "OpenAI";
+        state.vision.api_key = $("vision-api-key-input").value.trim();
+        state.vision.base_url = $("vision-base-url-input").value.trim();
+        state.vision.model = $("vision-model-input").value.trim();
+        state.vision.timeout_seconds = Number($("vision-timeout-input").value || 120);
+        state.vision.concurrency = Number($("vision-concurrency-input").value || 2);
+    }
+
     function collectStateForSave() {
         syncProfileFromInputs();
+        syncVisionFromInputs();
         syncBehaviorFromInputs();
         return {
             profiles: state.profiles,
             current_profile: state.current_profile,
+            vision: state.vision,
             behavior: state.behavior,
             whitelist: state.whitelist,
             mcp_servers: state.mcp_servers,
@@ -83,6 +97,7 @@
 
     function renderAll() {
         renderProfiles();
+        renderVision();
         renderBehavior();
         renderWhitelist();
         renderMcpServers();
@@ -116,6 +131,37 @@
         $("mcp-enabled-input").checked = Boolean(state.behavior.mcp_enabled);
         $("workspace-scope-select").value = state.behavior.workspace_scope || "project";
         refreshCustomSelect($("workspace-scope-select"));
+    }
+
+    function renderVision() {
+        const vision = state.vision || {};
+        $("vision-use-current-input").checked = vision.use_current_profile !== false;
+        $("vision-provider-input").value = vision.provider || "OpenAI";
+        $("vision-api-key-input").value = vision.api_key || "";
+        $("vision-base-url-input").value = vision.base_url || "";
+        $("vision-model-input").value = vision.model || "";
+        $("vision-timeout-input").value = vision.timeout_seconds || 120;
+        $("vision-concurrency-input").value = vision.concurrency || 2;
+        refreshCustomSelect($("vision-provider-input"));
+        updateVisionConnectionVisibility();
+    }
+
+    function updateVisionConnectionVisibility() {
+        const useCurrent = $("vision-use-current-input").checked;
+        $("vision-independent-fields").classList.toggle("hidden", useCurrent);
+    }
+
+    function effectiveVisionProfile() {
+        syncProfileFromInputs();
+        syncVisionFromInputs();
+        if (!state.vision.use_current_profile) return state.vision;
+        const profile = activeProfile() || {};
+        return {
+            provider: profile.provider || "Custom / Other",
+            api_key: profile.api_key || "",
+            base_url: profile.base_url || "",
+            model: state.vision.model || profile.model || ""
+        };
     }
 
     function renderWhitelist() {
@@ -327,6 +373,27 @@
         setStatus(`Fetched ${(response.models || []).length} model(s).`);
     }
 
+    async function fetchVisionModels() {
+        const response = await callBridge("fetchModels", JSON.stringify(effectiveVisionProfile()));
+        if (!response.ok) {
+            setStatus(response.error || "Vision model fetch failed.", true);
+            return;
+        }
+        const list = $("vision-model-list");
+        list.innerHTML = "";
+        (response.models || []).slice(0, 50).forEach((model) => {
+            const pill = document.createElement("button");
+            pill.className = "model-pill";
+            pill.textContent = model;
+            pill.addEventListener("click", () => {
+                $("vision-model-input").value = model;
+                syncVisionFromInputs();
+            });
+            list.appendChild(pill);
+        });
+        setStatus(`Fetched ${(response.models || []).length} vision model(s).`);
+    }
+
     async function testMcpServer(name, conf) {
         const response = await callBridge("testMcpServer", name, JSON.stringify(conf || {}));
         if (!response.ok) {
@@ -420,6 +487,11 @@
         $("refresh-btn").addEventListener("click", loadPayload);
         $("close-btn").addEventListener("click", () => bridge && bridge.closeSettingsPage());
         $("fetch-models-btn").addEventListener("click", fetchModels);
+        $("fetch-vision-models-btn").addEventListener("click", fetchVisionModels);
+        $("vision-use-current-input").addEventListener("change", () => {
+            syncVisionFromInputs();
+            updateVisionConnectionVisibility();
+        });
         $("add-folder-btn").addEventListener("click", () => choosePath("folder"));
         $("add-file-btn").addEventListener("click", () => choosePath("file"));
         $("add-mcp-btn").addEventListener("click", addMcpServer);

@@ -5,7 +5,7 @@ function updateSendButton() {
             }
             const text = input.innerText.trim();
             const hasPills = input.querySelector('.mention-pill') !== null;
-            sendBtn.disabled = (text.length === 0 && !hasPills && selectedContexts.length === 0);
+            sendBtn.disabled = (text.length === 0 && !hasPills && selectedContexts.length === 0 && selectedImages.length === 0);
         }
 
         let allFiles = [];
@@ -16,7 +16,89 @@ function updateSendButton() {
         let mentionMode = 'root'; // 'root' | 'file' | 'folder' | 'code' | 'terminal' | 'conversation' | 'wells' | 'well_curves'
         let currentWell = null; // Store selected well for well_curves mode
         let selectedContexts = [];
+        let selectedImages = [];
         let isComposing = false;
+        const MAX_CHAT_IMAGES = 4;
+        const MAX_CHAT_IMAGE_BYTES = 10 * 1024 * 1024;
+        const MAX_CHAT_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
+        const ALLOWED_CHAT_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+
+        function renderImagePreviews() {
+            const container = document.getElementById('image-preview-container');
+            if (!container) return;
+            container.innerHTML = '';
+            container.classList.toggle('has-images', selectedImages.length > 0);
+            selectedImages.forEach((image, index) => {
+                const item = document.createElement('div');
+                item.className = 'image-preview-item';
+                const img = document.createElement('img');
+                img.src = image.data_url;
+                img.alt = image.name || `Image ${index + 1}`;
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'image-preview-remove';
+                remove.setAttribute('aria-label', `Remove ${image.name || 'image'}`);
+                remove.textContent = '\u00d7';
+                remove.addEventListener('click', () => {
+                    selectedImages.splice(index, 1);
+                    renderImagePreviews();
+                    updateSendButton();
+                });
+                item.append(img, remove);
+                container.appendChild(item);
+            });
+        }
+
+        function readImageFile(file) {
+            return new Promise((resolve, reject) => {
+                if (!ALLOWED_CHAT_IMAGE_TYPES.has(file.type)) {
+                    reject(new Error(`${file.name}: unsupported image type`));
+                    return;
+                }
+                if (file.size > MAX_CHAT_IMAGE_BYTES) {
+                    reject(new Error(`${file.name}: image exceeds 10 MB`));
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = () => resolve({
+                    name: file.name,
+                    mime_type: file.type,
+                    size: file.size,
+                    data_url: reader.result
+                });
+                reader.onerror = () => reject(new Error(`${file.name}: failed to read image`));
+                reader.readAsDataURL(file);
+            });
+        }
+
+        async function addImageFiles(files) {
+            const available = MAX_CHAT_IMAGES - selectedImages.length;
+            if (available <= 0) {
+                window.alert(`You can attach up to ${MAX_CHAT_IMAGES} images.`);
+                return;
+            }
+            const errors = [];
+            const incoming = Array.from(files || []);
+            if (incoming.length > available) {
+                errors.push(`Only the first ${available} image(s) were added.`);
+            }
+            let totalBytes = selectedImages.reduce((sum, image) => sum + Number(image.size || 0), 0);
+            for (const file of incoming.slice(0, available)) {
+                try {
+                    const image = await readImageFile(file);
+                    if (totalBytes + image.size > MAX_CHAT_TOTAL_IMAGE_BYTES) {
+                        throw new Error(`${file.name}: attachments exceed the 20 MB message limit`);
+                    }
+                    selectedImages.push(image);
+                    totalBytes += image.size;
+                } catch (error) {
+                    errors.push(error.message || String(error));
+                }
+            }
+            renderImagePreviews();
+            updateSendButton();
+            if (errors.length) window.alert(errors.join('\n'));
+        }
 
         const MENTION_CATEGORIES = [
             { id: 'opened', label: 'Opened Windows', icon: '<svg class="mention-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>', description: 'Reference any currently open script or plot' },
@@ -1127,7 +1209,7 @@ function updateSendButton() {
 
             for (let child of input.childNodes) walk(child);
 
-            if (actualMsg.trim().length === 0 && selectedContexts.length === 0) return;
+            if (actualMsg.trim().length === 0 && selectedContexts.length === 0 && selectedImages.length === 0) return;
 
             const contextsToInclude = [...new Set(inlineContexts)];
             const fullMsg = actualMsg;
@@ -1144,7 +1226,7 @@ function updateSendButton() {
             if (shouldRenderOptimistically && typeof appendMessage === 'function') {
                 const now = new Date();
                 const timestamp = now.toTimeString().slice(0, 8);
-                appendMessage('user', displayMsg, timestamp, null, null, null, null, null, true);
+                appendMessage('user', displayMsg, timestamp, null, null, null, null, null, true, null, selectedImages);
                 setSendingState(true);
                 setInputEnabled(false);
             }
@@ -1155,15 +1237,28 @@ function updateSendButton() {
                     actual: fullMsg,
                     display: displayMsg,
                     rendered: shouldRenderOptimistically,
-                    contexts: contextsToInclude
+                    contexts: contextsToInclude,
+                    images: selectedImages
                 }));
             }
 
             // Clear context after sending
             clearSelectionContext();
+            selectedImages = [];
+            renderImagePreviews();
 
             input.innerHTML = '';
             updateSendButton();
+        }
+
+        const attachImageButton = document.getElementById('attach-image-btn');
+        const imageFileInput = document.getElementById('image-file-input');
+        if (attachImageButton && imageFileInput) {
+            attachImageButton.addEventListener('click', () => imageFileInput.click());
+            imageFileInput.addEventListener('change', async () => {
+                await addImageFiles(imageFileInput.files);
+                imageFileInput.value = '';
+            });
         }
 
         let currentContextText = "";

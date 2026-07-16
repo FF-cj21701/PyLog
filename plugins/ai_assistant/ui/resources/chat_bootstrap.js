@@ -83,11 +83,20 @@ const chatContainer = document.getElementById('chat-container');
             }
         });
 
-        // [NEW] Force pasted content to plain text to avoid rich-text artifacts
-        input.addEventListener('paste', function (e) {
+        // Paste clipboard images as attachments; keep text paste plain.
+        input.addEventListener('paste', async function (e) {
+            const clipboard = (e.originalEvent || e).clipboardData;
+            const imageFiles = Array.from((clipboard && clipboard.items) || [])
+                .filter(item => item.kind === 'file' && /^image\//i.test(item.type || ''))
+                .map(item => item.getAsFile())
+                .filter(Boolean);
+            if (imageFiles.length > 0) {
+                e.preventDefault();
+                await addImageFiles(imageFiles);
+                return;
+            }
             e.preventDefault();
-            const text = (e.originalEvent || e).clipboardData.getData('text/plain');
-            // Use insertText so the contenteditable field keeps a clean text structure
+            const text = clipboard ? clipboard.getData('text/plain') : '';
             document.execCommand('insertText', false, text);
         });
 
@@ -214,7 +223,9 @@ const chatContainer = document.getElementById('chat-container');
 
         function setSendingState(isSending) {
             const btn = document.getElementById('send-btn');
+            const attachBtn = document.getElementById('attach-image-btn');
             isSendingState = isSending;
+            if (attachBtn) attachBtn.disabled = isSending;
             if (isSending) {
                 btn.className = 'stop-btn';
                 btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12"/></svg>';
@@ -225,7 +236,7 @@ const chatContainer = document.getElementById('chat-container');
                 btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>';
                 const text = input.innerText.trim();
                 const hasPills = input.querySelector('.mention-pill') !== null;
-                btn.disabled = (text.length === 0 && !hasPills && selectedContexts.length === 0);
+                btn.disabled = (text.length === 0 && !hasPills && selectedContexts.length === 0 && selectedImages.length === 0);
                 btn.title = "Send message";
             }
         }

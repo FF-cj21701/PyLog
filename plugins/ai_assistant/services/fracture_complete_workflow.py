@@ -117,11 +117,15 @@ PARAMETER_REVIEW_SCHEMA = {
                 "items": _point_schema(),
             },
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "decision_continuity": {
+                "type": "string",
+                "enum": ["initial", "maintain", "overturn"],
+            },
             "reason": {"type": "string"},
         },
         "required": [
             "action", "view", "aligned", "center_depth_m", "amplitude_m", "phase_deg",
-            "corrected_points", "confidence", "reason",
+            "corrected_points", "confidence", "decision_continuity", "reason",
         ],
         "additionalProperties": False,
     },
@@ -1397,6 +1401,59 @@ class CompleteFractureWorkflow:
     def _circular_phase_delta(left, right):
         return abs((left - right + 180.0) % 360.0 - 180.0)
 
+    @classmethod
+    def _review_parameter_change(cls, before, after):
+        if not isinstance(before, dict) or not isinstance(after, dict):
+            return None
+        try:
+            return {
+                "center_depth_m": float(after["center_depth_m"]) - float(before["center_depth_m"]),
+                "amplitude_m": float(after["amplitude_m"]) - float(before["amplitude_m"]),
+                "phase_deg": (
+                    (float(after["phase_deg"]) - float(before["phase_deg"]) + 180.0) % 360.0
+                    - 180.0
+                ),
+            }
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _review_score_change(before, after):
+        if not isinstance(before, dict) or not isinstance(after, dict):
+            return None
+        change = {
+            "complete_before": before.get("complete"),
+            "complete_after": after.get("complete"),
+        }
+        for name in ("score", "coverage", "min_quadrant_coverage"):
+            try:
+                change[name] = float(after[name]) - float(before[name])
+            except (KeyError, TypeError, ValueError):
+                change[name] = None
+        return change
+
+    @staticmethod
+    def _previous_review_context(annotation):
+        history = list(annotation.get("ai_correction_history") or [])
+        if not history:
+            return None
+        previous = history[-1]
+        return {
+            "round": previous.get("round"),
+            "action": previous.get("action"),
+            "decision_continuity": previous.get("decision_continuity"),
+            "confidence": previous.get("confidence"),
+            "reason": previous.get("reason"),
+            "input_parameters": previous.get("input_parameters"),
+            "output_parameters": previous.get("output_parameters") or previous.get("parameters"),
+            "parameter_change": previous.get("parameter_change"),
+            "input_local_completeness": previous.get("input_local_completeness"),
+            "output_local_completeness": (
+                previous.get("output_local_completeness") or previous.get("local_completeness")
+            ),
+            "score_change": previous.get("score_change"),
+        }
+
     def _review_candidate_until_final(
         self,
         request,
@@ -1424,6 +1481,7 @@ class CompleteFractureWorkflow:
                 f"Reviewing candidate {index + 1}/{total}, round {round_number}/{MAX_CORRECTION_ROUNDS}",
             )
 
+            review_input_parameters = fracture_parameters(current)
             result = self.review_candidate_parameters(
                 request,
                 candidate_rendered,
@@ -1448,15 +1506,27 @@ class CompleteFractureWorkflow:
                 cancel_requested=lambda: context.cancelled,
             )
             action = str(result.get("action") or "retry")
+            input_local = result.get("local_completeness")
+            output_local = result.get("corrected_local_completeness") or input_local
+            output_parameters = result.get("parameters")
             history.append({
                 "round": round_number,
                 "action": action,
-                "parameters": result.get("parameters"),
+                "decision_continuity": result.get("decision_continuity"),
+                "confidence": result.get("confidence"),
+                "parameters": output_parameters,
+                "input_parameters": review_input_parameters,
+                "output_parameters": output_parameters,
+                "parameter_change": self._review_parameter_change(
+                    review_input_parameters,
+                    output_parameters,
+                ),
+                "input_local_completeness": input_local,
+                "output_local_completeness": output_local,
+                "score_change": self._review_score_change(input_local, output_local),
                 "points": [list(point) for point in result.get("corrected_points", [])],
                 "reason": result.get("reason"),
-                "local_completeness": (
-                    result.get("corrected_local_completeness") or result.get("local_completeness")
-                ),
+                "local_completeness": output_local,
                 "review_action_count": result.get("review_action_count"),
                 "review_views": list(result.get("review_views") or []),
             })
@@ -2210,6 +2280,7 @@ class CompleteFractureWorkflow:
         )
         source = source_rendered or candidate_rendered
         self._validate_rendered(source)
+        previous_round = self._previous_review_context(annotation)
         current_rendered = candidate_rendered
         review_views = []
         review_view_keys = set()
@@ -2267,13 +2338,19 @@ class CompleteFractureWorkflow:
                 "repeat evidence, while still checking that both fits did not merely follow the same background band. The local "
                 "completeness score is advisory diagnostic evidence: a failed or unavailable local score must not by "
                 "itself force correction or discard, but a failed score combined with weak visual evidence supports "
-                "discard. For final actions set view=null. Return JSON only.\n"
+                "discard. If previous_round is present, decision_continuity must be maintain or overturn, and the reason "
+                "must explicitly explain why the previous conclusion is maintained or overturned. To overturn it, cite "
+                "new visible evidence or a materially meaningful geometry/evidence change. Do not reverse the previous "
+                "conclusion solely because a negligible parameter adjustment moved one advisory score across a hard "
+                "threshold. If previous_round is null, set decision_continuity=initial. For final actions set view=null. "
+                "Return JSON only.\n"
                 + json.dumps({
                     "candidate_id": annotation.get("candidate_id"),
                     "fracture_type": annotation.get("fracture_type"),
                     "correction_round": int(round_number),
                     "current_parameters": parameters,
                     "local_completeness": local,
+                    "previous_round": previous_round,
                     "cross_window_corroboration": annotation.get("cross_window_corroboration"),
                     "current_view": {
                         "depth_start": current_metadata["depth_start"],
@@ -2731,6 +2808,11 @@ class CompleteFractureWorkflow:
         action = str(payload.get("action") or "discard")
         reason = str(payload.get("reason") or "")
         confidence = max(0.0, min(1.0, float(payload.get("confidence", 0.0))))
+        has_previous_round = bool(annotation.get("ai_correction_history"))
+        decision_continuity = str(payload.get("decision_continuity") or "").strip().lower()
+        allowed_continuity = {"maintain", "overturn"} if has_previous_round else {"initial"}
+        if decision_continuity not in allowed_continuity:
+            decision_continuity = "maintain" if has_previous_round else "initial"
         corrected_points = []
         parameters = None
         if action == "adjust_parameters":
@@ -2775,6 +2857,7 @@ class CompleteFractureWorkflow:
             "action": action,
             "aligned": aligned,
             "confidence": confidence,
+            "decision_continuity": decision_continuity,
             "corrected_points": corrected_points,
             "parameters": parameters,
             "reason": reason,

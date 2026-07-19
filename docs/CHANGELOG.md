@@ -22,6 +22,7 @@
 - Added fast mode, enabled by default, which retains initial window triage but skips optional navigation and proceeds directly to candidate fitting. Normal mode keeps the full autonomous exploration loop.
 - Added fracture-aware visual guidance for conductive and resistive sinusoids, cross-cutting behavior relative to repeated bedding textures, obscured pad-gap continuity, and avoidance of splitting one high-amplitude fracture into multiple partial candidates. Bedding remains contextual evidence rather than an AI Pick output type.
 - Added candidate fitting and correction based on 3-8 visual anchors, fixed-period sinusoidal parameters, standard regenerated preview points, and parameter-first visual review. Local image evidence is retained as advisory diagnostics instead of an unconditional rejection gate.
+- Added cross-round review continuity so every correction round receives the previous action, confidence, reason, input/output parameters, parameter deltas, input/output evidence scores, and score deltas. Later rounds must explicitly maintain or overturn the previous conclusion and cannot reverse it solely because a negligible adjustment crossed an advisory hard threshold.
 - Added candidate association before final review:
   - complementary fragments can be merged and refitted within one window
   - compatible partial fits can be associated across sliding windows

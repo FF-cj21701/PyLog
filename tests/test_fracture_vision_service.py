@@ -1145,6 +1145,169 @@ def test_parameter_review_prefers_absolute_parameters_and_generates_standard_poi
     assert result["corrected_local_completeness"]["complete"] is True
 
 
+def test_parameter_review_receives_previous_round_decision_and_deltas(monkeypatch):
+    completions = SequenceCompletions([{
+        "action": "keep",
+        "view": None,
+        "aligned": True,
+        "center_depth_m": None,
+        "amplitude_m": None,
+        "phase_deg": None,
+        "corrected_points": [],
+        "confidence": 0.86,
+        "decision_continuity": "maintain",
+        "reason": "Maintain the previous conclusion because the geometry is unchanged.",
+    }])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    pipeline = FractureVisionPipeline(
+        Config(),
+        client_factory=lambda _config: client,
+        evidence_scorer=Scorer(),
+    )
+    monkeypatch.setattr(pipeline, "_build_feedback_image", lambda *_args: _png_data_url())
+    previous = {
+        "round": 1,
+        "action": "adjust_parameters",
+        "decision_continuity": "initial",
+        "confidence": 0.82,
+        "reason": "The trace is aligned; retain it with a negligible adjustment.",
+        "input_parameters": {
+            "center_depth_m": 1005.0,
+            "amplitude_m": 0.5004,
+            "phase_deg": 90.04,
+        },
+        "output_parameters": {
+            "center_depth_m": 1005.0003,
+            "amplitude_m": 0.5,
+            "phase_deg": 90.0,
+        },
+        "parameter_change": {
+            "center_depth_m": 0.0003,
+            "amplitude_m": -0.0004,
+            "phase_deg": -0.04,
+        },
+        "input_local_completeness": {
+            "score": 2.40,
+            "coverage": 0.582,
+            "min_quadrant_coverage": 0.55,
+            "complete": True,
+        },
+        "output_local_completeness": {
+            "score": 2.39,
+            "coverage": 0.577,
+            "min_quadrant_coverage": 0.55,
+            "complete": False,
+        },
+        "score_change": {
+            "score": -0.01,
+            "coverage": -0.005,
+            "min_quadrant_coverage": 0.0,
+            "complete_before": True,
+            "complete_after": False,
+        },
+    }
+
+    result = pipeline.review_candidate_parameters(
+        request(),
+        rendered(),
+        {
+            "candidate_id": "F1",
+            "fracture_type": "Conductive",
+            "points": [[0, 1005.0], [90, 1005.5], [180, 1005.0], [270, 1004.5]],
+            "ai_correction_history": [previous],
+        },
+        round_number=2,
+    )
+
+    prompt = next(
+        item["text"]
+        for item in completions.calls[0]["messages"][1]["content"]
+        if item.get("type") == "text"
+    )
+    assert '"previous_round"' in prompt
+    assert '"action": "adjust_parameters"' in prompt
+    assert '"coverage": -0.005' in prompt
+    assert "must explicitly explain why the previous conclusion is maintained or overturned" in prompt
+    assert result["decision_continuity"] == "maintain"
+
+
+def test_review_loop_records_previous_parameter_and_score_changes_for_next_round(monkeypatch):
+    pipeline = FractureVisionPipeline(Config(), evidence_scorer=Scorer())
+    workflow = pipeline.complete_workflow
+    local_before = {
+        "available": True,
+        "complete": True,
+        "score": 2.40,
+        "coverage": 0.582,
+        "min_quadrant_coverage": 0.55,
+    }
+    local_after = {
+        "available": True,
+        "complete": False,
+        "score": 2.39,
+        "coverage": 0.577,
+        "min_quadrant_coverage": 0.55,
+    }
+    responses = [
+        {
+            "action": "adjust_parameters",
+            "aligned": False,
+            "confidence": 0.82,
+            "decision_continuity": "initial",
+            "reason": "Retain with a negligible adjustment.",
+            "parameters": {
+                "center_depth_m": 1005.0003,
+                "amplitude_m": 0.5,
+                "phase_deg": 90.0,
+            },
+            "corrected_points": [
+                [0, 1005.5], [90, 1005.0], [180, 1004.5], [270, 1005.0],
+            ],
+            "local_completeness": local_before,
+            "corrected_local_completeness": local_after,
+        },
+        {
+            "action": "keep",
+            "aligned": True,
+            "confidence": 0.84,
+            "decision_continuity": "maintain",
+            "reason": "Maintain the previous conclusion.",
+            "parameters": None,
+            "corrected_points": [],
+            "local_completeness": local_after,
+            "corrected_local_completeness": None,
+        },
+    ]
+    received = []
+
+    def review(_request, _candidate_rendered, annotation, **_kwargs):
+        received.append(json.loads(json.dumps(annotation)))
+        return responses.pop(0)
+
+    monkeypatch.setattr(workflow, "review_candidate_parameters", review)
+    annotation = {
+        "candidate_id": "F1",
+        "fracture_type": "Conductive",
+        "points": [[0, 1005.5], [90, 1005.0], [180, 1004.5], [270, 1005.0]],
+        **annotation_from_fracture_parameters(1005.0, 0.5, 90.0),
+    }
+
+    kept, discard = workflow._review_candidate_until_final(
+        request(), Context(), rendered(), rendered(), annotation, index=0, total=1,
+    )
+
+    assert discard is None
+    assert kept["ai_alignment_status"] == "aligned"
+    assert len(received) == 2
+    previous = received[1]["ai_correction_history"][0]
+    assert previous["action"] == "adjust_parameters"
+    assert previous["decision_continuity"] == "initial"
+    assert previous["parameter_change"]["amplitude_m"] == pytest.approx(0.0)
+    assert previous["score_change"]["coverage"] == pytest.approx(-0.005)
+    assert previous["score_change"]["complete_before"] is True
+    assert previous["score_change"]["complete_after"] is False
+
+
 def test_parameter_review_can_inspect_multiple_views_before_adjusting(monkeypatch):
     def review_payload(action, *, view=None, center=None, amplitude=None, phase=None, reason=""):
         return {

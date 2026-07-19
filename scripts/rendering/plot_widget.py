@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, QMimeData, QPoint, QRectF, Signal, QRect, QPointF
 from PySide6.QtGui import QDrag, QAction, QCursor, QPainter, QPen, QFont, QColor, QBrush, QImage, QPdfWriter, QPageLayout, QPageSize, QPainterPath, QLinearGradient
 import numpy as np
 import math
+import threading
 from typing import Optional, Union, Tuple, Any, Dict, List
 from ..data.db_manager import DBManager
 from ..utils.workers import DataFetchWorker, ImageSliceWorker
@@ -35,6 +36,7 @@ class LogWidget(QWidget):
     loadingFinished = Signal() # Emitted when all async data and image renders are done
     selectionChanged = Signal(list) # [NEW] Emitted when tracks or curves are selected (multi-selection support)
     aiFractureResultsReady = Signal(str, str, object)
+    aiFractureViewRenderRequested = Signal(object)
     
     def __init__(self, db_or_path, parent=None):
         super().__init__(parent)
@@ -223,6 +225,7 @@ class LogWidget(QWidget):
             self._start_ai_fracture_playback_from_worker,
             Qt.QueuedConnection,
         )
+        self.aiFractureViewRenderRequested.connect(self._render_ai_fracture_agent_view)
         
         # Use a per-plot thread pool so one window's template/image work
         # cannot starve unrelated plot windows via the global pool.
@@ -1140,6 +1143,7 @@ class LogWidget(QWidget):
         include_depth_track=False,
         preserve_aspect=False,
         respect_current_vertical_scale=False,
+        vertical_scale=1.0,
     ):
         """Render selected visible plot tracks for image-based analysis."""
         from ..data.export_manager import PlotAnalysisRenderer
@@ -1153,13 +1157,83 @@ class LogWidget(QWidget):
             include_depth_track=include_depth_track,
             preserve_aspect=preserve_aspect,
             respect_current_vertical_scale=respect_current_vertical_scale,
+            vertical_scale=vertical_scale,
         )
+
+    def _request_ai_fracture_agent_view(self, request, view_request):
+        """Synchronously request a Plot-data rerender from the GUI thread."""
+        completion = threading.Event()
+        payload = {
+            "request": request,
+            "view_request": view_request,
+            "completion": completion,
+            "result": None,
+            "error": None,
+        }
+        self.aiFractureViewRenderRequested.emit(payload)
+        if not completion.wait(30.0):
+            raise TimeoutError("Timed out while rerendering an AI fracture view")
+        if payload["error"]:
+            raise RuntimeError(payload["error"])
+        return payload["result"]
+
+    def _render_ai_fracture_agent_view(self, payload):
+        try:
+            import base64
+
+            request = payload["request"]
+            view_request = payload["view_request"]
+            rendered = self.render_analysis_tracks(
+                request.tracks,
+                view_request.depth_start,
+                view_request.depth_end,
+                width=1600,
+                height=2048,
+                include_depth_track=view_request.include_depth_track,
+                preserve_aspect=True,
+                respect_current_vertical_scale=True,
+                vertical_scale=view_request.scale,
+            )
+            payload["result"] = {
+                "data_url": "data:image/png;base64," + base64.b64encode(rendered["png_bytes"]).decode("ascii"),
+                "metadata": rendered["metadata"],
+            }
+        except Exception as exc:
+            payload["error"] = str(exc)
+        finally:
+            payload["completion"].set()
 
     def _set_ai_fracture_panel_state(self, running, status=""):
         panel = getattr(self, "fracture_panel", None)
         bridge = getattr(panel, "bridge", None)
         if bridge and hasattr(bridge, "set_auto_detection_state"):
             bridge.set_auto_detection_state(running, status)
+
+    def _prompt_ai_pick_parameters(self, visible_start, visible_end):
+        if not isinstance(self, QWidget):
+            return {
+                "depth_start": float(visible_start),
+                "depth_end": float(visible_end),
+                "sliding_window_m": min(3.0, abs(float(visible_end) - float(visible_start))),
+                "pick_entry_level": "confirmed",
+                "fast_mode": True,
+            }
+        available_start = self.global_min_depth
+        available_end = self.global_max_depth
+        if available_start is None or not np.isfinite(available_start):
+            available_start = visible_start
+        if available_end is None or not np.isfinite(available_end):
+            available_end = visible_end
+        from ..ui.dialogs.ai_pick_setup_dialog import AIPickSetupDialog
+
+        dialog = AIPickSetupDialog(
+            visible_start,
+            visible_end,
+            available_start,
+            available_end,
+            self.window(),
+        )
+        return dialog.values() if dialog.exec() == QDialog.Accepted else None
 
     def start_ai_fracture_detection(self):
         """Run visual fracture detection for the panel's current target and viewport."""
@@ -1188,7 +1262,13 @@ class LogWidget(QWidget):
             from plugins.ai_assistant.services.fracture_vision_service import FractureVisionPipeline
 
             depth_values = [float(value) for value in viewbox.viewRange()[1]]
-            depth_start, depth_end = min(depth_values), max(depth_values)
+            visible_start, visible_end = min(depth_values), max(depth_values)
+            parameters = LogWidget._prompt_ai_pick_parameters(self, visible_start, visible_end)
+            if parameters is None:
+                self._set_ai_fracture_panel_state(False, "")
+                return None
+            depth_start = parameters["depth_start"]
+            depth_end = parameters["depth_end"]
             target_label = self._fracture_track_label(target)
             request = FractureDetectionRequest.build(
                 window_id=self.windowTitle() or "Log Plot",
@@ -1199,6 +1279,9 @@ class LogWidget(QWidget):
                 fracture_types=AI_PICK_FRACTURE_TYPES,
                 borehole_diameter_in=self.fracture_borehole_diameter_in,
                 min_confidence=0.60,
+                sliding_window_m=parameters["sliding_window_m"],
+                pick_entry_level=parameters["pick_entry_level"],
+                fast_mode=parameters["fast_mode"],
             )
             self._set_ai_fracture_panel_state(True, "Preparing image...")
             rendered = self.render_analysis_tracks(
@@ -1216,6 +1299,10 @@ class LogWidget(QWidget):
                 "metadata": rendered["metadata"],
             }
             pipeline = FractureVisionPipeline()
+            pipeline.agent_view_provider = lambda view_request: self._request_ai_fracture_agent_view(
+                    request,
+                    view_request,
+                )
 
             def worker(run_request, context, analysis_input):
                 annotations = pipeline.detect(run_request, context, analysis_input)
@@ -1242,7 +1329,8 @@ class LogWidget(QWidget):
                 self.show_ai_pick_monitor(run["run_id"])
             self._set_ai_fracture_panel_state(True, "AI: queued")
             self._show_fracture_status(
-                f"AI picking started for {target_label}, {depth_start:.3f}-{depth_end:.3f}."
+                f"AI picking started for {target_label}, {depth_start:.3f}-{depth_end:.3f}, "
+                f"window {request.sliding_window_m:.2f} m."
             )
             return run
         except Exception as exc:
@@ -1433,6 +1521,14 @@ class LogWidget(QWidget):
             staged_count=applied_count,
             discarded_count=discarded_count,
             audit_stage="completed",
+        )
+        manager.update_monitor(
+            run_id,
+            kept_count=applied_count,
+            discarded_count=discarded_count,
+            current_candidate="",
+            correction_round=0,
+            api_status="completed",
         )
         manager.complete(run_id, applied_count, message)
         if applied_count:

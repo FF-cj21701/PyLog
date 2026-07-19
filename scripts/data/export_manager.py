@@ -51,6 +51,7 @@ class PlotAnalysisRenderer:
         include_depth_track=False,
         preserve_aspect=False,
         respect_current_vertical_scale=False,
+        vertical_scale=1.0,
     ):
         requested = list(dict.fromkeys(str(name).strip() for name in (track_names or []) if str(name).strip()))
         if not requested:
@@ -59,6 +60,9 @@ class PlotAnalysisRenderer:
         if start >= end:
             raise ValueError("depth_start must be less than depth_end")
         width, height = int(width), int(height)
+        vertical_scale = float(vertical_scale)
+        if not 0.5 <= vertical_scale <= 4.0:
+            raise ValueError("vertical_scale must be between 0.5 and 4.0")
         if width < 320 or height < 320:
             raise ValueError("analysis image width and height must be at least 320 pixels")
 
@@ -104,6 +108,7 @@ class PlotAnalysisRenderer:
             source_heights.append(max(1, int(height_getter()))) if callable(height_getter) else None
         source_height = max(source_heights or [height])
         effective_source_height = float(source_height)
+        base_effective_plot_height = max(1.0, float(source_height - source_header_height))
         current_visible_depth_range = None
         vertical_scale_applied = False
         if respect_current_vertical_scale:
@@ -117,21 +122,34 @@ class PlotAnalysisRenderer:
                     if visible_span > 0:
                         current_visible_depth_range = [visible_start, visible_end]
                         source_plot_height = max(1.0, float(source_height - source_header_height))
-                        effective_source_height = source_header_height + source_plot_height * requested_span / visible_span
+                        base_effective_plot_height = source_plot_height * requested_span / visible_span
+                        effective_source_height = (
+                            source_header_height
+                            + base_effective_plot_height * vertical_scale
+                        )
                         vertical_scale_applied = True
                 except (AttributeError, IndexError, TypeError, ValueError):
                     pass
         requested_bounds = [width, height]
         if preserve_aspect:
-            scale_to_bounds = min(width / total_source_width, height / effective_source_height)
-            width = max(1, int(round(total_source_width * scale_to_bounds)))
-            height = max(1, int(round(effective_source_height * scale_to_bounds)))
+            if vertical_scale_applied and vertical_scale != 1.0:
+                horizontal_scale = width / total_source_width
+                desired_height = int(round(effective_source_height * horizontal_scale))
+                height = max(1, min(height, desired_height))
+            else:
+                scale_to_bounds = min(width / total_source_width, height / effective_source_height)
+                width = max(1, int(round(total_source_width * scale_to_bounds)))
+                height = max(1, int(round(effective_source_height * scale_to_bounds)))
         track_widths = [max(1, int(round(width * value / total_source_width))) for value in source_widths]
         track_widths[-1] += width - sum(track_widths)
         scale_factor = width / total_source_width
 
         header_height = int(round(source_header_height * scale_factor))
         header_height = min(header_height, max(0, height - 160))
+        actual_vertical_scale = 1.0
+        if vertical_scale_applied:
+            unscaled_plot_height = max(1.0, base_effective_plot_height * scale_factor)
+            actual_vertical_scale = max(0.0, float(height - header_height) / unscaled_plot_height)
 
         image = QImage(width, height, QImage.Format_ARGB32)
         output_dpi = 96.0 * scale_factor
@@ -193,6 +211,8 @@ class PlotAnalysisRenderer:
                 "preserve_aspect": bool(preserve_aspect),
                 "respect_current_vertical_scale": bool(respect_current_vertical_scale),
                 "vertical_scale_applied": vertical_scale_applied,
+                "vertical_scale": vertical_scale,
+                "actual_vertical_scale": actual_vertical_scale,
                 "current_visible_depth_range": current_visible_depth_range,
                 "render_scale": width / total_source_width,
                 "output_dpi": output_dpi,

@@ -27,10 +27,11 @@ FRACTURE_AGENT_VIEW_SCHEMA = {
         "azimuth_end_deg": {"type": "number", "minimum": 0, "maximum": 360},
         "detail_level": {"type": "string", "enum": list(DETAIL_LEVELS)},
         "include_depth_track": {"type": "boolean"},
+        "scale": {"type": "number", "minimum": 0.5, "maximum": 4.0},
     },
     "required": [
         "depth_start", "depth_end", "azimuth_start_deg", "azimuth_end_deg",
-        "detail_level", "include_depth_track",
+        "detail_level", "include_depth_track", "scale",
     ],
     "additionalProperties": False,
 }
@@ -144,6 +145,7 @@ class FractureAgentViewRequest:
     azimuth_end_deg: float = 360.0
     detail_level: str = "detail"
     include_depth_track: bool = True
+    scale: float = 1.0
 
     @classmethod
     def build(cls, payload, source_metadata):
@@ -155,12 +157,15 @@ class FractureAgentViewRequest:
         azimuth_start = max(0.0, min(360.0, float(payload.get("azimuth_start_deg", 0.0))))
         azimuth_end = max(0.0, min(360.0, float(payload.get("azimuth_end_deg", 360.0))))
         detail_level = str(payload.get("detail_level") or "detail")
+        scale = float(payload.get("scale", 1.0))
         if depth_end <= depth_start:
             raise ValueError("Requested view depth_start must be less than depth_end")
         if azimuth_end <= azimuth_start:
             raise ValueError("Requested view azimuth_start_deg must be less than azimuth_end_deg")
         if detail_level not in DETAIL_LEVELS:
             raise ValueError(f"Unsupported detail level: {detail_level}")
+        if not 0.5 <= scale <= 4.0:
+            raise ValueError("Requested view scale must be between 0.5 and 4.0")
         return cls(
             depth_start=depth_start,
             depth_end=depth_end,
@@ -168,6 +173,7 @@ class FractureAgentViewRequest:
             azimuth_end_deg=azimuth_end,
             detail_level=detail_level,
             include_depth_track=bool(payload.get("include_depth_track", True)),
+            scale=scale,
         )
 
     @property
@@ -181,6 +187,7 @@ class FractureAgentViewRequest:
             round(self.azimuth_start_deg, 3),
             round(self.azimuth_end_deg, 3),
             self.include_depth_track,
+            round(self.scale, 3),
         )
 
 
@@ -424,6 +431,9 @@ class AdaptiveFractureViewRenderer:
             "view_request": asdict(request),
             "source_render_size": [metadata.get("width"), metadata.get("height")],
             "uniform_scale": 1.0,
+            "vertical_scale": request.scale,
+            "actual_vertical_scale": metadata.get("actual_vertical_scale", 1.0),
+            "render_mode": "source_crop",
         }
         return {"data_url": self._encode_image(canvas), "metadata": output_metadata}
 

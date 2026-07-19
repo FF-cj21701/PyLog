@@ -95,3 +95,37 @@ def test_monitor_close_only_hides_and_stop_uses_plot_cancel(monkeypatch):
     assert cancelled == [True]
     dialog._timer.stop()
     dialog.deleteLater()
+
+
+def test_monitor_completed_summary_falls_back_to_final_counts(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    snapshot = {
+        "run": {"status": "completed", "stage": "completed"},
+        "events": [],
+        "monitor": {
+            "media": {},
+            "api_status": "completed",
+            "candidate_count": 2,
+            "kept_count": 1,
+            "discarded_count": 1,
+            "current_candidate": "",
+        },
+        "diagnostics": {},
+    }
+    fake_manager = SimpleNamespace(get_monitor_snapshot=lambda _run_id: snapshot)
+    monkeypatch.setattr(
+        "plugins.ai_assistant.services.fracture_detection_service.get_fracture_detection_manager",
+        lambda: fake_manager,
+    )
+    dialog = AIPickMonitorDialog(SimpleNamespace())
+    dialog.run_id = "run-1"
+
+    dialog.refresh_snapshot()
+
+    assert dialog.candidate_label.text() == "Candidates: 2 / kept 1"
+    assert dialog.current_label.text() == "Current: -"
+    assert dialog.final_summary.text() == (
+        "Kept: 1 committed candidate(s)\nDiscarded: 1 candidate(s)"
+    )
+    dialog._timer.stop()
+    dialog.deleteLater()

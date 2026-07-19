@@ -3,6 +3,42 @@
 - This changelog now uses bilingual titles and English body text for long-term encoding stability.
 - Some older entries were historically affected by mojibake. Those sections were normalized into readable English summaries while preserving dates and main themes.
 
+## [2026-07-19] - Agent-driven AI Pick Workflow / 智能体裂缝自动拾取工作流
+
+- Added AI Pick to the Fracture Picking panel and to the agent tool surface, with shared background execution, cooperative cancellation, status polling, and GUI-thread result application.
+- Added a dedicated AI Pick Range dialog for selecting the analysis depth interval, sliding-window size, confirmed/suspected entry level, and fast mode. The visible Plot range remains the default and the sliding window defaults to 3 m.
+- Hardened the range dialog for manual numeric editing and mixed-DPI Windows displays:
+  - depth values are validated against the available well interval without rejecting temporary editor text
+  - validation disables confirmation and displays the reason instead of swallowing keystrokes
+  - the dialog keeps a fixed width but adapts its height to the active theme, font metrics, and display scaling
+- Added Plot-data analysis rendering for one or more selected tracks, including the depth track, exact depth/pixel metadata, current Plot vertical-scale support, and true vertical rerendering rather than bitmap enlargement.
+- Added overlapping sliding-window analysis with center-depth ownership, adjacent-window context handling, and periodic merged-window observations so boundary fractures can be correlated without being submitted twice.
+- Added autonomous fracture exploration actions instead of a fixed number of image segments:
+  - `inspect_view` requests another depth interval or vertical scale
+  - `register_trace_fragment` records visible partial fracture evidence
+  - `test_sinusoid_hypothesis` tests whether complementary fragments can form one sinusoid
+  - `register_candidate` promotes a fitted candidate
+  - `finish_exploration` ends the current inspection pass
+- Added fast mode, enabled by default, which retains initial window triage but skips optional navigation and proceeds directly to candidate fitting. Normal mode keeps the full autonomous exploration loop.
+- Added fracture-aware visual guidance for conductive and resistive sinusoids, cross-cutting behavior relative to repeated bedding textures, obscured pad-gap continuity, and avoidance of splitting one high-amplitude fracture into multiple partial candidates. Bedding remains contextual evidence rather than an AI Pick output type.
+- Added candidate fitting and correction based on 3-8 visual anchors, fixed-period sinusoidal parameters, standard regenerated preview points, and parameter-first visual review. Local image evidence is retained as advisory diagnostics instead of an unconditional rejection gate.
+- Added candidate association before final review:
+  - complementary fragments can be merged and refitted within one window
+  - compatible partial fits can be associated across sliding windows
+  - unresolved short fragments do not reach final review
+  - same-pass identities are preserved so internal merges are not mislabeled as cross-window merges
+- Added batch finalization with sinusoid-distance NMS, full-Plot visual audit, fracture-type colors, conflict handling, and `needs_review` preservation when strong pre-audit evidence conflicts with a later discard or when audit services are unavailable.
+- Added atomic GUI staging and commit so completed AI candidates use the existing fracture annotation, Results, Save/Load, editing, and Tadpole Track workflows. Cancellation removes only the current AI run's previews and staged candidates.
+- Added a single non-modal AI Pick Monitor with a wrapped action/reason timeline, current input view, sinusoid overlay, parameter changes, view budget, candidate counts, correction round, API status, final kept/discarded summary, shared Stop AI action, and diagnostics-folder access.
+- Expanded diagnostic exports to retain the original analysis input, candidate crops, raw and overlaid exploration views, monitor media, final overlays, exact coordinate metadata, decisions, correction history, and rejection reasons for reproducible review.
+- Extended the public fracture-detection tools with sliding-window, entry-level, and fast-mode options while preserving the existing metadata, start, status, cancellation, and diagnostic-export interfaces.
+- Related Python files:
+  - workflow and model interaction: `plugins/ai_assistant/services/fracture_agent_workflow.py`, `plugins/ai_assistant/services/fracture_complete_workflow.py`, `plugins/ai_assistant/services/fracture_detection_service.py`, `plugins/ai_assistant/services/fracture_vision_service.py`
+  - agent tools and rendering bridge: `plugins/ai_assistant/tools/fracture_detection_tool.py`, `plugins/ai_assistant/tools/tool_executor.py`, `scripts/data/export_manager.py`, `scripts/rendering/plot_widget.py`
+  - dialogs: `scripts/ui/dialogs/ai_pick_setup_dialog.py`, `scripts/ui/dialogs/ai_pick_monitor_dialog.py`
+  - regression tests: `tests/test_fracture_agent_workflow.py`, `tests/test_fracture_detection_phase1.py`, `tests/test_fracture_vision_service.py`, `tests/test_ai_pick_monitor.py`
+- Added regression coverage for autonomous action budgets, sliding-window ownership, merged observations, fragment and hypothesis association, direct and normal picking modes, vertical rerendering, visual correction, NMS/audit fallbacks, monitor summaries/media, editable depth inputs, and DPI-safe dialog sizing.
+
 ## [2026-07-13] - Fracture Picking Workflow / 裂缝拾取工作流
 
 - Added a dedicated Fracture Picking mode available from the top-level Fracture menu and image-track context menus.

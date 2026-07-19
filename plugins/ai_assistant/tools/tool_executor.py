@@ -1081,6 +1081,7 @@ class ToolExecutor(QObject):
                       include_depth_track=bool(payload.get("include_depth_track", False)),
                       preserve_aspect=bool(payload.get("preserve_aspect", False)),
                       respect_current_vertical_scale=bool(payload.get("respect_current_vertical_scale", False)),
+                      vertical_scale=float(payload.get("vertical_scale", 1.0)),
                   )
                 result = {
                     "ok": True,

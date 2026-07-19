@@ -12,6 +12,7 @@ from plugins.ai_assistant.services.fracture_agent_workflow import (
     FractureAgentViewRequest,
 )
 from plugins.ai_assistant.services.fracture_vision_service import FractureVisionPipeline
+from plugins.ai_assistant.services.fracture_detection_service import FractureDetectionRequest
 
 
 def rendered_plot():
@@ -61,6 +62,8 @@ def test_exploration_contract_uses_actions_instead_of_fixed_segments():
     view = schema["properties"]["view"]
     assert "depth_start" in view["properties"]
     assert "depth_end" in view["properties"]
+    assert view["properties"]["scale"] == {"type": "number", "minimum": 0.5, "maximum": 4.0}
+    assert "scale" in view["required"]
     assert "segment_index" not in view["properties"]
     assert "segment_count" not in view["properties"]
 
@@ -80,6 +83,16 @@ def test_view_request_clamps_to_source_and_rejects_empty_ranges():
     assert request.depth_end == pytest.approx(1004.0)
     assert request.azimuth_start_deg == pytest.approx(45.0)
     assert request.is_full_azimuth is False
+    assert request.scale == pytest.approx(1.0)
+    scaled = FractureAgentViewRequest.build({
+        "depth_start": 1001.0,
+        "depth_end": 1003.0,
+        "scale": 2.5,
+    }, metadata)
+    assert scaled.scale == pytest.approx(2.5)
+    assert scaled.key() != FractureAgentViewRequest(1001.0, 1003.0).key()
+    with pytest.raises(ValueError, match="scale"):
+        FractureAgentViewRequest.build({"depth_start": 1001, "depth_end": 1002, "scale": 4.1}, metadata)
     with pytest.raises(ValueError, match="depth_start"):
         FractureAgentViewRequest.build({"depth_start": 1005, "depth_end": 1004}, metadata)
 
@@ -125,6 +138,288 @@ def test_detail_level_does_not_change_crop_scale_or_duplicate_identity():
     assert close_output["metadata"]["uniform_scale"] == 1.0
     assert detail_output["metadata"]["width"] == close_output["metadata"]["width"]
     assert detail_output["metadata"]["height"] == close_output["metadata"]["height"]
+
+
+def test_pipeline_uses_plot_rerender_provider_for_non_unit_vertical_scale():
+    calls = []
+
+    def provider(request):
+        calls.append(request)
+        return rendered_plot()
+
+    pipeline = FractureVisionPipeline(agent_view_provider=provider)
+    output = pipeline.render_agent_view(
+        rendered_plot(),
+        "Track 1 / IMAGE",
+        FractureAgentViewRequest(1002.0, 1005.0, scale=2.0),
+        view_id="scaled-view",
+    )
+
+    assert len(calls) == 1
+    assert calls[0].scale == pytest.approx(2.0)
+    assert output["metadata"]["render_mode"] == "plot_data_rerender"
+    assert output["metadata"]["vertical_scale"] == pytest.approx(2.0)
+    assert output["metadata"]["actual_vertical_scale"] == pytest.approx(1.0)
+    assert output["metadata"]["uniform_scale"] == pytest.approx(1.0)
+
+
+def test_pipeline_builds_overlapping_sliding_windows():
+    windows = FractureVisionPipeline._sliding_windows(1000.0, 1010.0, 3.0)
+
+    expected = [
+        (1000.0, 1003.0),
+        (1002.4, 1005.4),
+        (1004.8, 1007.8),
+        (1007.2, 1010.0),
+    ]
+    assert len(windows) == len(expected)
+    for actual, wanted in zip(windows, expected):
+        assert actual == pytest.approx(wanted)
+    assert FractureVisionPipeline._sliding_windows(1000.0, 1002.0, 3.0) == [(1000.0, 1002.0)]
+
+    schedule = FractureVisionPipeline._window_schedule(windows)
+    assert [item["kind"] for item in schedule] == [
+        "primary_window",
+        "primary_window",
+        "primary_window",
+        "primary_window",
+    ]
+    assert (
+        schedule[0]["ownership_depth_start"], schedule[0]["ownership_depth_end"]
+    ) == pytest.approx((1000.0, 1002.7))
+    assert (
+        schedule[1]["ownership_depth_start"], schedule[1]["ownership_depth_end"]
+    ) == pytest.approx((1002.7, 1005.1))
+    assert FractureVisionPipeline._candidate_owned_by_pass({"offset": 1002.65}, schedule[0]) is True
+    assert FractureVisionPipeline._candidate_owned_by_pass({"offset": 1002.75}, schedule[0]) is False
+    assert FractureVisionPipeline._candidate_owned_by_pass({"offset": 1002.75}, schedule[1]) is True
+
+
+def test_pipeline_runs_each_sliding_window_and_prefixes_candidate_ids():
+    class Workflow:
+        def __init__(self):
+            self.ranges = []
+            self.rendered_inputs = []
+            self.merged_overlays = []
+
+        def detect(self, request, context, _rendered):
+            self.ranges.append((request.depth_start, request.depth_end))
+            self.rendered_inputs.append(_rendered)
+            first_pass = len(self.ranges) == 1
+            context.set_diagnostics({
+                "range": self.ranges[-1],
+                "discarded_count": 1 if first_pass else 0,
+                "discarded": ([{
+                    "candidate_id": "rejected",
+                    "reason": "window audit rejected it",
+                    "stage": "batch_audit",
+                }] if first_pass else []),
+                "candidate_evaluations": ([{
+                    "candidate": {"candidate_id": "local-fragment"},
+                    "status": "discarded",
+                }] if first_pass else []),
+                "comparison_candidates": ([{
+                    "candidate_id": "local-fragment",
+                    "fracture_type": "Conductive",
+                    "offset": 1001.5,
+                    "sin_coeff": 0.2,
+                    "cos_coeff": 0.0,
+                }] if first_pass else []),
+            })
+            context.set_candidate_payload("F1", {
+                "data_url": _rendered["data_url"],
+                "metadata": _rendered["metadata"],
+            })
+            return [{
+                "candidate_id": "F1",
+                "offset": (request.depth_start + request.depth_end) / 2.0,
+                "sin_coeff": 0.1,
+                "cos_coeff": 0.0,
+            }]
+
+        def _non_maximum_suppression(self, candidates, _rendered):
+            return list(candidates), []
+
+        def _build_batch_feedback_image(self, rendered, candidates, _target):
+            self.merged_overlays.append([item["candidate_id"] for item in candidates])
+            return rendered["data_url"] + "-overlay"
+
+    class Context:
+        run_id = "run-1"
+        cancelled = False
+
+        def __init__(self):
+            self.diagnostics = None
+            self.candidate_payloads = {}
+            self.monitor_media = {}
+            self.events = []
+            self.monitor = {}
+
+        def update(self, *_args):
+            pass
+
+        def set_diagnostics(self, diagnostics):
+            self.diagnostics = diagnostics
+
+        def set_candidate_payload(self, candidate_id, payload):
+            self.candidate_payloads[candidate_id] = payload
+
+        def set_monitor_media(self, slot, payload, **_details):
+            self.monitor_media[slot] = payload
+
+        def record_event(self, stage, action, reason, **details):
+            self.events.append({
+                "stage": stage, "action": action, "reason": reason, **details,
+            })
+
+        def update_monitor(self, **details):
+            self.monitor.update(details)
+
+    pipeline = FractureVisionPipeline(config=object())
+    workflow = Workflow()
+    pipeline.complete_workflow = workflow
+    context = Context()
+    request = FractureDetectionRequest.build(
+        "Plot",
+        "Track 1 / IMAGE",
+        1000.0,
+        1010.0,
+        ["Conductive"],
+        sliding_window_m=3.0,
+    )
+
+    results = pipeline.detect(request, context, rendered_plot())
+
+    assert len(workflow.ranges) == 4
+    assert [item["candidate_id"] for item in results] == [
+        "W1-F1", "W2-F1", "W3-F1", "W4-F1",
+    ]
+    assert context.diagnostics["sliding_window_m"] == pytest.approx(3.0)
+    assert len(context.diagnostics["window_diagnostics"]) == 4
+    assert context.diagnostics["merged_observations"] == []
+    assert set(context.candidate_payloads) == {
+        "W1-F1", "W2-F1", "W3-F1", "W4-F1",
+    }
+    assert workflow.merged_overlays == [
+        ["W1-F1", "W2-F1", "W3-F1", "W4-F1"],
+    ]
+    assert context.diagnostics["discarded_count"] == 1
+    assert context.diagnostics["kept_candidate_ids"] == [
+        "W1-F1", "W2-F1", "W3-F1", "W4-F1",
+    ]
+    assert context.monitor["kept_count"] == 4
+    assert context.monitor["discarded_count"] == 1
+    assert context.monitor["current_candidate"] == ""
+    assert context.diagnostics["discarded"][0]["candidate_id"] == "W1-rejected"
+    assert all("prior_candidate_overlays" not in item["metadata"] for item in workflow.rendered_inputs)
+    assert context.monitor_media["final_overlay"]["data_url"].endswith("-overlay")
+    assert context.monitor_media["final_overlay"]["metadata"]["depth_start"] == pytest.approx(1000.0)
+    assert context.monitor_media["final_overlay"]["metadata"]["depth_end"] == pytest.approx(1010.0)
+    assert context.diagnostics["final_overlay_scope"] == "full_detection_depth_range"
+    assert any(event["action"] == "final_sliding_overlay_prepared" for event in context.events)
+
+
+def test_merged_observation_vision_messages_compare_raw_and_overlay_images():
+    raw = "data:image/png;base64,raw"
+    overlay = "data:image/png;base64,overlay"
+
+    images = FractureVisionPipeline(config=object()).complete_workflow._analysis_images({
+        "data_url": raw,
+        "overlay_data_url": overlay,
+    })
+    messages = FractureVisionPipeline(config=object()).complete_workflow._vision_messages(
+        "system", "prompt", images,
+    )
+    content = messages[1]["content"]
+    image_blocks = [item for item in content if item["type"] == "image_url"]
+    labels = [item["text"] for item in content if item["type"] == "text"]
+
+    assert [item["image_url"]["url"] for item in image_blocks] == [raw, overlay]
+    assert any("authoritative source" in label for label in labels)
+    assert any("annotations, not raw fracture evidence" in label for label in labels)
+
+
+def test_pipeline_promotes_context_candidate_when_owner_window_has_no_match():
+    class Workflow:
+        def detect(self, request, context, _rendered):
+            context.set_diagnostics({"discarded": [], "discarded_count": 0})
+            if request.depth_start < 1002.0:
+                return []
+            return [{
+                "candidate_id": "F1",
+                "offset": 1002.5,
+                "sin_coeff": 0.35,
+                "cos_coeff": 0.0,
+                "confidence": 0.85,
+                "needs_review": False,
+            }]
+
+        def _non_maximum_suppression(self, candidates, _rendered):
+            return list(candidates), []
+
+    class Context:
+        run_id = "run-context-fallback"
+        cancelled = False
+
+        def __init__(self):
+            self.diagnostics = None
+
+        def update(self, *_args):
+            pass
+
+        def set_diagnostics(self, diagnostics):
+            self.diagnostics = diagnostics
+
+    pipeline = FractureVisionPipeline(config=object())
+    pipeline.complete_workflow = Workflow()
+    context = Context()
+    selected_request = FractureDetectionRequest.build(
+        "Plot", "Track 1 / IMAGE", 1000.0, 1004.0, ["Conductive"],
+        sliding_window_m=3.0,
+    )
+
+    results = pipeline.detect(selected_request, context, rendered_plot())
+
+    assert [item["candidate_id"] for item in results] == ["W2-F1"]
+    assert results[0]["ownership_fallback_promoted"] is True
+    assert results[0]["needs_review"] is True
+    assert context.diagnostics["promoted_context_candidates"] == ["W2-F1"]
+    assert context.diagnostics["context_only_candidates"][0]["status"] == "promoted_after_owner_miss"
+
+
+def test_matching_context_candidate_merges_support_into_owner():
+    owner = {
+        "candidate_id": "W3-F2",
+        "fracture_type": "Resistive",
+        "sliding_window_index": 3,
+        "confidence": 0.68,
+        "final_points": [[180, 1005.0], [225, 1005.14], [270, 1005.2], [315, 1005.14]],
+        "offset": 1005.0,
+        "sin_coeff": 0.0,
+        "cos_coeff": -0.2,
+    }
+    support = {
+        "candidate_id": "W4-F1",
+        "fracture_type": "Resistive",
+        "sliding_window_index": 4,
+        "confidence": 0.72,
+        "final_points": [[180, 1005.01], [225, 1005.15], [270, 1005.21], [315, 1005.15]],
+        "offset": 1005.01,
+        "sin_coeff": 0.0,
+        "cos_coeff": -0.2,
+    }
+
+    corroboration = FractureVisionPipeline._merge_window_ownership_support(
+        owner, support, rendered_plot(), borehole_diameter=8.0,
+    )
+
+    assert corroboration["support_count"] == 2
+    assert corroboration["candidate_ids"] == ["W3-F2", "W4-F1"]
+    assert corroboration["source_window_indices"] == [3, 4]
+    assert corroboration["fit_acceptable"] is True
+    assert owner["cross_window_corroboration"] == corroboration
+    assert owner["confidence"] == pytest.approx(0.72)
+    assert len(owner["final_points"]) == 8
 
 
 def test_agent_state_enforces_budgets_and_records_decisions():

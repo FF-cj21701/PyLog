@@ -38,17 +38,28 @@ def _plot_widget(main_window, window_id):
     raise RuntimeError(f"Plot window with title '{window_id}' not found")
 
 
-def _render_analysis_input(main_window, tool_executor, request):
+def _render_analysis_input(
+    main_window,
+    tool_executor,
+    request,
+    *,
+    depth_start=None,
+    depth_end=None,
+    include_depth_track=True,
+    vertical_scale=1.0,
+    height=1600,
+):
     payload = {
         "window_id": request.window_id,
         "tracks": list(request.tracks),
-        "depth_start": request.depth_start,
-        "depth_end": request.depth_end,
+        "depth_start": request.depth_start if depth_start is None else float(depth_start),
+        "depth_end": request.depth_end if depth_end is None else float(depth_end),
         "width": 1600,
-        "height": 1600,
-        "include_depth_track": True,
+        "height": int(height),
+        "include_depth_track": bool(include_depth_track),
         "preserve_aspect": True,
         "respect_current_vertical_scale": True,
+        "vertical_scale": float(vertical_scale),
     }
     if tool_executor:
         result = _run_executor_request(
@@ -62,13 +73,14 @@ def _render_analysis_input(main_window, tool_executor, request):
         return {"data_url": result["data_url"], "metadata": result["metadata"]}
     rendered = _plot_widget(main_window, request.window_id).render_analysis_tracks(
         request.tracks,
-        request.depth_start,
-        request.depth_end,
+        payload["depth_start"],
+        payload["depth_end"],
         width=1600,
-        height=1600,
-        include_depth_track=True,
+        height=payload["height"],
+        include_depth_track=payload["include_depth_track"],
         preserve_aspect=True,
         respect_current_vertical_scale=True,
+        vertical_scale=payload["vertical_scale"],
     )
     import base64
     return {
@@ -228,6 +240,22 @@ class StartFractureDetectionTool(_FractureTool):
                 },
                 "borehole_diameter_in": {"type": "number", "description": "Borehole diameter in inches", "default": 8.0},
                 "min_confidence": {"type": "number", "description": "Minimum confidence from 0 to 1", "default": 0.60},
+                "sliding_window_m": {
+                    "type": "number",
+                    "description": "Outer depth-window size in metres; windows overlap to protect boundary fractures",
+                    "default": 3.0,
+                },
+                "pick_entry_level": {
+                    "type": "string",
+                    "enum": ["confirmed", "suspected"],
+                    "description": "Lowest window classification allowed to enter fracture picking",
+                    "default": "confirmed",
+                },
+                "fast_mode": {
+                    "type": "boolean",
+                    "description": "Skip autonomous view navigation and pick candidates directly from each window",
+                    "default": True,
+                },
             },
             main_window,
             tool_executor,
@@ -265,10 +293,27 @@ class StartFractureDetectionTool(_FractureTool):
 
             kwargs["tracks"] = [track.get("label") or track.get("name") for track in selected]
             kwargs["target_image_track"] = target.get("label") or target.get("name")
+            kwargs.setdefault("sliding_window_m", 3.0)
+            kwargs.setdefault("pick_entry_level", "confirmed")
+            kwargs.setdefault("fast_mode", True)
             kwargs.pop("track", None)
             request = FractureDetectionRequest.build(**kwargs)
             rendered = _render_analysis_input(self.main_window, self.tool_executor, request)
+            agent_view_provider = None
+            if self.tool_executor:
+                agent_view_provider = lambda view_request: _render_analysis_input(
+                    self.main_window,
+                    self.tool_executor,
+                    request,
+                    depth_start=view_request.depth_start,
+                    depth_end=view_request.depth_end,
+                    include_depth_track=view_request.include_depth_track,
+                    vertical_scale=view_request.scale,
+                    height=2048,
+                )
             pipeline = FractureVisionPipeline()
+            if agent_view_provider is not None:
+                pipeline.agent_view_provider = agent_view_provider
 
             def worker(run_request, context, input_payload):
                 annotations = pipeline.detect(run_request, context, input_payload)

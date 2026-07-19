@@ -274,6 +274,11 @@ class AIPickMonitorDialog(ThemeDialog):
         kept_ids = diagnostics.get("kept_candidate_ids") or []
         discarded = diagnostics.get("discarded") or []
         discarded_text = [f"{item.get('candidate_id')}: {item.get('reason')}" for item in discarded]
+        terminal = run.get("status") in {"completed", "cancelled", "failed"}
+        if terminal and not kept_ids and monitor.get("kept_count", 0):
+            kept_ids = [f"{monitor['kept_count']} committed candidate(s)"]
+        if terminal and not discarded_text and monitor.get("discarded_count", 0):
+            discarded_text = [f"{monitor['discarded_count']} candidate(s)"]
         self.final_summary.setText(
             "Kept: " + (", ".join(str(item) for item in kept_ids) or "-")
             + "\nDiscarded: " + ("; ".join(discarded_text) or "-")

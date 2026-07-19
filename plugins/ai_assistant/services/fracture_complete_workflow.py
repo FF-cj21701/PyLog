@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import math
 import re
@@ -27,12 +28,39 @@ from scripts.rendering.fracture_annotations import (
 
 
 MIN_TRACE_POINTS = 3
+MIN_STABLE_FIT_AZIMUTH_SPAN_DEG = 90.0
 MAX_TRACE_POINTS = 8
 MAX_CORRECTION_ROUNDS = 5
 MAX_REVIEW_VIEWS = 6
 MAX_REVIEW_ACTIONS = 8
 MAX_AUDIT_VIEWS = 8
 MAX_AUDIT_ACTIONS = 12
+ASSOCIATION_AZIMUTH_BINS = 8
+ASSOCIATION_MAX_PHASE_DELTA_DEG = 30.0
+ASSOCIATION_MAX_AMPLITUDE_RELATIVE_DELTA = 0.40
+ASSOCIATION_MIN_ENVELOPE_OVERLAP = 0.45
+ASSOCIATION_MAX_ANCHOR_JACCARD = 0.70
+ASSOCIATION_MIN_MERGED_RMSE_M = 0.08
+ASSOCIATION_MAX_MERGED_RMSE_M = 0.12
+ASSOCIATION_MAX_MERGED_RMSE_AMPLITUDE_RATIO = 0.20
+AUDIT_CONFLICT_MIN_RELATIVE_ENVELOPE = 0.35
+AUDIT_CONFLICT_MIN_ANCHOR_SPAN_DEG = 90.0
+CANDIDATE_CROP_PADDING_RATIO = 0.35
+CANDIDATE_CROP_MIN_PADDING_M = 0.30
+
+FRACTURE_MORPHOLOGY_GUIDANCE = (
+    "Apply this borehole-image morphology definition consistently. In FMI/EMI/UBI-like unwrapped images, a "
+    "conductive fracture commonly appears as a narrow dark sinusoidal or curved anomaly, while a resistive fracture "
+    "commonly appears as a narrow bright sinusoidal or curved anomaly. Fracture traces are typically elongated and "
+    "continuous or semi-continuous; their boundaries may be sharp or interrupted by pad gaps, weak imaging, or noise. "
+    "Bedding is not necessarily horizontal: it may also form sinusoidal traces, but it usually occurs as a regular, "
+    "repeated family of approximately parallel curves with stable extension and similar geometry. Distinguish a "
+    "fracture from bedding by relational evidence, not orientation alone. A narrow, distinct trace that cuts across "
+    "several bedding bands, departs from the repeated bedding family, or has a clearly different angle is positive "
+    "fracture evidence. Do not classify one isolated bedding band as a fracture merely because it is sinusoidal, and "
+    "do not reject a fracture merely because it is near-horizontal when it remains sharp, distinct, and cross-cuts "
+    "the surrounding repeated layering. "
+)
 
 
 def _point_schema():
@@ -128,6 +156,84 @@ BATCH_AUDIT_SCHEMA = {
     },
 }
 
+FAST_PARAMETER_REVIEW_SCHEMA = copy.deepcopy(PARAMETER_REVIEW_SCHEMA)
+FAST_PARAMETER_REVIEW_SCHEMA["name"] = "fast_complete_fracture_parameter_review"
+FAST_PARAMETER_REVIEW_SCHEMA["schema"]["properties"]["action"]["enum"] = [
+    "keep", "adjust_parameters", "replace_points", "discard",
+]
+
+FAST_BATCH_AUDIT_SCHEMA = copy.deepcopy(BATCH_AUDIT_SCHEMA)
+FAST_BATCH_AUDIT_SCHEMA["name"] = "fast_complete_fracture_batch_audit"
+FAST_BATCH_AUDIT_SCHEMA["schema"]["properties"]["action"]["enum"] = ["finalize_audit"]
+
+
+WINDOW_CLASSIFICATION_SCHEMA = {
+    "name": "fracture_window_classification",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "classification": {
+                "type": "string",
+                "enum": ["confirmed", "suspected", "none"],
+            },
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "reason": {"type": "string"},
+            "suspected_depth_ranges": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "depth_top": {"type": "number"},
+                        "depth_bottom": {"type": "number"},
+                    },
+                    "required": ["depth_top", "depth_bottom"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["classification", "confidence", "reason", "suspected_depth_ranges"],
+        "additionalProperties": False,
+    },
+}
+
+
+DIRECT_CANDIDATE_SCHEMA = {
+    "name": "direct_fracture_candidates",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "reason": {"type": "string"},
+            "candidates": {
+                "type": "array",
+                "maxItems": 12,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "candidate_id": {"type": "string"},
+                        "fracture_type": {
+                            "type": "string",
+                            "enum": ["Conductive", "Resistive", "Bedding"],
+                        },
+                        "depth_top": {"type": "number"},
+                        "depth_bottom": {"type": "number"},
+                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        "continuity_reason": {"type": "string"},
+                    },
+                    "required": [
+                        "candidate_id", "fracture_type", "depth_top", "depth_bottom",
+                        "confidence", "continuity_reason",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["reason", "candidates"],
+        "additionalProperties": False,
+    },
+}
+
 
 def _json_payload(response):
     content = response.choices[0].message.content if response.choices else ""
@@ -158,16 +264,82 @@ class CompleteFractureWorkflow:
             return []
         self._validate_rendered(rendered)
         _config, client, model = self._client()
-        context.update("exploring", 0.10, "AI: inspecting complete Plot overview")
+        classification = None
+        if request.pick_entry_level:
+            context.update("classifying", 0.06, "AI: classifying fracture evidence in current window")
+            classification = self.classify_window(
+                request,
+                rendered,
+                client=client,
+                model=model,
+            )
+            classification_value = classification["classification"]
+            enters_picking = (
+                classification_value == "confirmed"
+                or (
+                    request.pick_entry_level == "suspected"
+                    and classification_value == "suspected"
+                )
+            )
+            prior_overlays = list((rendered.get("metadata") or {}).get("prior_candidate_overlays") or [])
+            has_reconsiderable_overlays = any(
+                str(item.get("candidate_status") or "").lower() not in {"accepted", "kept"}
+                for item in prior_overlays
+            )
+            if classification_value == "suspected" and has_reconsiderable_overlays:
+                enters_picking = True
+            if hasattr(context, "record_event"):
+                context.record_event(
+                    "classifying",
+                    "window_classification",
+                    classification.get("reason", ""),
+                    status="accepted" if enters_picking else "skipped",
+                    classification=classification_value,
+                    confidence=classification.get("confidence"),
+                    pick_entry_level=request.pick_entry_level,
+                )
+            if hasattr(context, "update_monitor"):
+                context.update_monitor(
+                    api_status="classified",
+                    window_classification=classification_value,
+                    classification_confidence=classification.get("confidence"),
+                )
+            if not enters_picking:
+                diagnostics = {
+                    "render_metadata": rendered["metadata"],
+                    "window_classification": classification,
+                    "pick_entry_level": request.pick_entry_level,
+                    "skipped_before_picking": True,
+                    "candidate_windows": [],
+                    "accepted_count": 0,
+                }
+                context.set_diagnostics(diagnostics)
+                context.update(
+                    "window_skipped",
+                    0.89,
+                    f"AI: {classification_value}, moving to next window",
+                )
+                return []
+        context.update("exploring", 0.10, "AI: picking fracture candidates from current window")
         if hasattr(context, "set_monitor_media"):
             context.set_monitor_media("input_view", rendered, api_status="requesting")
-        candidates, exploration = self.explore_candidate_windows(
-            request,
-            rendered,
-            context=context,
-            client=client,
-            model=model,
-        )
+        if request.fast_mode:
+            candidates, exploration = self.pick_candidates_directly(
+                request,
+                rendered,
+                classification=classification,
+                context=context,
+                client=client,
+                model=model,
+            )
+        else:
+            candidates, exploration = self.explore_candidate_windows(
+                request,
+                rendered,
+                context=context,
+                client=client,
+                model=model,
+            )
         diagnostics = {
             "coordinate_contract": {
                 "x_norm": "0..1 within the candidate target image track",
@@ -175,9 +347,12 @@ class CompleteFractureWorkflow:
             },
             "render_metadata": rendered["metadata"],
             "candidate_windows": candidates,
+            "window_classification": classification,
+            "pick_entry_level": request.pick_entry_level,
             "exploration": exploration,
             "candidate_evaluations": [],
         }
+        provisional = []
         staged = []
         discarded = []
         total = max(1, len(candidates))
@@ -227,6 +402,9 @@ class CompleteFractureWorkflow:
                 )
                 if len(points) < MIN_TRACE_POINTS:
                     raise ValueError("Vision model returned fewer than three valid anchor points")
+                azimuth_span = self._azimuth_coverage_span(points)
+                evaluation["anchor_azimuth_span_deg"] = azimuth_span
+                fragment_only = azimuth_span < MIN_STABLE_FIT_AZIMUTH_SPAN_DEG
                 fit = fit_sinusoidal_fracture(points, min_points=MIN_TRACE_POINTS)
                 parameters = fracture_parameters(fit)
                 style = FRACTURE_TYPE_STYLES[candidate["fracture_type"]]
@@ -234,6 +412,11 @@ class CompleteFractureWorkflow:
                     candidate_rendered,
                     request.target_image_track,
                     fit,
+                )
+                diagnostic_candidate_id = (
+                    context.qualify_candidate_id(candidate["candidate_id"])
+                    if hasattr(context, "qualify_candidate_id")
+                    else candidate["candidate_id"]
                 )
                 annotation = enrich_fracture_interpretation({
                     "type": "sinusoidal_fracture",
@@ -246,6 +429,7 @@ class CompleteFractureWorkflow:
                     "detection_run_id": context.run_id,
                     "candidate_id": candidate["candidate_id"],
                     "candidate_depth_window": [candidate["depth_top"], candidate["depth_bottom"]],
+                    "candidate_continuity_reason": str(candidate.get("continuity_reason") or ""),
                     "source_track_label": request.target_image_track,
                     "target_track_label": request.target_image_track,
                     "borehole_diameter_in": request.borehole_diameter_in,
@@ -259,43 +443,46 @@ class CompleteFractureWorkflow:
                     "agent_hypothesis_id": candidate.get("agent_hypothesis_id"),
                     "agent_hypothesis_revision": candidate.get("agent_hypothesis_revision"),
                     "agent_fragment_ids": list(candidate.get("agent_fragment_ids") or []),
+                    "anchor_evidence_status": "fragment" if fragment_only else "stable_candidate",
+                    "anchor_azimuth_span_deg": azimuth_span,
                     "needs_review": False,
                     "initial_points": [list(point) for point in points],
                     "final_points": [list(point) for point in points],
-                    "_candidate_render_key": candidate["candidate_id"],
+                    "_candidate_render_key": diagnostic_candidate_id,
                 }, borehole_diameter=request.borehole_diameter_in)
                 if hasattr(context, "set_candidate_payload"):
                     context.set_candidate_payload(candidate["candidate_id"], candidate_rendered)
                 else:
                     annotation["_candidate_rendered"] = candidate_rendered
-                reviewed, review_discard = self._review_candidate_until_final(
-                    request,
-                    context,
-                    rendered,
-                    candidate_rendered,
-                    annotation,
-                    index=index,
-                    total=len(candidates),
-                )
-                if review_discard is not None:
-                    discarded.append(review_discard)
-                    evaluation.update({
-                        "status": "discarded",
-                        "discard_reason": review_discard["reason"],
-                        "review_history": list(annotation.get("ai_correction_history") or []),
-                    })
-                    continue
-                staged.append(reviewed)
+                provisional.append({
+                    "candidate": candidate,
+                    "candidate_rendered": candidate_rendered,
+                    "annotation": annotation,
+                    "evaluation": evaluation,
+                    "anchor_response": anchor_result,
+                    "points": points,
+                    "fragment_only": fragment_only,
+                })
                 evaluation.update({
-                    "status": "accepted",
+                    "status": "fragment_pending_association" if fragment_only else "fitted",
                     "anchor_response": anchor_result,
                     "points": points,
                     "initial_parameters": parameters,
                     "local_completeness": local,
                     "candidate_render_metadata": candidate_rendered["metadata"],
-                    "final_parameters": reviewed.get("ai_final_parameters"),
-                    "review_history": list(reviewed.get("ai_correction_history") or []),
                 })
+                if fragment_only and hasattr(context, "record_event"):
+                    context.record_event(
+                        "associating",
+                        "trace_fragment_staged",
+                        (
+                            f"Anchor span {azimuth_span:.1f} deg is insufficient for an independent "
+                            "fracture but remains available for complementary-fragment association"
+                        ),
+                        status="pending",
+                        candidate_id=candidate.get("candidate_id"),
+                        anchor_azimuth_span_deg=azimuth_span,
+                    )
             except Exception as exc:
                 if context.cancelled:
                     return []
@@ -316,13 +503,142 @@ class CompleteFractureWorkflow:
 
         if context.cancelled:
             return []
-        context.update("auditing", 0.84, f"Auditing {len(staged)} staged candidate(s)")
-        audit_result = self._audit_staged_candidates(
+        context.update(
+            "associating",
+            0.64,
+            f"Associating {len(provisional)} provisional candidate fit(s)",
+        )
+        provisional, association = self._associate_provisional_candidates(
             request,
             context,
             rendered,
-            staged,
+            provisional,
         )
+        provisional, unresolved_fragments = self._remove_unresolved_trace_fragments(
+            provisional,
+            discarded,
+            context,
+        )
+        association["unresolved_fragments"] = unresolved_fragments
+        association["promoted_fragment_groups"] = [
+            {
+                "candidate_id": item["candidate"].get("candidate_id"),
+                "source_candidate_ids": list(
+                    item["annotation"].get("associated_candidate_ids") or []
+                ),
+                "anchor_azimuth_span_deg": item["annotation"].get("anchor_azimuth_span_deg"),
+            }
+            for item in provisional
+            if item["annotation"].get("fragment_association_status") == "promoted"
+        ]
+        diagnostics["candidate_association"] = association
+        diagnostics["comparison_candidates"] = [
+            self._diagnostic_annotation(item["annotation"])
+            for item in provisional
+        ]
+
+        if bool(getattr(context, "defer_candidate_review", False)):
+            results = []
+            for item in provisional:
+                annotation = item["annotation"]
+                item["evaluation"].update({
+                    "status": "deferred_to_global_review",
+                    "final_parameters": annotation.get("ai_final_parameters"),
+                    "review_history": [],
+                })
+                results.append(annotation)
+            diagnostics["staged_count"] = len(results)
+            diagnostics["accepted_count"] = len(results)
+            diagnostics["discarded_count"] = len(discarded)
+            diagnostics["discarded"] = discarded
+            diagnostics["kept_candidate_ids"] = [
+                item.get("candidate_id") for item in results
+            ]
+            diagnostics["batch_audit"] = {
+                "audit_status": "deferred_to_global_review_and_audit",
+                "audit_views": [],
+                "audit_events": [],
+                "audit_action_count": 0,
+                "audit_decisions": [],
+            }
+            context.set_diagnostics(diagnostics)
+            context.update(
+                "staging",
+                0.89,
+                f"Deferred {len(results)} fitted candidate(s) to cross-window review",
+            )
+            return results
+
+        review_total = max(1, len(provisional))
+        for index, item in enumerate(provisional):
+            if context.cancelled:
+                return []
+            candidate = item["candidate"]
+            candidate_rendered = item["candidate_rendered"]
+            annotation = item["annotation"]
+            evaluation = item["evaluation"]
+            reviewed, review_discard = self._review_candidate_until_final(
+                request,
+                context,
+                rendered,
+                candidate_rendered,
+                annotation,
+                index=index,
+                total=review_total,
+            )
+            diagnostic_annotation = reviewed or annotation
+            diagnostic_payload = dict(candidate_rendered)
+            final_points = self._clean_depth_points(diagnostic_annotation.get("final_points"))
+            if len(final_points) >= MIN_TRACE_POINTS:
+                diagnostic_payload["overlay_data_url"] = self.pipeline._build_feedback_image(
+                    candidate_rendered,
+                    final_points,
+                    request.target_image_track,
+                )
+            diagnostic_payload["annotation"] = self._diagnostic_annotation(diagnostic_annotation)
+            if hasattr(context, "set_candidate_payload"):
+                context.set_candidate_payload(candidate["candidate_id"], diagnostic_payload)
+            if review_discard is not None:
+                discarded.append(review_discard)
+                evaluation.update({
+                    "status": "discarded",
+                    "discard_reason": review_discard["reason"],
+                    "review_history": list(annotation.get("ai_correction_history") or []),
+                })
+                continue
+            staged.append(reviewed)
+            evaluation.update({
+                "status": "accepted",
+                "final_parameters": reviewed.get("ai_final_parameters"),
+                "review_history": list(reviewed.get("ai_correction_history") or []),
+            })
+
+        if context.cancelled:
+            return []
+        if bool(getattr(context, "defer_batch_audit", False)):
+            deferred_kept, deferred_discarded = self._non_maximum_suppression(staged, rendered)
+            audit_result = {
+                "kept": deferred_kept,
+                "discarded": deferred_discarded,
+                "audit_status": "deferred_to_global_audit",
+                "audit_views": [],
+                "audit_events": [],
+                "audit_action_count": 0,
+                "audit_decisions": [],
+            }
+            context.update(
+                "staging",
+                0.84,
+                f"Deferred {len(deferred_kept)} candidate(s) to global audit",
+            )
+        else:
+            context.update("auditing", 0.84, f"Auditing {len(staged)} staged candidate(s)")
+            audit_result = self._audit_staged_candidates(
+                request,
+                context,
+                rendered,
+                staged,
+            )
         results = list(audit_result["kept"])
         discarded.extend(audit_result["discarded"])
         diagnostics["staged_count"] = len(staged)
@@ -344,6 +660,742 @@ class CompleteFractureWorkflow:
             )
         context.update("staging", 0.89, f"Prepared {len(results)} audited candidate(s) for GUI playback")
         return results
+
+    def associate_annotations_across_windows(
+        self,
+        request,
+        context,
+        rendered,
+        annotations,
+    ):
+        """Associate complementary fitted traces from different primary windows."""
+        provisional = []
+        passthrough = []
+        for annotation in annotations:
+            points = self._clean_depth_points(
+                annotation.get("final_points")
+                or annotation.get("points")
+                or annotation.get("initial_points")
+            )
+            if len(points) < MIN_TRACE_POINTS:
+                passthrough.append(dict(annotation))
+                continue
+            parameters = fracture_parameters(annotation)
+            center = float(parameters["center_depth_m"])
+            amplitude = abs(float(parameters["amplitude_m"]))
+            candidate = {
+                "candidate_id": str(annotation.get("candidate_id") or "candidate"),
+                "fracture_type": str(annotation.get("fracture_type") or "Conductive"),
+                "depth_top": center - amplitude,
+                "depth_bottom": center + amplitude,
+                "confidence": float(annotation.get("confidence", 0.0)),
+                "continuity_reason": "Cross-window fitted candidate",
+            }
+            provisional.append({
+                "candidate": candidate,
+                "candidate_rendered": self.render_candidate_window(
+                    rendered,
+                    candidate,
+                    request.target_image_track,
+                ),
+                "annotation": dict(annotation),
+                "evaluation": {},
+                "anchor_response": {},
+                "points": points,
+            })
+
+        if len(provisional) < 2:
+            return list(annotations), {
+                "input_count": len(annotations),
+                "fitted_count": len(provisional),
+                "output_count": len(annotations),
+                "groups": [],
+                "comparisons": [],
+            }
+
+        associated, diagnostics = self._associate_provisional_candidates(
+            request,
+            context,
+            rendered,
+            provisional,
+            cross_window_only=True,
+        )
+        cross_window_groups = {
+            str(group.get("candidate_id")): list(group.get("source_candidate_ids") or [])
+            for group in diagnostics.get("groups") or []
+        }
+        output = list(passthrough)
+        for item in associated:
+            annotation = dict(item["annotation"])
+            group_id = str(item["candidate"].get("candidate_id") or "")
+            source_ids = cross_window_groups.get(group_id, [])
+            if source_ids:
+                annotation["candidate_id"] = "X-" + "+".join(source_ids)
+                annotation["detection_pass_kind"] = "cross_window_association"
+                annotation["sliding_window_index"] = None
+                annotation["merged_observation_group"] = None
+                annotation["needs_review"] = True
+            output.append(annotation)
+        diagnostics = dict(diagnostics)
+        diagnostics["fitted_count"] = len(provisional)
+        diagnostics["passthrough_candidate_ids"] = [
+            item.get("candidate_id") for item in passthrough
+        ]
+        output.sort(key=lambda item: float(item.get("offset", 0.0)))
+        return output, diagnostics
+
+    def review_annotations_after_association(
+        self,
+        request,
+        context,
+        rendered,
+        annotations,
+    ):
+        """Review final fitted candidates only after cross-window association is complete."""
+        reviewed = []
+        discarded = []
+        total = max(1, len(annotations))
+        for index, annotation in enumerate(annotations):
+            if context.cancelled:
+                return [], discarded
+            parameters = fracture_parameters(annotation)
+            center = float(parameters["center_depth_m"])
+            amplitude = abs(float(parameters["amplitude_m"]))
+            candidate = {
+                "candidate_id": str(annotation.get("candidate_id") or f"F{index + 1}"),
+                "fracture_type": str(annotation.get("fracture_type") or "Conductive"),
+                "depth_top": center - amplitude,
+                "depth_bottom": center + amplitude,
+                "confidence": float(annotation.get("confidence", 0.0)),
+            }
+            candidate_rendered = self.render_candidate_window(
+                rendered,
+                candidate,
+                request.target_image_track,
+            )
+            result, review_discard = self._review_candidate_until_final(
+                request,
+                context,
+                rendered,
+                candidate_rendered,
+                annotation,
+                index=index,
+                total=total,
+            )
+            diagnostic_annotation = result or annotation
+            diagnostic_payload = dict(candidate_rendered)
+            final_points = self._clean_depth_points(
+                diagnostic_annotation.get("final_points")
+                or diagnostic_annotation.get("points")
+            )
+            if len(final_points) >= MIN_TRACE_POINTS:
+                diagnostic_payload["overlay_data_url"] = self.pipeline._build_feedback_image(
+                    candidate_rendered,
+                    final_points,
+                    request.target_image_track,
+                )
+            diagnostic_payload["annotation"] = self._diagnostic_annotation(
+                diagnostic_annotation
+            )
+            if hasattr(context, "set_candidate_payload"):
+                context.set_candidate_payload(candidate["candidate_id"], diagnostic_payload)
+            if review_discard is not None:
+                discarded.append(review_discard)
+            elif result is not None:
+                reviewed.append(result)
+        reviewed.sort(key=lambda item: float(item.get("offset", 0.0)))
+        return reviewed, discarded
+
+    def pick_candidates_directly(
+        self,
+        request,
+        rendered,
+        *,
+        classification,
+        context=None,
+        client=None,
+        model=None,
+    ):
+        if client is None or model is None:
+            _config, client, model = self._client()
+        metadata = rendered["metadata"]
+        prior_overlays = list(metadata.get("prior_candidate_overlays") or [])
+        prior_instruction = (
+            "Two images are supplied: Image 1 is the unmodified raw Plot evidence and Image 2 is the same view with "
+            "colored numbered curves for candidates already picked in earlier windows. Read fracture texture only "
+            "from Image 1. Use Image 2 and prior_candidate_overlays only to avoid returning those same physical traces, "
+            "Accepted or kept overlays represent committed prior picks and must not be returned again. Overlays marked "
+            "discarded_in_local_window are provisional local interpretations: if the raw merged view shows that two "
+            "or more such arcs belong to one physical sinusoid, return one consolidated candidate spanning the full "
+            "peak-to-trough envelope rather than repeating each fragment. "
+            if prior_overlays else ""
+        )
+        prompt = (
+            FRACTURE_MORPHOLOGY_GUIDANCE
+            +
+            "Immediately identify all fracture candidates in this already-triaged borehole-image window. Do not "
+            "request another view, do not adjust the window or image scale, and do not return an action plan. Return "
+            "candidate depth windows only; anchor selection and sinusoid fitting are performed by the next stage. "
+            "Treat compatible arcs separated by pad gaps as one candidate rather than splitting one physical fracture. "
+            "Ignore isolated textures that cannot plausibly belong to a fracture trace. Do not register ordinary "
+            "horizontal bedding, repeated background bands, pad edges, or irregular borehole artifacts as conductive "
+            "or resistive fractures. A near-horizontal candidate requires a distinct fracture expression traceable on "
+            "multiple measured pads and distinguishable from neighboring parallel bands. Respect the allowed fracture "
+            "types and use exact metadata depths rather than OCR. "
+            + prior_instruction + "Return JSON only.\n"
+            + json.dumps({
+                "depth_start": metadata["depth_start"],
+                "depth_end": metadata["depth_end"],
+                "target_image_track": request.target_image_track,
+                "allowed_fracture_types": list(request.fracture_types),
+                "minimum_candidate_confidence": request.min_confidence,
+                "window_classification": classification,
+                "prior_candidate_overlays": prior_overlays,
+            }, ensure_ascii=False)
+        )
+        response = self.pipeline._request(
+            client,
+            model,
+            self._vision_messages(
+                "You directly locate fracture candidate depth windows without navigating to other views.",
+                prompt,
+                self._analysis_images(rendered),
+            ),
+            response_schema=DIRECT_CANDIDATE_SCHEMA,
+        )
+        payload = _json_payload(response)
+        source_start = float(metadata["depth_start"])
+        source_end = float(metadata["depth_end"])
+        candidates = []
+        seen_ids = set()
+        rejected = []
+        for index, candidate in enumerate(payload.get("candidates") or []):
+            item = dict(candidate)
+            candidate_id = str(item.get("candidate_id") or f"F{index + 1}").strip()
+            fracture_type = str(item.get("fracture_type") or "")
+            confidence = max(0.0, min(1.0, float(item.get("confidence", 0.0))))
+            top = max(source_start, min(source_end, float(item["depth_top"])))
+            bottom = max(source_start, min(source_end, float(item["depth_bottom"])))
+            reason = None
+            if candidate_id in seen_ids:
+                reason = "duplicate_candidate_id"
+            elif fracture_type not in request.fracture_types:
+                reason = "unsupported_fracture_type"
+            elif confidence < request.min_confidence:
+                reason = "below_minimum_confidence"
+            elif bottom <= top:
+                reason = "empty_depth_window"
+            if reason:
+                rejected.append({"candidate_id": candidate_id, "reason": reason})
+                continue
+            seen_ids.add(candidate_id)
+            candidates.append({
+                "candidate_id": candidate_id,
+                "fracture_type": fracture_type,
+                "depth_top": top,
+                "depth_bottom": bottom,
+                "confidence": confidence,
+                "continuity_reason": str(item.get("continuity_reason") or ""),
+            })
+        candidates.sort(key=lambda item: (item["depth_top"], item["candidate_id"]))
+        if context is not None and hasattr(context, "record_event"):
+            context.record_event(
+                "exploring",
+                "direct_candidate_pick",
+                str(payload.get("reason") or ""),
+                status="accepted",
+                candidate_count=len(candidates),
+                rejected_count=len(rejected),
+            )
+        if context is not None and hasattr(context, "update_exploration"):
+            context.update_exploration(
+                action_count=1,
+                view_count=1,
+                fragment_count=0,
+                hypothesis_count=0,
+                candidate_count=len(candidates),
+                finished=True,
+            )
+        return candidates, {
+            "mode": "direct_candidate_pick",
+            "action_count": 1,
+            "views": [],
+            "trace_fragments": [],
+            "sinusoid_hypotheses": [],
+            "events": [{
+                "action": "direct_candidate_pick",
+                "reason": str(payload.get("reason") or ""),
+                "candidate_count": len(candidates),
+            }],
+            "rejected_candidates": rejected,
+            "finished": True,
+        }
+
+    def classify_window(self, request, rendered, *, client=None, model=None):
+        if client is None or model is None:
+            _config, client, model = self._client()
+        metadata = rendered["metadata"]
+        prior_overlays = list(metadata.get("prior_candidate_overlays") or [])
+        overlay_instruction = (
+            "Two images are supplied: Image 1 is the unmodified raw Plot evidence and Image 2 is the same view with "
+            "prior picks overlaid. Colored numbered curves in Image 2 are annotations, not raw image evidence. Assess "
+            "texture from Image 1 and do not classify an interval as confirmed solely because an overlay is present. "
+            "However, when discarded_in_local_window overlays mark complementary arcs and Image 1 supports one smooth "
+            "physical sinusoid, classify the merged interval as confirmed so the consolidated candidate can be tested. "
+            if prior_overlays else ""
+        )
+        prompt = (
+            FRACTURE_MORPHOLOGY_GUIDANCE
+            +
+            "Classify whether the current borehole-image window is ready to enter fracture fitting. This classification "
+            "is an entry decision, not a final geological acceptance decision. Return confirmed when at least one "
+            "visible curved or oblique trace, or a set of separated compatible arcs, is sufficiently distinct from the "
+            "local background to justify anchor picking and sinusoid fitting. confirmed does not require proving a "
+            "complete 0-360 degree fracture, seeing both extrema, resolving every pad gap, or deciding that the fitted "
+            "result will ultimately be kept. A high-amplitude fracture may cross a sliding-window boundary, so a clear "
+            "crest, trough, or substantial curved side visible in this window is confirmed-for-fitting when its texture "
+            "and curvature are meaningful. Return suspected only for weak, very short, low-contrast, or background-like "
+            "anomalies that are not yet strong enough to justify direct fitting. Return none when there is no meaningful "
+            "fracture evidence. Do not downgrade a fitting-ready trace merely because identity across missing pads, blank "
+            "azimuth sectors, or the window boundary remains unresolved; fitting, fragment association, Review, and Audit "
+            "will resolve those questions later. This is triage only: do not choose anchors, fit parameters, or register "
+            "candidates. Depth ranges must use metadata coordinates, not OCR. "
+            + overlay_instruction + "Return JSON only.\n"
+            + json.dumps({
+                "depth_start": metadata["depth_start"],
+                "depth_end": metadata["depth_end"],
+                "target_image_track": request.target_image_track,
+                "allowed_fracture_types": list(request.fracture_types),
+                "pick_entry_level": request.pick_entry_level,
+                "prior_candidate_overlays": prior_overlays,
+            })
+        )
+        response = self.pipeline._request(
+            client,
+            model,
+            self._vision_messages(
+                "You decide whether visible fracture evidence is ready for fitting, without pre-judging final acceptance.",
+                prompt,
+                self._analysis_images(rendered),
+            ),
+            response_schema=WINDOW_CLASSIFICATION_SCHEMA,
+        )
+        payload = _json_payload(response)
+        ranges = []
+        source_start = float(metadata["depth_start"])
+        source_end = float(metadata["depth_end"])
+        for item in payload.get("suspected_depth_ranges") or []:
+            top = max(source_start, min(source_end, float(item["depth_top"])))
+            bottom = max(source_start, min(source_end, float(item["depth_bottom"])))
+            if bottom > top:
+                ranges.append({"depth_top": top, "depth_bottom": bottom})
+        return {
+            "classification": str(payload["classification"]),
+            "confidence": max(0.0, min(1.0, float(payload["confidence"]))),
+            "reason": str(payload.get("reason") or ""),
+            "suspected_depth_ranges": ranges,
+        }
+
+    def _associate_provisional_candidates(
+        self,
+        request,
+        context,
+        rendered,
+        provisional,
+        *,
+        cross_window_only=False,
+    ):
+        """Merge complementary partial fits before any candidate can be discarded by review."""
+        count = len(provisional)
+        if count < 2:
+            return provisional, {
+                "input_count": count,
+                "output_count": count,
+                "groups": [],
+                "comparisons": [],
+            }
+
+        comparisons = []
+        compatibility = {}
+        for left in range(count):
+            for right in range(left + 1, count):
+                metrics = self._candidate_association_metrics(provisional[left], provisional[right])
+                if cross_window_only:
+                    left_source = provisional[left]["annotation"].get("sliding_window_index")
+                    right_source = provisional[right]["annotation"].get("sliding_window_index")
+                    different_windows = bool(
+                        left_source is not None
+                        and right_source is not None
+                        and left_source != right_source
+                    )
+                    metrics["different_primary_windows"] = different_windows
+                    metrics["compatible"] = bool(metrics["compatible"] and different_windows)
+                comparisons.append(metrics)
+                compatibility[(left, right)] = bool(metrics["compatible"])
+
+        # Complete-link grouping prevents an A-B-C compatibility chain from merging A and C
+        # when those two fits do not independently describe the same physical trace.
+        grouped = []
+        for index in range(count):
+            matching_group = next((
+                group for group in grouped
+                if all(compatibility.get(tuple(sorted((member, index))), False) for member in group)
+            ), None)
+            if matching_group is None:
+                grouped.append([index])
+            else:
+                matching_group.append(index)
+
+        output = []
+        groups = []
+        for member_indexes in grouped:
+            members = [provisional[index] for index in member_indexes]
+            if len(members) == 1:
+                output.append(members[0])
+                continue
+            merged = self._merge_provisional_candidate_group(
+                request,
+                context,
+                rendered,
+                members,
+            )
+            output.append(merged)
+            group_info = {
+                "candidate_id": merged["candidate"]["candidate_id"],
+                "source_candidate_ids": list(merged["annotation"]["associated_candidate_ids"]),
+                "parameters": dict(merged["annotation"]["ai_initial_parameters"]),
+                "point_count": len(merged["points"]),
+            }
+            groups.append(group_info)
+            if hasattr(context, "record_event"):
+                context.record_event(
+                    "associating",
+                    "candidates_merged",
+                    "Complementary azimuth fragments were merged and refitted before review",
+                    status="accepted",
+                    **group_info,
+                )
+
+        output.sort(key=lambda item: (
+            float(item["candidate"]["depth_top"]),
+            str(item["candidate"]["candidate_id"]),
+        ))
+        if hasattr(context, "update_monitor"):
+            context.update_monitor(
+                candidate_count=len(output),
+                api_status="candidates_associated",
+            )
+        return output, {
+            "input_count": count,
+            "output_count": len(output),
+            "groups": groups,
+            "comparisons": comparisons,
+        }
+
+    def _remove_unresolved_trace_fragments(self, provisional, discarded, context):
+        resolved = []
+        unresolved = []
+        for item in provisional:
+            if not bool(item.get("fragment_only")):
+                resolved.append(item)
+                continue
+            candidate_id = item["candidate"].get("candidate_id")
+            span = float(item["annotation"].get("anchor_azimuth_span_deg", 0.0))
+            reason = (
+                f"Trace fragment retained only {span:.1f} deg of azimuth evidence and did not "
+                "gain complementary support; no standalone fracture was submitted"
+            )
+            item["evaluation"].update({
+                "status": "unresolved_trace_fragment",
+                "discard_reason": reason,
+            })
+            record = {
+                "candidate_id": candidate_id,
+                "reason": reason,
+                "stage": "fragment_association",
+                "anchor_azimuth_span_deg": span,
+            }
+            discarded.append(record)
+            unresolved.append(record)
+            if hasattr(context, "record_event"):
+                context.record_event(
+                    "associating",
+                    "trace_fragment_unresolved",
+                    reason,
+                    status="skipped",
+                    candidate_id=candidate_id,
+                    anchor_azimuth_span_deg=span,
+                )
+        return resolved, unresolved
+
+    def _candidate_association_metrics(self, left, right):
+        left_annotation = left["annotation"]
+        right_annotation = right["annotation"]
+        left_parameters = fracture_parameters(left_annotation)
+        right_parameters = fracture_parameters(right_annotation)
+        left_amplitude = abs(float(left_parameters["amplitude_m"]))
+        right_amplitude = abs(float(right_parameters["amplitude_m"]))
+        maximum_amplitude = max(left_amplitude, right_amplitude, 1e-9)
+        amplitude_relative_delta = abs(left_amplitude - right_amplitude) / maximum_amplitude
+        amplitude_compatible = (
+            amplitude_relative_delta <= ASSOCIATION_MAX_AMPLITUDE_RELATIVE_DELTA
+        )
+        center_delta = abs(
+            float(left_parameters["center_depth_m"])
+            - float(right_parameters["center_depth_m"])
+        )
+        phase_delta = self._circular_phase_delta(
+            float(left_parameters["phase_deg"]),
+            float(right_parameters["phase_deg"]),
+        )
+        left_envelope = (
+            float(left_parameters["center_depth_m"]) - left_amplitude,
+            float(left_parameters["center_depth_m"]) + left_amplitude,
+        )
+        right_envelope = (
+            float(right_parameters["center_depth_m"]) - right_amplitude,
+            float(right_parameters["center_depth_m"]) + right_amplitude,
+        )
+        overlap = max(0.0, min(left_envelope[1], right_envelope[1]) - max(left_envelope[0], right_envelope[0]))
+        minimum_envelope_span = max(1e-9, min(
+            left_envelope[1] - left_envelope[0],
+            right_envelope[1] - right_envelope[0],
+        ))
+        envelope_overlap = overlap / minimum_envelope_span
+        left_bins = self._anchor_azimuth_bins(left.get("points"))
+        right_bins = self._anchor_azimuth_bins(right.get("points"))
+        union_bins = left_bins | right_bins
+        intersection_bins = left_bins & right_bins
+        anchor_jaccard = len(intersection_bins) / max(1, len(union_bins))
+        complementary_anchors = bool(
+            left_bins - right_bins
+            and right_bins - left_bins
+            and len(union_bins) >= 4
+            and anchor_jaccard <= ASSOCIATION_MAX_ANCHOR_JACCARD
+        )
+        center_tolerance = max(0.20, 0.45 * maximum_amplitude)
+        merged_fit = self._merged_anchor_fit_metrics(
+            left.get("points"),
+            right.get("points"),
+            maximum_amplitude,
+        )
+        same_type = (
+            left["candidate"].get("fracture_type")
+            == right["candidate"].get("fracture_type")
+        )
+        fragment_involved = bool(left.get("fragment_only") or right.get("fragment_only"))
+        common_compatibility = bool(
+            same_type
+            and (fragment_involved or phase_delta <= ASSOCIATION_MAX_PHASE_DELTA_DEG)
+            and complementary_anchors
+        )
+        center_compatible = center_delta <= center_tolerance
+        compatible = bool(
+            common_compatibility
+            and merged_fit["acceptable"]
+        )
+        return {
+            "left_candidate_id": left["candidate"].get("candidate_id"),
+            "right_candidate_id": right["candidate"].get("candidate_id"),
+            "same_type": same_type,
+            "center_delta_m": center_delta,
+            "center_tolerance_m": center_tolerance,
+            "center_compatible": center_compatible,
+            "amplitude_relative_delta": amplitude_relative_delta,
+            "amplitude_compatible": amplitude_compatible,
+            "phase_delta_deg": phase_delta,
+            "envelope_overlap": envelope_overlap,
+            "left_anchor_bins": sorted(left_bins),
+            "right_anchor_bins": sorted(right_bins),
+            "anchor_jaccard": anchor_jaccard,
+            "complementary_anchors": complementary_anchors,
+            "fragment_involved": fragment_involved,
+            "merged_fit": merged_fit,
+            "compatible": compatible,
+        }
+
+    def _merged_anchor_fit_metrics(self, left_points, right_points, reference_amplitude):
+        points = self._clean_depth_points(list(left_points or []) + list(right_points or []))
+        preliminary_threshold = max(
+            ASSOCIATION_MIN_MERGED_RMSE_M,
+            ASSOCIATION_MAX_MERGED_RMSE_AMPLITUDE_RATIO * max(float(reference_amplitude), 0.0),
+        )
+        if len(points) < MIN_TRACE_POINTS:
+            return {
+                "available": False,
+                "acceptable": False,
+                "point_count": len(points),
+                "rmse_m": None,
+                "threshold_m": preliminary_threshold,
+                "parameters": None,
+            }
+        try:
+            fit = fit_sinusoidal_fracture(points, min_points=MIN_TRACE_POINTS)
+            azimuth = np.deg2rad(np.asarray([point[0] for point in points], dtype=float))
+            depth = np.asarray([point[1] for point in points], dtype=float)
+            predicted = (
+                float(fit["offset"])
+                + float(fit["sin_coeff"]) * np.sin(azimuth)
+                + float(fit["cos_coeff"]) * np.cos(azimuth)
+            )
+            rmse = float(np.sqrt(np.mean(np.square(depth - predicted))))
+            parameters = fracture_parameters(fit)
+            merged_amplitude = abs(float(parameters["amplitude_m"]))
+            threshold = max(
+                preliminary_threshold,
+                ASSOCIATION_MAX_MERGED_RMSE_AMPLITUDE_RATIO * merged_amplitude,
+            )
+            threshold = min(ASSOCIATION_MAX_MERGED_RMSE_M, threshold)
+            return {
+                "available": True,
+                "acceptable": bool(math.isfinite(rmse) and rmse <= threshold),
+                "point_count": len(points),
+                "rmse_m": rmse,
+                "threshold_m": threshold,
+                "parameters": parameters,
+            }
+        except Exception as exc:
+            return {
+                "available": False,
+                "acceptable": False,
+                "point_count": len(points),
+                "rmse_m": None,
+                "threshold_m": preliminary_threshold,
+                "parameters": None,
+                "reason": str(exc),
+            }
+
+    def _merge_provisional_candidate_group(self, request, context, rendered, members):
+        members = sorted(members, key=lambda item: (
+            float(item["candidate"]["depth_top"]),
+            str(item["candidate"]["candidate_id"]),
+        ))
+        source_ids = [str(item["candidate"]["candidate_id"]) for item in members]
+        points = []
+        for item in members:
+            points.extend(self._clean_depth_points(item.get("points")))
+        points.sort(key=lambda point: (point[0], point[1]))
+        fit = fit_sinusoidal_fracture(points, min_points=MIN_TRACE_POINTS)
+        parameters = fracture_parameters(fit)
+        reference_amplitude = max(
+            abs(float(fracture_parameters(item["annotation"])["amplitude_m"]))
+            for item in members
+        )
+        merged_fit_metrics = self._merged_anchor_fit_metrics(
+            points,
+            [],
+            reference_amplitude,
+        )
+        center = float(parameters["center_depth_m"])
+        amplitude = abs(float(parameters["amplitude_m"]))
+        candidate = dict(members[0]["candidate"])
+        candidate["depth_top"] = max(
+            float(rendered["metadata"]["depth_start"]),
+            min([float(item["candidate"]["depth_top"]) for item in members] + [center - amplitude]),
+        )
+        candidate["depth_bottom"] = min(
+            float(rendered["metadata"]["depth_end"]),
+            max([float(item["candidate"]["depth_bottom"]) for item in members] + [center + amplitude]),
+        )
+        candidate["confidence"] = max(float(item["candidate"].get("confidence", 0.0)) for item in members)
+        candidate["continuity_reason"] = "Merged complementary fragments: " + ", ".join(source_ids)
+        candidate["associated_candidate_ids"] = source_ids
+        candidate_rendered = self.render_candidate_window(rendered, candidate, request.target_image_track)
+        local = self.pipeline.evidence_scorer.evaluate(
+            candidate_rendered,
+            request.target_image_track,
+            fit,
+        )
+        base = dict(members[0]["annotation"])
+        base.update(fit)
+        base.update({
+            "confidence": max(float(item["annotation"].get("confidence", 0.0)) for item in members),
+            "candidate_depth_window": [candidate["depth_top"], candidate["depth_bottom"]],
+            "candidate_continuity_reason": str(candidate.get("continuity_reason") or ""),
+            "ai_initial_parameters": dict(parameters),
+            "ai_final_parameters": dict(parameters),
+            "local_completeness": local,
+            "initial_points": [list(point) for point in points],
+            "final_points": [list(point) for point in points],
+            "points": [list(point) for point in points],
+            "associated_candidate_ids": source_ids,
+            "association_status": "merged_complementary_fragments",
+            "association_merged_fit": merged_fit_metrics,
+        })
+        merged_span = self._azimuth_coverage_span(points)
+        fragment_only = merged_span < MIN_STABLE_FIT_AZIMUTH_SPAN_DEG
+        fragment_source_ids = [
+            str(item["candidate"].get("candidate_id"))
+            for item in members
+            if bool(item.get("fragment_only"))
+        ]
+        base.update({
+            "anchor_azimuth_span_deg": merged_span,
+            "anchor_evidence_status": "fragment" if fragment_only else "stable_candidate",
+        })
+        if fragment_source_ids:
+            base.update({
+                "fragment_association_status": "unresolved" if fragment_only else "promoted",
+                "associated_fragment_candidate_ids": fragment_source_ids,
+            })
+        base = enrich_fracture_interpretation(base, borehole_diameter=request.borehole_diameter_in)
+        if hasattr(context, "set_candidate_payload"):
+            context.set_candidate_payload(candidate["candidate_id"], candidate_rendered)
+        else:
+            base["_candidate_rendered"] = candidate_rendered
+
+        primary_evaluation = members[0]["evaluation"]
+        primary_evaluation.update({
+            "status": "associated",
+            "associated_candidate_ids": source_ids,
+            "merged_points": [list(point) for point in points],
+            "merged_parameters": dict(parameters),
+            "local_completeness": local,
+            "candidate_render_metadata": candidate_rendered["metadata"],
+        })
+        for item in members[1:]:
+            item["evaluation"].update({
+                "status": "merged_into_candidate",
+                "merged_into_candidate_id": candidate["candidate_id"],
+            })
+        return {
+            "candidate": candidate,
+            "candidate_rendered": candidate_rendered,
+            "annotation": base,
+            "evaluation": primary_evaluation,
+            "anchor_response": {"merged_from": source_ids},
+            "points": points,
+            "fragment_only": fragment_only,
+        }
+
+    @staticmethod
+    def _anchor_azimuth_bins(points):
+        bins = set()
+        for point in points or []:
+            try:
+                azimuth = float(point[0]) % 360.0
+            except (IndexError, TypeError, ValueError):
+                continue
+            bins.add(min(ASSOCIATION_AZIMUTH_BINS - 1, int(
+                azimuth / 360.0 * ASSOCIATION_AZIMUTH_BINS
+            )))
+        return bins
+
+    @staticmethod
+    def _azimuth_coverage_span(points):
+        azimuths = sorted({float(point[0]) % 360.0 for point in points or []})
+        if len(azimuths) < 2:
+            return 0.0
+        circular_gaps = [
+            azimuths[index + 1] - azimuths[index]
+            for index in range(len(azimuths) - 1)
+        ]
+        circular_gaps.append(azimuths[0] + 360.0 - azimuths[-1])
+        return 360.0 - max(circular_gaps)
+
+    @staticmethod
+    def _circular_phase_delta(left, right):
+        return abs((left - right + 180.0) % 360.0 - 180.0)
 
     def _review_candidate_until_final(
         self,
@@ -436,6 +1488,45 @@ class CompleteFractureWorkflow:
                 current["corrected_local_completeness"] = result["corrected_local_completeness"]
 
             if action == "discard":
+                local = current.get("corrected_local_completeness") or current.get("local_completeness") or {}
+                merged_fit = current.get("association_merged_fit") or {}
+                preserve_after_conflict = bool(
+                    current.get("association_status") == "merged_complementary_fragments"
+                    and merged_fit.get("acceptable") is True
+                    and local.get("available") is True
+                    and local.get("complete") is True
+                )
+                corroboration = current.get("cross_window_corroboration") or {}
+                preserve_after_conflict = bool(
+                    preserve_after_conflict
+                    or (
+                        int(corroboration.get("support_count", 0)) >= 2
+                        and corroboration.get("fit_acceptable") is True
+                    )
+                )
+                if preserve_after_conflict:
+                    current["needs_review"] = True
+                    current["ai_alignment_status"] = "kept_after_review_conflict"
+                    current["ai_correction_rounds"] = round_number - 1
+                    current["ai_review_conflict_reason"] = (
+                        result.get("reason") or "discarded_by_visual_review"
+                    )
+                    current["final_points"] = [list(point) for point in current.get("points", [])]
+                    if hasattr(context, "record_event"):
+                        context.record_event(
+                            "reviewing",
+                            "review_discard_overridden",
+                            current["ai_review_conflict_reason"],
+                            status="needs_review",
+                            candidate_id=current.get("candidate_id"),
+                            correction_round=round_number,
+                        )
+                    if hasattr(context, "update_monitor"):
+                        context.update_monitor(
+                            parameters=current.get("ai_final_parameters"),
+                            api_status="candidate_kept_after_review_conflict",
+                        )
+                    return current, None
                 return None, {
                     "candidate_id": current.get("candidate_id"),
                     "reason": result.get("reason") or "discarded_by_visual_review",
@@ -482,7 +1573,15 @@ class CompleteFractureWorkflow:
             "annotation": self._diagnostic_annotation(current),
         }
 
-    def _audit_staged_candidates(self, request, context, rendered, staged):
+    def _audit_staged_candidates(
+        self,
+        request,
+        context,
+        rendered,
+        staged,
+        *,
+        force_visual=False,
+    ):
         if not staged:
             return {
                 "kept": [],
@@ -491,6 +1590,46 @@ class CompleteFractureWorkflow:
                 "audit_views": [],
                 "audit_events": [],
                 "audit_action_count": 0,
+            }
+        if len(staged) == 1 and not force_visual:
+            candidate = dict(staged[0])
+            candidate["batch_audit_status"] = "skipped_single_candidate"
+            final_overlay = self._build_batch_feedback_image(
+                rendered,
+                [candidate],
+                request.target_image_track,
+            )
+            if hasattr(context, "set_monitor_media"):
+                context.set_monitor_media(
+                    "final_overlay",
+                    {"data_url": final_overlay, "metadata": rendered.get("metadata") or {}},
+                    api_status="audit_skipped_single_candidate",
+                )
+            if hasattr(context, "record_event"):
+                context.record_event(
+                    "auditing",
+                    "audit_skipped_single_candidate",
+                    "Single candidate already passed parameter review; batch comparison is unnecessary",
+                    status="accepted",
+                    kept_count=1,
+                    discarded_count=0,
+                )
+            return {
+                "kept": [candidate],
+                "discarded": [],
+                "audit_status": "skipped_single_candidate",
+                "audit_views": [],
+                "audit_events": [{
+                    "action": "skip_single_candidate_audit",
+                    "outcome": "accepted",
+                    "reason": "Candidate already passed parameter review",
+                }],
+                "audit_action_count": 0,
+                "audit_decisions": [{
+                    "candidate_id": candidate.get("candidate_id"),
+                    "action": "keep",
+                    "reason": "Single reviewed candidate retained without redundant batch audit",
+                }],
             }
         def update_audit_status(details):
             context.update(
@@ -837,11 +1976,14 @@ class CompleteFractureWorkflow:
     def _request_exploration_action(self, request, current_rendered, current_view, state, client, model):
         metadata = current_rendered["metadata"]
         prompt = (
+            FRACTURE_MORPHOLOGY_GUIDANCE
+            +
             "You control an autonomous inspection loop for complete borehole-image fractures. Choose exactly one next "
             "action. You are not restricted to a fixed number of depth segments. Use inspect_view whenever another "
-            "depth interval, wider or narrower crop, or partial azimuth view is needed. Requested views are cropped "
-            "from the immutable analysis image at its original pixel scale; detail_level does not magnify or add image "
-            "resolution, so never repeat identical depth and azimuth bounds with another detail_level. Partial-azimuth views are "
+            "depth interval, wider or narrower crop, or partial azimuth view is needed. Set scale=1 for a source crop. "
+            "Set scale between 0.5 and 4.0 to request a Plot-data rerender with that vertical scale multiplier; this changes "
+            "pixels per depth unit and is not bitmap enlargement. detail_level is only a semantic label. Do not repeat "
+            "identical depth, azimuth, and scale bounds with another detail_level. Partial-azimuth views are "
             "diagnostic only. Use register_trace_fragment to preserve a visible local arc as structured evidence when "
             "it is not yet sufficient to register a complete fracture. Record its observed depth and azimuth bounds, "
             "local slope direction, type, and continuity evidence. Do not register the same physical fragment twice. "
@@ -892,7 +2034,7 @@ class CompleteFractureWorkflow:
             self._vision_messages(
                 "You autonomously navigate Plot views to find complete borehole-image fractures.",
                 prompt,
-                current_rendered["data_url"],
+                self._analysis_images(current_rendered),
             ),
             response_schema=FRACTURE_EXPLORATION_ACTION_SCHEMA,
         )
@@ -934,11 +2076,31 @@ class CompleteFractureWorkflow:
     def render_candidate_window(self, rendered, candidate, target_image_track):
         self._validate_rendered(rendered)
         metadata = rendered["metadata"]
-        image = self._decode_image(rendered["data_url"])
         source_start = float(metadata["depth_start"])
         source_end = float(metadata["depth_end"])
         span = float(candidate["depth_bottom"]) - float(candidate["depth_top"])
-        padding = max(span * 0.20, 0.15)
+        padding = max(span * CANDIDATE_CROP_PADDING_RATIO, CANDIDATE_CROP_MIN_PADDING_M)
+        requested_start = float(candidate["depth_top"]) - padding
+        requested_end = float(candidate["depth_bottom"]) + padding
+        source_rendered = rendered
+        if (
+            callable(self.pipeline.agent_view_provider)
+            and (requested_start < source_start or requested_end > source_end)
+        ):
+            source_rendered = self.pipeline.agent_view_provider(FractureAgentViewRequest(
+                depth_start=requested_start,
+                depth_end=requested_end,
+                azimuth_start_deg=0.0,
+                azimuth_end_deg=360.0,
+                detail_level="detail",
+                include_depth_track=True,
+                scale=1.0,
+            ))
+            self._validate_rendered(source_rendered)
+            metadata = source_rendered["metadata"]
+            source_start = float(metadata["depth_start"])
+            source_end = float(metadata["depth_end"])
+        image = self._decode_image(source_rendered["data_url"])
         crop_start = max(source_start, float(candidate["depth_top"]) - padding)
         crop_end = min(source_end, float(candidate["depth_bottom"]) + padding)
         top = float(metadata.get("plot_top", 0.0))
@@ -982,7 +2144,10 @@ class CompleteFractureWorkflow:
             "target_image_track": target_image_track,
             "candidate_id": candidate["candidate_id"],
             "candidate_depth_window": [candidate["depth_top"], candidate["depth_bottom"]],
+            "candidate_continuity_reason": str(candidate.get("continuity_reason") or ""),
             "source_render_size": [metadata.get("width"), metadata.get("height")],
+            "candidate_requested_depth_range": [requested_start, requested_end],
+            "candidate_used_external_source": source_rendered is not rendered,
             "uniform_scale": 1.0,
         }
         return {"data_url": self._encode_image(canvas), "metadata": candidate_metadata}
@@ -992,12 +2157,16 @@ class CompleteFractureWorkflow:
             _config, client, model = self._client()
         metadata = candidate_rendered["metadata"]
         prompt = (
+            FRACTURE_MORPHOLOGY_GUIDANCE
+            +
             "Trace exactly one physical fracture in this focused borehole-image window. Return 3 to 8 anchor points "
             "on clearly visible parts of the same trace. Prefer a crest, trough, and visible mid-slope sections; include "
             "left or right seam points only when those sectors are actually readable. Do not place invented anchors in "
             "blank, missing-pad, or low-clarity sectors. Separated visible arcs may belong to one fracture when position, "
             "slope, curvature, and the tested fixed-period sinusoid connect them. Do not stitch unrelated textures. x_norm is relative to the target "
-            "image track; y_norm is relative to the focused crop depth range. Return JSON only.\n"
+            "image track; y_norm is relative to the focused crop depth range. When core_depth_top and core_depth_bottom "
+            "are present, the larger view is context added after a boundary check: continue tracing the same fracture "
+            "that intersects that original core range and do not switch to a neighboring anomaly. Return JSON only.\n"
             + json.dumps({
                 "candidate": candidate,
                 "target_image_track": request.target_image_track,
@@ -1071,27 +2240,41 @@ class CompleteFractureWorkflow:
                 })
             current_metadata = current_rendered["metadata"]
             current_target = self._target_track(current_metadata, request.target_image_track)
+            view_instruction = (
+                "Do not request another view or adjust the window or image scale; decide directly from the current "
+                "candidate image and overlay. Set view=null. "
+                if request.fast_mode else
+                "You may use inspect_view to request another depth interval, a narrower or wider crop, or a "
+                "partial-azimuth diagnostic view before deciding. Set scale=1 for a source crop, or scale=0.5..4.0 "
+                "for a Plot-data vertical rerender. detail_level is only semantic. "
+            )
             prompt = (
+                FRACTURE_MORPHOLOGY_GUIDANCE
+                +
                 "Review one fitted complete fracture. The magenta curve is the current fixed-period sine fit and yellow "
-                "circles are its anchors. You may use inspect_view to request another depth interval, a narrower or "
-                "wider crop, or a partial-azimuth diagnostic view before deciding. Views retain the source pixel scale; "
-                "detail_level does not magnify or add resolution. Do not request identical depth and azimuth bounds "
-                "again with another detail_level. A partial-azimuth view may support a final decision when other "
-                "azimuth sectors are blank, obscured, or not measured. Prefer "
+                "circles are its anchors. " + view_instruction + "Prefer "
                 "adjust_parameters and return absolute center depth, amplitude, and phase using "
                 "D(theta)=c+A*sin(theta+phase). Use replace_points only when the fit follows the wrong texture. Use "
-                "discard only for an isolated local segment with no compatible continuation, or for stitched unrelated "
-                "textures. Do not discard merely because some azimuth sectors are unclear or absent. Use keep when "
-                "the visible arcs are compatible with one fixed-period fracture. The local "
+                "discard for an isolated local segment with no compatible continuation, stitched unrelated textures, "
+                "or a fit that merely follows dominant background layering, pad-edge artifacts, or irregular borehole "
+                "texture. Do not discard merely because some azimuth sectors are unclear or absent. Keep requires "
+                "positive fracture evidence: a trace distinguishable from adjacent texture and compatible position, "
+                "slope, and curvature on multiple measured pads. Absence of a contradiction is not sufficient evidence "
+                "to keep. Scrutinize very low-amplitude, near-horizontal fits against neighboring parallel bands. Such a "
+                "fit may be kept only when it has a distinct conductive or resistive fracture expression rather than "
+                "ordinary bedding or background banding. cross_window_corroboration means an independently rendered "
+                "overlapping window produced a geometrically matching fit. Treat acceptable corroboration as positive "
+                "repeat evidence, while still checking that both fits did not merely follow the same background band. The local "
                 "completeness score is advisory diagnostic evidence: a failed or unavailable local score must not by "
-                "itself force correction or discard. For inspect_view provide view and leave "
-                "parameter fields null; for all final actions set view=null. Return JSON only.\n"
+                "itself force correction or discard, but a failed score combined with weak visual evidence supports "
+                "discard. For final actions set view=null. Return JSON only.\n"
                 + json.dumps({
                     "candidate_id": annotation.get("candidate_id"),
                     "fracture_type": annotation.get("fracture_type"),
                     "correction_round": int(round_number),
                     "current_parameters": parameters,
                     "local_completeness": local,
+                    "cross_window_corroboration": annotation.get("cross_window_corroboration"),
                     "current_view": {
                         "depth_start": current_metadata["depth_start"],
                         "depth_end": current_metadata["depth_end"],
@@ -1112,7 +2295,9 @@ class CompleteFractureWorkflow:
                 client,
                 model,
                 self._vision_messages("You autonomously refine one complete borehole-image fracture fit.", prompt, feedback),
-                response_schema=PARAMETER_REVIEW_SCHEMA,
+                response_schema=(
+                    FAST_PARAMETER_REVIEW_SCHEMA if request.fast_mode else PARAMETER_REVIEW_SCHEMA
+                ),
             )
             payload = _json_payload(response)
             if callable(cancel_requested) and cancel_requested():
@@ -1251,21 +2436,42 @@ class CompleteFractureWorkflow:
                 })
             current_metadata = current_rendered["metadata"]
             current_target = self._target_track(current_metadata, request.target_image_track)
+            audit_view_instruction = (
+                "Do not request another view or adjust the window or image scale. Finalize the audit directly and set "
+                "view=null. "
+                if request.fast_mode else
+                "Use inspect_view when another depth range, crop, or partial-azimuth detail is needed. "
+            )
             prompt = (
-                "Autonomously audit the final staged complete-fracture batch. Choose one action. Use inspect_view when "
-                "another depth range, a narrower or wider crop, or partial-azimuth detail is needed. Views retain the "
-                "source pixel scale; detail_level does not magnify or add resolution. Do not request identical depth "
-                "and azimuth bounds again with another detail_level. Final decisions may only keep or discard existing "
+                FRACTURE_MORPHOLOGY_GUIDANCE
+                +
+                "Autonomously audit the final staged complete-fracture batch. Image 1 is the authoritative raw Plot "
+                "evidence and Image 2 contains the numbered fitted curves. Choose one action. This batch audit is a "
+                "comparative consistency check, not a fresh replacement for candidate-level geological review. Focus "
+                "on duplicates, unresolved local fragments, and curves demonstrably stitched across unrelated textures. "
+                + audit_view_instruction + "Final decisions may only keep or discard existing "
                 "candidates. Missing or unclear azimuth sectors caused by pad coverage, blank strips, or poor imaging are "
                 "not a discard reason. Treat compatible visible arcs as one fracture when position, slope, curvature, and "
                 "a tested fixed-period sinusoid connect them. Discard duplicates, isolated fragments without a compatible "
-                "continuation, and curves demonstrably stitched across unrelated visible textures. Never merge candidates, create a new "
+                "continuation, curves demonstrably stitched across unrelated visible textures, and candidates that "
+                "merely follow a repeated bedding family, pad edges, or irregular borehole artifacts without a "
+                "distinct fracture trace. Never merge candidates, create a new "
                 "curve, or alter parameters during batch audit. Local completeness scores and needs_review flags are "
                 "advisory; never discard a visually complete candidate solely because its local score failed or was "
-                "unavailable. Do not split one tested sinusoid into multiple picks. A candidate already supported by an "
-                "individual aligned review plus either local evidence or a tested fragment hypothesis should normally be "
-                "kept; report uncertainty in the reason instead of discarding it. finalize_audit must return exactly one decision for "
-                "every candidate id. For inspect_view set decisions=[]; for finalize_audit set view=null. Return JSON only.\n"
+                "unavailable. However, do not keep a candidate merely because the score is advisory or because no direct "
+                "contradiction is visible. Each kept candidate must have positive support on multiple measured pads and "
+                "must be distinguishable from neighboring parallel bands. Give extra scrutiny to low-amplitude, "
+                "near-horizontal candidates: discard them when they are better explained as bedding or background "
+                "banding, even if the sine fit is numerically aligned. cross_window_corroboration records a matching "
+                "fit from an independently rendered overlapping window; acceptable corroboration is positive repeat "
+                "evidence but does not excuse following background banding. Candidate continuity and review reasons are "
+                "prior evidence, not final truth, but a discard that contradicts them must identify concrete contrary "
+                "texture in the raw image. When discarding as bedding, explain which repeated parallel family the curve "
+                "follows and why previously reported cross-cutting evidence is incorrect. Do not call a visibly "
+                "high-amplitude curve near-horizontal merely because the full Plot is vertically compressed. Do not split "
+                "one tested sinusoid into multiple "
+                "picks. finalize_audit must return exactly one decision for "
+                "every candidate id. For finalize_audit set view=null. Return JSON only.\n"
                 + json.dumps({
                     "candidates": [
                         {
@@ -1274,7 +2480,14 @@ class CompleteFractureWorkflow:
                             "overlay_color": item.get("_audit_color"),
                             "parameters": fracture_parameters(item),
                             "local_completeness": item.get("local_completeness"),
+                            "cross_window_corroboration": item.get("cross_window_corroboration"),
                             "needs_review": bool(item.get("needs_review", False)),
+                            "candidate_continuity_reason": item.get("candidate_continuity_reason"),
+                            "candidate_review_reason": item.get("ai_review_reason"),
+                            "candidate_review_confidence": item.get("ai_review_confidence"),
+                            "candidate_alignment_status": item.get("ai_alignment_status"),
+                            "candidate_depth_window": item.get("candidate_depth_window"),
+                            "anchor_azimuth_span_deg": item.get("anchor_azimuth_span_deg"),
                         }
                         for item in nms_kept
                     ],
@@ -1297,8 +2510,21 @@ class CompleteFractureWorkflow:
             response = self.pipeline._request(
                 client,
                 model,
-                self._vision_messages("You autonomously audit a staged batch of complete fracture picks.", prompt, feedback),
-                response_schema=BATCH_AUDIT_SCHEMA,
+                self._vision_messages(
+                    "You autonomously audit a staged batch of complete fracture picks.",
+                    prompt,
+                    [
+                        (
+                            "Image 1 - raw Plot evidence without candidate curves. Use this image to judge geology.",
+                            current_rendered["data_url"],
+                        ),
+                        (
+                            "Image 2 - the same view with numbered candidate curves. Use it to locate each fit.",
+                            feedback,
+                        ),
+                    ],
+                ),
+                response_schema=(FAST_BATCH_AUDIT_SCHEMA if request.fast_mode else BATCH_AUDIT_SCHEMA),
             )
             payload = _json_payload(response)
             if callable(cancel_requested) and cancel_requested():
@@ -1391,7 +2617,13 @@ class CompleteFractureWorkflow:
                     clean["batch_audit_views"] = list(audit_views)
                     clean["batch_audit_action_count"] = action_count
                     kept.append(clean)
-                elif self._has_strong_pre_audit_support(candidate):
+                elif (
+                    self._has_strong_pre_audit_support(candidate)
+                    or self._audit_discard_conflicts_with_pre_audit_evidence(
+                        candidate,
+                        decision.get("reason"),
+                    )
+                ):
                     clean = dict(candidate)
                     clean["needs_review"] = True
                     clean["batch_audit_status"] = "kept_after_audit_conflict"
@@ -1452,7 +2684,48 @@ class CompleteFractureWorkflow:
         aligned = str(candidate.get("ai_alignment_status") or "") == "aligned"
         local_supported = bool(local.get("available", False) and local.get("complete", False))
         hypothesis_supported = bool(candidate.get("agent_hypothesis_verified", False))
-        return aligned and (local_supported or hypothesis_supported)
+        corroboration = candidate.get("cross_window_corroboration") or {}
+        corroborated = bool(
+            int(corroboration.get("support_count", 0)) >= 2
+            and corroboration.get("fit_acceptable") is True
+        )
+        return (aligned and (local_supported or hypothesis_supported)) or corroborated
+
+    @staticmethod
+    def _audit_discard_conflicts_with_pre_audit_evidence(candidate, audit_reason):
+        """Preserve a geometrically substantial reviewed pick when a bedding discard is contradictory."""
+        alignment = str(candidate.get("ai_alignment_status") or "")
+        if alignment not in {"aligned", "kept_after_review_conflict"}:
+            return False
+
+        reason = str(audit_reason or "").lower()
+        if not any(term in reason for term in ("bedding", "banding", "near-horizontal", "near horizontal")):
+            return False
+
+        parameters = fracture_parameters(candidate)
+        amplitude = abs(float(parameters.get("amplitude_m", 0.0)))
+        depth_window = candidate.get("candidate_depth_window") or []
+        try:
+            window_span = abs(float(depth_window[1]) - float(depth_window[0]))
+        except (IndexError, TypeError, ValueError):
+            window_span = 0.0
+        relative_envelope = (2.0 * amplitude / window_span) if window_span > 1e-9 else 0.0
+        if relative_envelope < AUDIT_CONFLICT_MIN_RELATIVE_ENVELOPE:
+            return False
+
+        points = CompleteFractureWorkflow._clean_depth_points(
+            candidate.get("final_points") or candidate.get("points") or candidate.get("initial_points")
+        )
+        if CompleteFractureWorkflow._azimuth_coverage_span(points) < AUDIT_CONFLICT_MIN_ANCHOR_SPAN_DEG:
+            return False
+
+        prior_evidence = " ".join((
+            str(candidate.get("candidate_continuity_reason") or ""),
+            str(candidate.get("ai_review_reason") or ""),
+        )).lower()
+        return any(term in prior_evidence for term in (
+            "cut across", "cuts across", "cross-cut", "crosses", "departs from", "distinct from", "separate from",
+        ))
 
     def _normalize_review(self, payload, annotation, candidate_rendered, request, local):
         action = str(payload.get("action") or "discard")
@@ -1518,16 +2791,31 @@ class CompleteFractureWorkflow:
 
         def rank(item):
             local = item.get("local_completeness") or {}
-            return float(item.get("confidence", 0.0)) + 0.1 * float(local.get("score", 0.0))
+            anchor_span = self._azimuth_coverage_span(
+                item.get("final_points") or item.get("points") or item.get("initial_points")
+            )
+            return (
+                2.0 * float(local.get("complete") is True)
+                + anchor_span / 360.0
+                + float(item.get("confidence", 0.0))
+                + 0.1 * float(local.get("score", 0.0))
+            )
 
         selected, discarded = [], []
         for candidate in sorted((dict(item) for item in candidates), key=rank, reverse=True):
             x, y = sinusoidal_fracture_xy(candidate, samples=181)
             duplicate = None
+            duplicate_metrics = None
             for kept in selected:
                 _kx, ky = sinusoidal_fracture_xy(kept, samples=181)
-                if float(np.mean(np.abs(y - ky))) * px_per_depth < threshold_px:
+                mean_distance_px = float(np.mean(np.abs(y - ky))) * px_per_depth
+                metrics = self._cross_window_duplicate_metrics(candidate, kept)
+                if mean_distance_px < threshold_px or metrics["compatible"]:
                     duplicate = kept
+                    duplicate_metrics = {
+                        "mean_curve_distance_px": mean_distance_px,
+                        **metrics,
+                    }
                     break
             if duplicate is None:
                 selected.append(candidate)
@@ -1536,10 +2824,95 @@ class CompleteFractureWorkflow:
                     "candidate_id": candidate.get("candidate_id"),
                     "reason": f"nms_duplicate_of_{duplicate.get('candidate_id')}",
                     "stage": "nms",
+                    "duplicate_metrics": duplicate_metrics,
                     "annotation": self._diagnostic_annotation(candidate),
                 })
         selected.sort(key=lambda item: float(item.get("offset", 0.0)))
         return selected, discarded
+
+    def _cross_window_duplicate_metrics(self, candidate, kept):
+        candidate_parameters = fracture_parameters(candidate)
+        kept_parameters = fracture_parameters(kept)
+        candidate_amplitude = abs(float(candidate_parameters["amplitude_m"]))
+        kept_amplitude = abs(float(kept_parameters["amplitude_m"]))
+        maximum_amplitude = max(candidate_amplitude, kept_amplitude, 1e-9)
+        minimum_amplitude = min(candidate_amplitude, kept_amplitude)
+        center_delta = abs(
+            float(candidate_parameters["center_depth_m"])
+            - float(kept_parameters["center_depth_m"])
+        )
+        phase_delta = self._circular_phase_delta(
+            float(candidate_parameters["phase_deg"]),
+            float(kept_parameters["phase_deg"]),
+        )
+        amplitude_relative_delta = abs(candidate_amplitude - kept_amplitude) / maximum_amplitude
+        candidate_envelope = (
+            float(candidate_parameters["center_depth_m"]) - candidate_amplitude,
+            float(candidate_parameters["center_depth_m"]) + candidate_amplitude,
+        )
+        kept_envelope = (
+            float(kept_parameters["center_depth_m"]) - kept_amplitude,
+            float(kept_parameters["center_depth_m"]) + kept_amplitude,
+        )
+        overlap = max(
+            0.0,
+            min(candidate_envelope[1], kept_envelope[1])
+            - max(candidate_envelope[0], kept_envelope[0]),
+        )
+        envelope_overlap = overlap / max(2.0 * minimum_amplitude, 1e-9)
+
+        candidate_points = self._clean_depth_points(
+            candidate.get("final_points") or candidate.get("points") or candidate.get("initial_points")
+        )
+        kept_points = self._clean_depth_points(
+            kept.get("final_points") or kept.get("points") or kept.get("initial_points")
+        )
+        candidate_span = self._azimuth_coverage_span(candidate_points)
+        kept_span = self._azimuth_coverage_span(kept_points)
+        subset_points, reference = (
+            (candidate_points, kept)
+            if candidate_span <= kept_span
+            else (kept_points, candidate)
+        )
+        anchor_tolerance_m = max(0.08, 0.20 * maximum_amplitude)
+        aligned_count = 0
+        for azimuth_deg, depth in subset_points:
+            azimuth = math.radians(float(azimuth_deg))
+            predicted = (
+                float(reference["offset"])
+                + float(reference.get("sin_coeff", 0.0)) * math.sin(azimuth)
+                + float(reference.get("cos_coeff", 0.0)) * math.cos(azimuth)
+            )
+            if abs(float(depth) - predicted) <= anchor_tolerance_m:
+                aligned_count += 1
+        anchor_alignment = aligned_count / max(1, len(subset_points))
+        different_passes = (
+            candidate.get("detection_pass_kind") != kept.get("detection_pass_kind")
+            or candidate.get("sliding_window_index") != kept.get("sliding_window_index")
+            or candidate.get("merged_observation_group") != kept.get("merged_observation_group")
+        )
+        compatible = bool(
+            different_passes
+            and candidate.get("fracture_type") == kept.get("fracture_type")
+            and center_delta <= max(0.12, 0.45 * maximum_amplitude)
+            and phase_delta <= 20.0
+            and amplitude_relative_delta <= 0.50
+            and envelope_overlap >= 0.70
+            and len(subset_points) >= MIN_TRACE_POINTS
+            and anchor_alignment >= 0.70
+        )
+        return {
+            "compatible": compatible,
+            "different_passes": different_passes,
+            "center_delta_m": center_delta,
+            "phase_delta_deg": phase_delta,
+            "amplitude_relative_delta": amplitude_relative_delta,
+            "envelope_overlap": envelope_overlap,
+            "candidate_anchor_span_deg": candidate_span,
+            "kept_anchor_span_deg": kept_span,
+            "subset_anchor_alignment": anchor_alignment,
+            "anchor_tolerance_m": anchor_tolerance_m,
+        }
 
     def _build_batch_feedback_image(self, rendered, candidates, target_image_track):
         image = self._decode_image(rendered["data_url"])
@@ -1645,13 +3018,33 @@ class CompleteFractureWorkflow:
         return config, self.pipeline._create_client(config), model
 
     @staticmethod
+    def _analysis_images(rendered):
+        overlay_data_url = rendered.get("overlay_data_url")
+        if not overlay_data_url:
+            return rendered["data_url"]
+        images = [(
+            "Image 1 - raw Plot evidence. Use this image as the authoritative source for borehole texture.",
+            rendered["data_url"],
+        )]
+        images.append((
+            "Image 2 - the same Plot view with previously picked fracture curves overlaid. Use it only to "
+            "compare continuity, omissions, and duplicates. Colored curves and points are annotations, not "
+            "raw fracture evidence.",
+            overlay_data_url,
+        ))
+        return images
+
+    @staticmethod
     def _vision_messages(system, prompt, image_url):
+        images = image_url if isinstance(image_url, (list, tuple)) else [(None, image_url)]
+        content = [{"type": "text", "text": prompt}]
+        for label, url in images:
+            if label:
+                content.append({"type": "text", "text": str(label)})
+            content.append({"type": "image_url", "image_url": {"url": url, "detail": "high"}})
         return [
             {"role": "system", "content": system},
-            {"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}},
-            ]},
+            {"role": "user", "content": content},
         ]
 
     @staticmethod

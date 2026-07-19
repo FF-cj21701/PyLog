@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialogButtonBox
 
 from plugins.ai_assistant.ai_core.config import AIConfig
 from plugins.ai_assistant.services.fracture_detection_service import (
@@ -64,6 +64,9 @@ def test_detection_request_normalizes_types_and_validates_range():
     assert request.tracks == ("Track 1", "Track 2")
     assert request.target_image_track == "Track 1"
     assert request.min_confidence == pytest.approx(0.60)
+    assert request.sliding_window_m == pytest.approx(2.0)
+    assert request.pick_entry_level is None
+    assert request.fast_mode is False
     with pytest.raises(ValueError, match="depth_start"):
         FractureDetectionRequest.build("Plot", "Track", 2, 1, ["Conductive"])
     with pytest.raises(ValueError, match="unsupported"):
@@ -77,6 +80,53 @@ def test_detection_request_normalizes_types_and_validates_range():
             depth_end=2,
             fracture_types=["Conductive"],
         )
+    with pytest.raises(ValueError, match="sliding_window_m"):
+        FractureDetectionRequest.build("Plot", "Track", 1, 2, ["Conductive"], sliding_window_m=0)
+    with pytest.raises(ValueError, match="pick_entry_level"):
+        FractureDetectionRequest.build("Plot", "Track", 1, 2, ["Conductive"], pick_entry_level="maybe")
+
+
+def test_ai_pick_setup_dialog_defaults_to_visible_range_and_three_metre_window():
+    QApplication.instance() or QApplication([])
+    from scripts.ui.dialogs.ai_pick_setup_dialog import AIPickSetupDialog
+
+    dialog = AIPickSetupDialog(1002.25, 1008.75, 1000.0, 1015.0)
+    values = dialog.values()
+
+    assert values["depth_start"] == pytest.approx(1002.25)
+    assert values["depth_end"] == pytest.approx(1008.75)
+    assert values["sliding_window_m"] == pytest.approx(3.0)
+    assert values["pick_entry_level"] == "confirmed"
+    assert values["fast_mode"] is True
+    assert dialog.minimumWidth() == 390
+    assert dialog.maximumWidth() == 390
+    assert dialog.maximumHeight() > dialog.minimumHeight()
+    dialog.entry_level_combo.setCurrentIndex(1)
+    assert dialog.values()["pick_entry_level"] == "suspected"
+    dialog.fast_mode_check.setChecked(False)
+    assert dialog.values()["fast_mode"] is False
+
+
+def test_ai_pick_setup_depth_can_be_replaced_by_typing():
+    QApplication.instance() or QApplication([])
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from scripts.ui.dialogs.ai_pick_setup_dialog import AIPickSetupDialog
+
+    dialog = AIPickSetupDialog(8077.129, 8081.267, 8070.0, 8090.0)
+    dialog.depth_end_spin.lineEdit().selectAll()
+    QTest.keyClicks(dialog.depth_end_spin.lineEdit(), "8082.5")
+    QTest.keyClick(dialog.depth_end_spin.lineEdit(), Qt.Key_Return)
+
+    assert dialog.depth_end_spin.value() == pytest.approx(8082.5)
+
+    dialog.depth_end_spin.lineEdit().selectAll()
+    QTest.keyClicks(dialog.depth_end_spin.lineEdit(), "8095")
+    QTest.keyClick(dialog.depth_end_spin.lineEdit(), Qt.Key_Return)
+
+    assert dialog.depth_end_spin.value() == pytest.approx(8095.0)
+    assert not dialog.buttons.button(QDialogButtonBox.Ok).isEnabled()
+    assert "between 8070.000 m and 8090.000 m" in dialog.validation_label.text()
 
 
 def test_detection_request_keeps_legacy_single_track_compatibility():
@@ -190,12 +240,18 @@ def test_manager_exports_exact_analysis_input_and_coordinate_diagnostics(tmp_pat
         context.set_diagnostics({"raw_candidates": [{"points": [{"x_norm": 0.5, "y_norm": 0.25}]}]})
         context.set_view_payload("view-001", {
             "data_url": "data:image/png;base64,iVBORw0KGgo=",
+            "overlay_data_url": "data:image/png;base64,iVBORw0KGgo=",
             "metadata": {"depth_start": 1000.0, "depth_end": 1001.0},
         })
         context.update_exploration(action_count=2, view_count=2, candidate_count=1)
         context.set_candidate_payload("F1", {
             "data_url": "data:image/png;base64,iVBORw0KGgo=",
+            "overlay_data_url": "data:image/png;base64,iVBORw0KGgo=",
             "metadata": {"depth_start": 1000.25, "depth_end": 1001.25},
+        })
+        context.set_monitor_media("final_overlay", {
+            "data_url": "data:image/png;base64,iVBORw0KGgo=",
+            "metadata": {"depth_start": 1000.0, "depth_end": 1002.0},
         })
         return [{"id": 1}]
 
@@ -216,11 +272,21 @@ def test_manager_exports_exact_analysis_input_and_coordinate_diagnostics(tmp_pat
     assert report["diagnostics"]["raw_candidates"][0]["points"][0]["y_norm"] == pytest.approx(0.25)
     assert report["render_metadata"]["depth_end"] == 1002
     assert len(bundle["candidate_image_paths"]) == 1
+    assert len(bundle["candidate_overlay_image_paths"]) == 1
     assert len(bundle["view_image_paths"]) == 1
+    assert len(bundle["view_overlay_image_paths"]) == 1
+    assert len(bundle["monitor_image_paths"]) >= 1
     assert Path(bundle["candidate_image_paths"][0]).read_bytes() == b"\x89PNG\r\n\x1a\n"
+    assert Path(bundle["candidate_overlay_image_paths"][0]).read_bytes() == b"\x89PNG\r\n\x1a\n"
     assert Path(bundle["view_image_paths"][0]).read_bytes() == b"\x89PNG\r\n\x1a\n"
+    assert Path(bundle["view_overlay_image_paths"][0]).read_bytes() == b"\x89PNG\r\n\x1a\n"
     assert report["candidate_inputs"][0]["metadata"]["depth_start"] == pytest.approx(1000.25)
+    assert Path(report["candidate_inputs"][0]["overlay_image_path"]).exists()
     assert report["exploration_views"][0]["metadata"]["depth_end"] == pytest.approx(1001.0)
+    assert Path(report["exploration_views"][0]["overlay_image_path"]).exists()
+    final_overlay = next(item for item in report["monitor_media"] if item["slot"] == "final_overlay")
+    assert Path(final_overlay["image_path"]).exists()
+    assert final_overlay["metadata"]["depth_end"] == pytest.approx(1002.0)
     assert report["exploration_action_count"] == 2
 
 
@@ -399,6 +465,8 @@ def test_fracture_panel_ai_pick_uses_all_types_and_visible_depth(monkeypatch):
     assert captured["request"].fracture_types == ("Conductive", "Resistive")
     assert captured["request"].depth_start == pytest.approx(1001.25)
     assert captured["request"].depth_end == pytest.approx(1004.75)
+    assert captured["request"].pick_entry_level == "confirmed"
+    assert captured["request"].fast_mode is True
     assert captured["request"].borehole_diameter_in == pytest.approx(8.5)
     assert render_calls[0][1]["respect_current_vertical_scale"] is True
     assert panel_states[-1] == (True, "AI: queued")
@@ -618,3 +686,55 @@ def test_analysis_renderer_respects_current_vertical_scale_for_requested_depth_c
     assert metadata["height"] == 1304
     assert metadata["output_dpi"] == pytest.approx(384)
     assert rendered["image"].dotsPerMeterY() == pytest.approx(384 / 0.0254, abs=1)
+
+
+def test_analysis_renderer_vertical_scale_rerenders_data_without_narrowing_tracks():
+    QApplication.instance() or QApplication([])
+
+    class Header:
+        items = []
+
+        def adjust_height(self):
+            pass
+
+        def height(self):
+            return 80
+
+    class Track:
+        def __init__(self, name, width):
+            self.track_name = name
+            self._width = width
+            self.header = Header()
+            self.plot_widget = SimpleNamespace(curves=[])
+
+        def width(self):
+            return self._width
+
+        def height(self):
+            return 900
+
+        def render_to(self, painter, rect, _min_y, _max_y, **_kwargs):
+            painter.fillRect(rect, QColor("#ffffff"))
+
+    widget = SimpleNamespace(
+        track_containers=[Track("Depth", 80), Track("Image", 320)],
+        scale_control=None,
+        get_master_viewbox=lambda: SimpleNamespace(viewRange=lambda: [[0, 1], [1000, 1010]]),
+    )
+    rendered = PlotAnalysisRenderer(widget).render(
+        ["Depth", "Image"],
+        1002,
+        1005,
+        width=1600,
+        height=3000,
+        preserve_aspect=True,
+        respect_current_vertical_scale=True,
+        vertical_scale=2.0,
+    )
+
+    metadata = rendered["metadata"]
+    assert metadata["width"] == 1600
+    assert metadata["height"] == 2288
+    assert metadata["vertical_scale"] == pytest.approx(2.0)
+    assert metadata["actual_vertical_scale"] == pytest.approx(2.0)
+    assert [track["pixel_width"] for track in metadata["tracks"]] == [320, 1280]

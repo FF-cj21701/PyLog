@@ -29,6 +29,9 @@ class FractureDetectionRequest:
     fracture_types: tuple[str, ...]
     borehole_diameter_in: float = 8.0
     min_confidence: float = 0.60
+    sliding_window_m: float = 3.0
+    pick_entry_level: Optional[str] = None
+    fast_mode: bool = False
 
     @classmethod
     def build(
@@ -42,6 +45,9 @@ class FractureDetectionRequest:
         target_image_track=None,
         borehole_diameter_in=8.0,
         min_confidence=0.60,
+        sliding_window_m=None,
+        pick_entry_level=None,
+        fast_mode=False,
     ):
         window_id = str(window_id or "").strip()
         if not window_id:
@@ -73,7 +79,16 @@ class FractureDetectionRequest:
         confidence = float(min_confidence)
         if not 0 <= confidence <= 1:
             raise ValueError("min_confidence must be between 0 and 1")
-        return cls(window_id, selected_tracks, target, start, end, selected, diameter, confidence)
+        window_size = end - start if sliding_window_m is None else float(sliding_window_m)
+        if window_size <= 0:
+            raise ValueError("sliding_window_m must be positive")
+        entry_level = None if pick_entry_level is None else str(pick_entry_level).strip().lower()
+        if entry_level not in (None, "confirmed", "suspected"):
+            raise ValueError("pick_entry_level must be confirmed or suspected")
+        return cls(
+            window_id, selected_tracks, target, start, end, selected,
+            diameter, confidence, min(window_size, end - start), entry_level, bool(fast_mode),
+        )
 
     def to_dict(self):
         payload = asdict(self)
@@ -437,11 +452,17 @@ class FractureDetectionManager:
             safe_id = "".join(char if char.isalnum() or char in "-_" else "_" for char in candidate_id)
             candidate_path = output_dir / f"candidate_{safe_id or 'unknown'}.png"
             candidate_path.write_bytes(base64.b64decode(candidate_url.split(",", 1)[1]))
-            candidate_inputs.append({
+            candidate_record = {
                 "candidate_id": candidate_id,
                 "image_path": str(candidate_path.resolve()),
                 "metadata": (candidate_payload or {}).get("metadata") or {},
-            })
+            }
+            overlay_url = str((candidate_payload or {}).get("overlay_data_url") or "")
+            if overlay_url.startswith("data:image/png;base64,"):
+                overlay_path = output_dir / f"candidate_{safe_id or 'unknown'}_overlay.png"
+                overlay_path.write_bytes(base64.b64decode(overlay_url.split(",", 1)[1]))
+                candidate_record["overlay_image_path"] = str(overlay_path.resolve())
+            candidate_inputs.append(candidate_record)
         report["candidate_inputs"] = candidate_inputs
         exploration_views = []
         for view_id, view_payload in run.view_payloads.items():
@@ -451,19 +472,60 @@ class FractureDetectionManager:
             safe_id = "".join(char if char.isalnum() or char in "-_" else "_" for char in view_id)
             view_path = output_dir / f"view_{safe_id or 'unknown'}.png"
             view_path.write_bytes(base64.b64decode(view_url.split(",", 1)[1]))
-            exploration_views.append({
+            view_record = {
                 "view_id": view_id,
                 "image_path": str(view_path.resolve()),
                 "metadata": (view_payload or {}).get("metadata") or {},
-            })
+            }
+            overlay_url = str((view_payload or {}).get("overlay_data_url") or "")
+            if overlay_url.startswith("data:image/png;base64,"):
+                overlay_path = output_dir / f"view_{safe_id or 'unknown'}_overlay.png"
+                overlay_path.write_bytes(base64.b64decode(overlay_url.split(",", 1)[1]))
+                view_record["overlay_image_path"] = str(overlay_path.resolve())
+            exploration_views.append(view_record)
         report["exploration_views"] = exploration_views
+
+        monitor_media = []
+        for slot, media_payload in (run.monitor.get("media") or {}).items():
+            safe_slot = "".join(char if char.isalnum() or char in "-_" else "_" for char in str(slot))
+            media_record = {
+                "slot": str(slot),
+                "metadata": (media_payload or {}).get("metadata") or {},
+            }
+            media_url = str((media_payload or {}).get("data_url") or "")
+            if media_url.startswith("data:image/png;base64,"):
+                media_path = output_dir / f"monitor_{safe_slot or 'unknown'}.png"
+                media_path.write_bytes(base64.b64decode(media_url.split(",", 1)[1]))
+                media_record["image_path"] = str(media_path.resolve())
+            overlay_url = str((media_payload or {}).get("overlay_data_url") or "")
+            if overlay_url.startswith("data:image/png;base64,"):
+                overlay_path = output_dir / f"monitor_{safe_slot or 'unknown'}_overlay.png"
+                overlay_path.write_bytes(base64.b64decode(overlay_url.split(",", 1)[1]))
+                media_record["overlay_image_path"] = str(overlay_path.resolve())
+            if media_record.get("image_path") or media_record.get("overlay_image_path"):
+                monitor_media.append(media_record)
+        report["monitor_media"] = monitor_media
         report_path = output_dir / "diagnostics.json"
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         return {
             "directory": str(output_dir.resolve()),
             "image_path": str(image_path.resolve()),
             "candidate_image_paths": [item["image_path"] for item in candidate_inputs],
+            "candidate_overlay_image_paths": [
+                item["overlay_image_path"] for item in candidate_inputs if item.get("overlay_image_path")
+            ],
             "view_image_paths": [item["image_path"] for item in exploration_views],
+            "view_overlay_image_paths": [
+                item["overlay_image_path"] for item in exploration_views
+                if item.get("overlay_image_path")
+            ],
+            "monitor_image_paths": [
+                item["image_path"] for item in monitor_media if item.get("image_path")
+            ],
+            "monitor_overlay_image_paths": [
+                item["overlay_image_path"] for item in monitor_media
+                if item.get("overlay_image_path")
+            ],
             "report_path": str(report_path.resolve()),
         }
 

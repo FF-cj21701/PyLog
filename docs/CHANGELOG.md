@@ -3,6 +3,24 @@
 - This changelog now uses bilingual titles and English body text for long-term encoding stability.
 - Some older entries were historically affected by mojibake. Those sections were normalized into readable English summaries while preserving dates and main themes.
 
+## [2026-07-20] - AI Pick Consistency Optimization / AI Pick 一致性优化
+
+- Consolidated fast-mode window classification and candidate localization into one structured `assess_window()` vision request. Each window now returns a normalized `confirmed`, `suspected`, or `none` classification together with any candidate depth intervals, reducing contradictory decisions and duplicate model calls.
+- Added stable candidate evidence identities across fitting, association, review, audit, diagnostics, and GUI playback. Evidence now records source windows and candidate IDs, type conflicts, canonical review views, decision state/history, and whether conflict audit is required.
+- Changed candidate association to prioritize fitted geometry over the initial visual type label. Geometrically compatible conductive/resistive observations can be associated first, while the resulting type conflict is resolved from shared evidence instead of splitting one physical fracture.
+- Standardized parameter review on an immutable evidence view:
+  - the raw Plot crop, depth/track bounds, coordinate metadata, and image hash remain fixed across review rounds
+  - only the sinusoid overlay and fitted parameters are redrawn after an adjustment
+  - additional `inspect_view` navigation is no longer allowed during candidate review or conflict audit
+- Reduced correction review from five rounds to at most two and added explicit transition validation. The second round receives the previous action, reason, parameter/score changes, and may only make the final keep/discard decision; unsupported reversals and invalid discard reasons are rejected or preserved as `needs_review`.
+- Made local score, coverage, and quadrant coverage advisory evidence rather than independent hard rejection gates. Timeout, invalid response, exhausted review budget, or a visual discard that conflicts with strong accumulated evidence now preserves the last valid fit for human review.
+- Replaced unconditional visual batch audit with conflict-driven audit. Candidates without type, association, review, or competition conflicts skip the extra model call; conflict groups are reviewed using fixed raw/overlay evidence, while deterministic NMS continues to remove clear duplicates.
+- Kept three-window batching and cross-batch programmatic association, then deferred the final full-depth operation to deterministic association/NMS and overview rendering rather than another global visual audit.
+- Expanded reproducibility diagnostics with `workflow_version=consistency_v2`, prompt version, canonical image hashes, evidence lineage, state transitions, rejected transitions, conflict groups, and exact visual-call counters.
+- Standardized window assessment on one authoritative structured request path, keeping classification and candidate localization within the same model response.
+- Kept model requests provider-compatible by omitting the optional temperature parameter after models that only accept their fixed default rejected custom values.
+- Added regression coverage for single-call assessment, classification routing, stable evidence metadata, geometric/type-conflict association, immutable review views, two-round state transitions, fallback preservation, conflict-only audit, cross-batch handling, and request metrics.
+
 ## [2026-07-19] - Agent-driven AI Pick Workflow / 智能体裂缝自动拾取工作流
 
 - Added AI Pick to the Fracture Picking panel and to the agent tool surface, with shared background execution, cooperative cancellation, status polling, and GUI-thread result application.

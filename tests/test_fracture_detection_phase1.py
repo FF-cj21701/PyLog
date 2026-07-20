@@ -152,6 +152,23 @@ def test_manager_runs_in_background_and_reports_completion():
     assert finished["result_count"] == 2
 
 
+def test_manager_failure_exposes_concise_error_in_monitor_event():
+    manager = FractureDetectionManager()
+
+    def worker(_request, _context, _input_payload):
+        raise RuntimeError("Only the default (1) value is supported for temperature")
+
+    started = manager.start(make_request(), worker=worker)
+    finished = wait_for_terminal(manager, started["run_id"])
+
+    assert finished["status"] == "failed"
+    assert "default (1)" in finished["message"]
+    assert "default (1)" in finished["error"]
+    events = manager.get_monitor_snapshot(started["run_id"])["events"]
+    assert events[-1]["status"] == "failed"
+    assert "default (1)" in events[-1]["reason"]
+
+
 def test_manager_can_defer_completion_until_gui_playback_finishes():
     manager = FractureDetectionManager()
     handed_off = threading.Event()

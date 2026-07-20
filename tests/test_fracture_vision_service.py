@@ -1,6 +1,7 @@
 import base64
 import json
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -17,6 +18,8 @@ from plugins.ai_assistant.services.fracture_vision_service import FractureVision
 from plugins.ai_assistant.services.fracture_complete_workflow import (
     FAST_BATCH_AUDIT_SCHEMA,
     FAST_PARAMETER_REVIEW_SCHEMA,
+    FINAL_PARAMETER_REVIEW_SCHEMA,
+    WINDOW_ASSESSMENT_SCHEMA,
 )
 from plugins.ai_assistant.tools.fracture_detection_tool import StartFractureDetectionTool
 from scripts.rendering.fracture_annotations import annotation_from_fracture_parameters
@@ -426,6 +429,140 @@ def test_cross_window_association_merges_complementary_primary_window_fits():
     assert diagnostics["groups"][0]["source_candidate_ids"] == ["W1-F1", "W2-F1"]
 
 
+def test_merged_review_plan_adds_adjacent_window_at_fit_boundary():
+    workflow = FractureVisionPipeline(Config(), evidence_scorer=Scorer()).complete_workflow
+    annotation = {
+        **annotation_from_fracture_parameters(1005.2, 0.2, 180.0),
+        "candidate_id": "W2-F1",
+        "sliding_window_index": 2,
+    }
+
+    plan = workflow._merged_review_plan(
+        replace(request(), sliding_window_m=3.0), annotation, round_number=1,
+    )
+
+    assert plan["source_window_indices"] == [2, 3]
+    assert plan["depth_range"] == pytest.approx([1002.4, 1007.8])
+    assert "lower window boundary" in " ".join(plan["reasons"])
+
+
+def test_merged_review_plan_uses_cross_window_sources_and_caps_context_at_three_windows():
+    workflow = FractureVisionPipeline(Config(), evidence_scorer=Scorer()).complete_workflow
+    annotation = {
+        **annotation_from_fracture_parameters(1005.0, 0.6, 180.0),
+        "candidate_id": "X-W1-F1+W2-F1",
+        "associated_candidate_ids": ["W1-F1", "W2-F1"],
+        "detection_pass_kind": "cross_window_association",
+    }
+
+    plan = workflow._merged_review_plan(
+        replace(request(), sliding_window_m=3.0), annotation, round_number=1,
+    )
+
+    assert plan["source_window_indices"] == [1, 2, 3]
+    assert plan["depth_range"] == pytest.approx([1000.0, 1007.8])
+    assert "cross-window candidate association" in plan["reasons"]
+
+
+def test_merged_review_plan_expands_after_parameter_correction():
+    workflow = FractureVisionPipeline(Config(), evidence_scorer=Scorer()).complete_workflow
+    annotation = {
+        **annotation_from_fracture_parameters(1004.0, 0.1, 180.0),
+        "candidate_id": "W2-F1",
+        "sliding_window_index": 2,
+    }
+
+    sliding_request = replace(request(), sliding_window_m=3.0)
+    first = workflow._merged_review_plan(sliding_request, annotation, round_number=1)
+    second = workflow._merged_review_plan(
+        sliding_request, annotation, round_number=2, previous_action="adjust_parameters",
+    )
+
+    assert first is None
+    assert second["source_window_indices"] == [1, 2, 3]
+    assert second["depth_range"] == pytest.approx([1000.0, 1007.8])
+
+
+def test_candidate_review_rerenders_conditional_merged_context(monkeypatch):
+    pipeline = FractureVisionPipeline(Config(), evidence_scorer=Scorer())
+    workflow = pipeline.complete_workflow
+    view_requests = []
+    review_metadata = []
+
+    def provide(view_request):
+        view_requests.append(view_request)
+        payload = rendered()
+        payload["metadata"] = dict(
+            payload["metadata"],
+            depth_start=view_request.depth_start,
+            depth_end=view_request.depth_end,
+        )
+        return payload
+
+    pipeline.agent_view_provider = provide
+
+    def review(_request, candidate_rendered, annotation, **_kwargs):
+        review_metadata.append(candidate_rendered["metadata"])
+        return {
+            "action": "keep",
+            "aligned": True,
+            "decision_continuity": "initial",
+            "confidence": 0.9,
+            "reason": "aligned in merged context",
+            "corrected_points": [],
+            "parameters": {
+                "center_depth_m": 1005.2,
+                "amplitude_m": 0.2,
+                "phase_deg": 180.0,
+            },
+            "local_completeness": {
+                "available": True,
+                "complete": True,
+                "score": 3.0,
+                "coverage": 0.8,
+                "min_quadrant_coverage": 0.7,
+            },
+            "corrected_local_completeness": None,
+            "needs_review": False,
+            "review_views": [],
+            "review_events": [],
+            "review_action_count": 1,
+        }
+
+    monkeypatch.setattr(workflow, "review_candidate_parameters", review)
+    annotation = {
+        **annotation_from_fracture_parameters(1005.2, 0.2, 180.0),
+        "candidate_id": "W2-F1",
+        "fracture_type": "Conductive",
+        "sliding_window_index": 2,
+        "points": [[0, 1005.2], [90, 1005.0], [180, 1005.2], [270, 1005.4]],
+        "ai_final_parameters": {
+            "center_depth_m": 1005.2,
+            "amplitude_m": 0.2,
+            "phase_deg": 180.0,
+        },
+    }
+
+    kept, discarded = workflow._review_candidate_until_final(
+        replace(request(), sliding_window_m=3.0),
+        Context(),
+        rendered(),
+        rendered(),
+        annotation,
+        index=0,
+        total=1,
+    )
+
+    assert discarded is None
+    assert kept["candidate_id"] == "W2-F1"
+    assert len(view_requests) == 1
+    assert [view_requests[0].depth_start, view_requests[0].depth_end] == pytest.approx(
+        [1002.4, 1007.8]
+    )
+    assert review_metadata[0]["render_mode"] == "plot_data_rerender"
+    assert review_metadata[0]["merged_review_context"]["source_window_indices"] == [2, 3]
+
+
 def test_cross_window_association_does_not_merge_candidates_from_same_window():
     pipeline = FractureVisionPipeline(Config(), evidence_scorer=Scorer())
     workflow = pipeline.complete_workflow
@@ -589,23 +726,14 @@ class SequenceCompletions:
     ],
 )
 def test_window_classification_routes_into_or_past_picking(entry_level, classification, should_explore):
-    completions = SequenceCompletions([{
+    pipeline = FractureVisionPipeline(Config())
+    pipeline.complete_workflow.assess_window = lambda *_args, **_kwargs: {
         "classification": classification,
         "confidence": 0.74,
         "reason": "window-level triage",
-        "suspected_depth_ranges": [
-            {"depth_top": 1002.0, "depth_bottom": 1004.0},
-        ] if classification != "none" else [],
-    }])
-    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-    pipeline = FractureVisionPipeline(Config(), client_factory=lambda _config: client)
-    entered_picking = []
-
-    def pick_directly(*_args, **_kwargs):
-        entered_picking.append(True)
-        return [], {"mode": "direct_candidate_pick", "finished": True}
-
-    pipeline.complete_workflow.pick_candidates_directly = pick_directly
+        "candidates": [],
+        "normalizations": [],
+    }
     selected_request = FractureDetectionRequest.build(
         window_id="Log Plot 1",
         tracks=["Track 1 / IMAGE"],
@@ -619,7 +747,6 @@ def test_window_classification_routes_into_or_past_picking(entry_level, classifi
     context = Context()
 
     assert pipeline.detect(selected_request, context, rendered()) == []
-    assert bool(entered_picking) is should_explore
     assert context.diagnostics["window_classification"]["classification"] == classification
     assert context.diagnostics.get("skipped_before_picking", False) is (not should_explore)
 
@@ -629,20 +756,27 @@ def test_window_classification_prompt_defines_confirmed_as_ready_for_fitting():
         "classification": "confirmed",
         "confidence": 0.8,
         "reason": "visible curved trace is ready for fitting",
-        "suspected_depth_ranges": [{"depth_top": 1002.0, "depth_bottom": 1004.0}],
+        "candidates": [{
+            "candidate_id": "F1",
+            "fracture_type": "Conductive",
+            "depth_top": 1002.0,
+            "depth_bottom": 1004.0,
+            "confidence": 0.8,
+            "continuity_reason": "fitting-ready trace",
+        }],
     }])
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     workflow = FractureVisionPipeline(
         Config(), client_factory=lambda _config: client,
     ).complete_workflow
 
-    workflow.classify_window(request(), rendered(), client=client, model="vision-model")
+    workflow.assess_window(request(), rendered(), client=client, model="vision-model")
 
     messages = json.dumps(completions.calls[0]["messages"])
-    assert "entry decision, not a final geological acceptance decision" in messages
-    assert "confirmed does not require proving a complete 0-360 degree fracture" in messages
-    assert "sliding-window boundary" in messages
-    assert "fragment association, Review, and Audit" in messages
+    assert "Assess this borehole-image window once" in messages
+    assert "does not require complete visible 0-360 coverage" in messages
+    assert "window boundaries" in messages
+    assert "do not split one high-amplitude trace" in messages
     assert "conductive fracture commonly appears as a narrow dark sinusoidal" in messages
     assert "resistive fracture commonly appears as a narrow bright sinusoidal" in messages
     assert "Bedding is not necessarily horizontal" in messages
@@ -650,26 +784,22 @@ def test_window_classification_prompt_defines_confirmed_as_ready_for_fitting():
 
 
 def test_normal_mode_keeps_triage_but_uses_autonomous_exploration():
-    completions = SequenceCompletions([{
+    pipeline = FractureVisionPipeline(Config())
+    assessment = {
         "classification": "confirmed",
         "confidence": 0.91,
         "reason": "clear curved fracture evidence",
-        "suspected_depth_ranges": [{"depth_top": 1002.0, "depth_bottom": 1004.0}],
-    }])
-    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-    pipeline = FractureVisionPipeline(Config(), client_factory=lambda _config: client)
+        "candidates": [],
+        "normalizations": [],
+    }
+    pipeline.complete_workflow.assess_window = lambda *_args, **_kwargs: assessment
     entered = []
 
     def explore(*_args, **_kwargs):
         entered.append("normal")
         return [], {"mode": "autonomous_exploration", "finished": True}
 
-    def pick_directly(*_args, **_kwargs):
-        entered.append("fast")
-        return [], {"mode": "direct_candidate_pick", "finished": True}
-
     pipeline.complete_workflow.explore_candidate_windows = explore
-    pipeline.complete_workflow.pick_candidates_directly = pick_directly
     selected_request = FractureDetectionRequest.build(
         window_id="Log Plot 1",
         tracks=["Track 1 / IMAGE"],
@@ -879,7 +1009,7 @@ def test_pipeline_discovers_windows_then_picks_focused_anchors():
     assert "auditing" in [item[0] for item in context.updates]
     assert context.updates[-1][0] == "staging"
     assert context.diagnostics["accepted_count"] == 1
-    assert context.diagnostics["batch_audit"]["audit_status"] == "skipped_single_candidate"
+    assert context.diagnostics["batch_audit"]["audit_status"] == "skipped_no_conflicts"
     assert context.diagnostics["exploration"]["action_count"] == 3
     assert len(context.diagnostics["exploration"]["views"]) == 2
     exploration_prompt = json.dumps(completions.calls[0]["messages"])
@@ -1308,7 +1438,7 @@ def test_review_loop_records_previous_parameter_and_score_changes_for_next_round
     assert previous["score_change"]["complete_after"] is False
 
 
-def test_parameter_review_can_inspect_multiple_views_before_adjusting(monkeypatch):
+def test_parameter_review_rejects_dynamic_view_navigation():
     def review_payload(action, *, view=None, center=None, amplitude=None, phase=None, reason=""):
         return {
             "action": action,
@@ -1384,10 +1514,10 @@ def test_parameter_review_can_inspect_multiple_views_before_adjusting(monkeypatc
         view_recorder=lambda view_id, payload: recorded.append((view_id, payload)),
     )
 
-    assert result["action"] == "adjust_parameters"
-    assert result["review_action_count"] == 2
-    assert len(result["review_views"]) == 1
-    assert len(recorded) == 1
+    assert result["action"] == "unsupported_inspect_view"
+    assert result["review_action_count"] == 1
+    assert result["review_views"] == []
+    assert recorded == []
 
 
 def test_visual_keep_is_not_blocked_by_advisory_local_completeness(monkeypatch):
@@ -1453,6 +1583,41 @@ def test_visual_keep_with_complete_local_score_needs_no_review(monkeypatch):
     assert result["needs_review"] is False
 
 
+def test_candidate_review_compares_raw_and_overlay_images(monkeypatch):
+    payload = {
+        "action": "keep",
+        "view": None,
+        "aligned": True,
+        "center_depth_m": None,
+        "amplitude_m": None,
+        "phase_deg": None,
+        "corrected_points": [],
+        "confidence": 0.9,
+        "reason": "aligned",
+    }
+    completions = SequenceCompletions([payload])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    monkeypatch.setattr(FractureVisionPipeline, "_build_feedback_image", lambda *_args: _png_data_url())
+    pipeline = FractureVisionPipeline(
+        Config(), client_factory=lambda _config: client, evidence_scorer=Scorer(),
+    )
+
+    pipeline.review_candidate_parameters(
+        request(), rendered(),
+        {
+            "candidate_id": "F1",
+            "fracture_type": "Conductive",
+            "points": [[0, 1005.0], [180, 1005.2], [360, 1005.0]],
+        },
+    )
+
+    content = completions.calls[0]["messages"][1]["content"]
+    assert len([item for item in content if item["type"] == "image_url"]) == 2
+    prompt = json.dumps(content)
+    assert "raw candidate review evidence" in prompt
+    assert "current sine and anchors" in prompt
+
+
 def test_batch_audit_applies_nms_before_visual_keep_decisions():
     completions = SequenceCompletions([{
         "action": "finalize_audit",
@@ -1493,14 +1658,14 @@ def test_batch_audit_applies_nms_before_visual_keep_decisions():
     assert "candidate_continuity_reason" in audit_prompt
 
 
-def test_single_reviewed_candidate_skips_batch_visual_audit_and_preserves_review_flag():
+def test_single_unflagged_candidate_skips_conflict_audit():
     pipeline = FractureVisionPipeline(Config(), evidence_scorer=Scorer())
     candidate = {
         "type": "sinusoidal_fracture",
         "candidate_id": "F1",
         "fracture_type": "Resistive",
         "confidence": 0.9,
-        "needs_review": True,
+        "needs_review": False,
         **annotation_from_fracture_parameters(1005.0, 0.6, 180.0),
     }
 
@@ -1508,15 +1673,15 @@ def test_single_reviewed_candidate_skips_batch_visual_audit_and_preserves_review
         request(), Context(), rendered(), [candidate],
     )
 
-    assert result["audit_status"] == "skipped_single_candidate"
+    assert result["audit_status"] == "skipped_no_conflicts"
     assert result["audit_action_count"] == 0
     assert result["discarded"] == []
     assert result["kept"][0]["candidate_id"] == "F1"
-    assert result["kept"][0]["needs_review"] is True
-    assert result["kept"][0]["batch_audit_status"] == "skipped_single_candidate"
+    assert result["kept"][0]["needs_review"] is False
+    assert result["kept"][0]["batch_audit_status"] == "skipped_no_conflicts"
 
 
-def test_global_audit_forces_visual_check_for_single_cross_window_candidate(monkeypatch):
+def test_cross_window_identity_alone_does_not_force_visual_audit(monkeypatch):
     pipeline = FractureVisionPipeline(Config(), evidence_scorer=Scorer())
     candidate = {
         "type": "sinusoidal_fracture",
@@ -1547,8 +1712,8 @@ def test_global_audit_forces_visual_check_for_single_cross_window_candidate(monk
         request(), Context(), rendered(), [candidate], force_visual=True,
     )
 
-    assert calls == [True]
-    assert result["audit_status"] == "completed"
+    assert calls == []
+    assert result["audit_status"] == "skipped_no_conflicts"
 
 
 def test_review_discard_keeps_strong_merged_candidate_for_human_review(monkeypatch):
@@ -1643,51 +1808,17 @@ def test_batch_audit_overlay_uses_fracture_type_colors():
     ]
 
 
-def test_batch_audit_can_finalize_from_partial_evidence_when_other_sectors_are_unclear():
+def test_batch_audit_uses_one_fixed_comparison_view():
     decisions = [
         {"candidate_id": "F1", "action": "keep", "reason": "complete"},
         {"candidate_id": "F2", "action": "discard", "reason": "local fragment"},
     ]
-    completions = SequenceCompletions([
-        {
-            "action": "inspect_view",
-            "reason": "Inspect the right half where the traces are weak",
-            "view": {
-                "depth_start": 1002.0,
-                "depth_end": 1008.0,
-                "azimuth_start_deg": 180.0,
-                "azimuth_end_deg": 360.0,
-                "detail_level": "close",
-                "include_depth_track": False,
-            },
-            "decisions": [],
-        },
-        {
-            "action": "finalize_audit",
-            "reason": "Premature decision from a partial view",
-            "view": None,
-            "decisions": decisions,
-        },
-        {
-            "action": "inspect_view",
-            "reason": "Return to a full-width comparison",
-            "view": {
-                "depth_start": 1001.0,
-                "depth_end": 1009.0,
-                "azimuth_start_deg": 0.0,
-                "azimuth_end_deg": 360.0,
-                "detail_level": "detail",
-                "include_depth_track": True,
-            },
-            "decisions": [],
-        },
-        {
-            "action": "finalize_audit",
-            "reason": "Every candidate was checked across the full circumference",
-            "view": None,
-            "decisions": decisions,
-        },
-    ])
+    completions = SequenceCompletions([{
+        "action": "finalize_audit",
+        "reason": "Every conflicting candidate was checked in the fixed comparison",
+        "view": None,
+        "decisions": decisions,
+    }])
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     pipeline = FractureVisionPipeline(Config(), client_factory=lambda _config: client, evidence_scorer=Scorer())
 
@@ -1711,9 +1842,9 @@ def test_batch_audit_can_finalize_from_partial_evidence_when_other_sectors_are_u
 
     assert [item["candidate_id"] for item in result["kept"]] == ["F1"]
     assert result["discarded"][0]["candidate_id"] == "F2"
-    assert result["audit_action_count"] == 2
-    assert len(result["audit_views"]) == 1
-    assert len(recorded) == 1
+    assert result["audit_action_count"] == 1
+    assert result["audit_views"] == []
+    assert recorded == []
 
 
 def test_batch_audit_budget_exhaustion_keeps_nms_results_for_review():
@@ -1742,7 +1873,7 @@ def test_batch_audit_budget_exhaustion_keeps_nms_results_for_review():
     assert [item["candidate_id"] for item in result["kept"]] == ["F1"]
     assert result["kept"][0]["needs_review"] is True
     assert result["audit_status"] == "budget_exhausted_fallback"
-    assert result["audit_action_count"] == 12
+    assert result["audit_action_count"] == 1
     assert result["discarded"] == []
 
 
@@ -1815,7 +1946,7 @@ def test_batch_audit_bedding_discard_preserves_substantial_cross_cutting_reviewe
     assert result["kept"][0]["batch_audit_status"] == "kept_after_audit_conflict"
 
 
-def test_backend_audit_failure_keeps_nms_results_and_marks_review(monkeypatch):
+def test_backend_audit_failure_keeps_conflict_results_and_marks_review(monkeypatch):
     pipeline = FractureVisionPipeline(Config(), evidence_scorer=Scorer())
     workflow = pipeline.complete_workflow
     candidates = [
@@ -1823,7 +1954,8 @@ def test_backend_audit_failure_keeps_nms_results_and_marks_review(monkeypatch):
             "type": "sinusoidal_fracture",
             "candidate_id": "F1",
             "fracture_type": "Conductive",
-            "confidence": 0.9,
+                "confidence": 0.9,
+                "needs_review": True,
             **annotation_from_fracture_parameters(1004.0, 0.35, 45.0),
         },
         {
@@ -1873,6 +2005,477 @@ def test_pipeline_rejects_missing_target_track_metadata_before_model_call():
     pipeline = FractureVisionPipeline(Config(), client_factory=lambda _config: client)
     with pytest.raises(ValueError, match="Target image track"):
         pipeline.detect(request(), Context(), payload)
+
+
+def test_window_assessment_normalizes_contradictory_responses():
+    workflow = FractureVisionPipeline(Config()).complete_workflow
+    valid_candidate = {
+        "candidate_id": "F1",
+        "fracture_type": "Conductive",
+        "depth_top": 1002.0,
+        "depth_bottom": 1004.0,
+        "confidence": 0.9,
+        "continuity_reason": "visible trace",
+    }
+
+    none = workflow._normalize_window_assessment(
+        request(), rendered(), {
+            "classification": "none",
+            "confidence": 0.9,
+            "reason": "contradictory response",
+            "candidates": [valid_candidate],
+        },
+    )
+    empty_confirmed = workflow._normalize_window_assessment(
+        request(), rendered(), {
+            "classification": "confirmed",
+            "confidence": 0.9,
+            "reason": "missing localization",
+            "candidates": [],
+        },
+    )
+
+    assert none["candidates"] == []
+    assert "none_ignored_returned_candidates" in none["normalizations"]
+    assert empty_confirmed["classification"] == "suspected"
+    assert (
+        "confirmed_without_candidates_downgraded_to_suspected"
+        in empty_confirmed["normalizations"]
+    )
+
+
+def test_fast_mode_uses_one_window_assessment_for_classification_and_localization():
+    completions = SequenceCompletions([
+        {
+            "classification": "confirmed",
+            "confidence": 0.91,
+            "reason": "one fitting-ready trace",
+            "candidates": [{
+                "candidate_id": "F1",
+                "fracture_type": "Conductive",
+                "depth_top": 1003.0,
+                "depth_bottom": 1007.0,
+                "confidence": 0.88,
+                "continuity_reason": "consistent curvature across pads",
+            }],
+        },
+        {
+            "confidence": 0.9,
+            "reason": "boundary, crest, trough, and slope anchors",
+            "points": [
+                {"x_norm": 0.0, "y_norm": 0.5},
+                {"x_norm": 0.25, "y_norm": 0.3},
+                {"x_norm": 0.75, "y_norm": 0.7},
+                {"x_norm": 1.0, "y_norm": 0.5},
+            ],
+        },
+        {
+            "action": "keep",
+            "view": None,
+            "aligned": True,
+            "center_depth_m": None,
+            "amplitude_m": None,
+            "phase_deg": None,
+            "corrected_points": [],
+            "confidence": 0.9,
+            "decision_continuity": "initial",
+            "reason": "fixed evidence supports the fit",
+            "fracture_type": "Conductive",
+            "decision_basis": "geometry_aligned",
+        },
+    ])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    pipeline = FractureVisionPipeline(
+        Config(), client_factory=lambda _config: client, evidence_scorer=Scorer(),
+    )
+    selected_request = FractureDetectionRequest.build(
+        window_id="Log Plot 1",
+        tracks=["Track 1 / IMAGE"],
+        target_image_track="Track 1 / IMAGE",
+        depth_start=1000,
+        depth_end=1010,
+        fracture_types=["Conductive", "Resistive"],
+        pick_entry_level="confirmed",
+        fast_mode=True,
+        sliding_window_m=20.0,
+    )
+    context = Context()
+
+    results = pipeline.complete_workflow.detect(selected_request, context, rendered())
+
+    schemas = [call["response_format"]["json_schema"]["name"] for call in completions.calls]
+    assert len(results) == 1
+    assert schemas == [
+        "fracture_window_assessment",
+        "complete_fracture_anchor_points",
+        "fast_complete_fracture_parameter_review",
+    ]
+    assert schemas.count("fracture_window_assessment") == 1
+    assert context.diagnostics["window_assessment"]["classification"] == "confirmed"
+    assert context.diagnostics["visual_requests"]["visual_call_count"] == 3
+
+
+def test_geometry_association_merges_type_conflict_into_one_evidence_record():
+    pipeline = FractureVisionPipeline(Config(), evidence_scorer=Scorer())
+    left = _provisional_candidate(
+        "F1", 1005.0, 0.6, 180.0, [0, 45, 90, 135],
+        depth_top=1004.4, depth_bottom=1005.2,
+    )
+    right = _provisional_candidate(
+        "F2", 1005.0, 0.6, 180.0, [180, 225, 270, 315],
+        depth_top=1004.8, depth_bottom=1005.6,
+    )
+    right["candidate"]["fracture_type"] = "Resistive"
+    right["annotation"]["fracture_type"] = "Resistive"
+
+    associated, diagnostics = pipeline.complete_workflow._associate_provisional_candidates(
+        request(), Context(), rendered(), [left, right],
+    )
+
+    assert len(associated) == 1
+    annotation = associated[0]["annotation"]
+    assert annotation["type_conflict"] is True
+    assert set(annotation["source_fracture_types"]) == {"Conductive", "Resistive"}
+    assert annotation["source_candidate_ids"] == ["F1", "F2"]
+    assert annotation["evidence_id"].startswith("EV-")
+    assert diagnostics["comparisons"][0]["type_conflict"] is True
+
+
+def test_two_review_rounds_keep_same_raw_view_and_use_final_schema():
+    completions = SequenceCompletions([
+        {
+            "action": "adjust_parameters",
+            "view": None,
+            "aligned": False,
+            "center_depth_m": 1005.1,
+            "amplitude_m": 0.45,
+            "phase_deg": 95.0,
+            "corrected_points": [],
+            "confidence": 0.84,
+            "decision_continuity": "initial",
+            "reason": "adjust the trough and phase",
+            "fracture_type": "Conductive",
+            "decision_basis": "parameter_adjustment",
+        },
+        {
+            "action": "keep",
+            "view": None,
+            "aligned": True,
+            "center_depth_m": None,
+            "amplitude_m": None,
+            "phase_deg": None,
+            "corrected_points": [],
+            "confidence": 0.9,
+            "decision_continuity": "maintain",
+            "reason": "the adjusted geometry remains aligned in the same evidence view",
+            "fracture_type": "Conductive",
+            "decision_basis": "geometry_aligned",
+        },
+    ])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    pipeline = FractureVisionPipeline(
+        Config(), client_factory=lambda _config: client, evidence_scorer=Scorer(),
+    )
+    selected_request = replace(request(), fast_mode=True, sliding_window_m=20.0)
+    center, amplitude, phase = 1005.0, 0.4, 90.0
+    points = [
+        [float(azimuth), center + amplitude * np.sin(np.deg2rad(azimuth + phase))]
+        for azimuth in (0, 90, 180, 270, 360)
+    ]
+    annotation = {
+        "candidate_id": "F1",
+        "fracture_type": "Conductive",
+        "points": points,
+        "final_points": points,
+        **annotation_from_fracture_parameters(center, amplitude, phase),
+    }
+
+    kept, discard = pipeline.complete_workflow._review_candidate_until_final(
+        selected_request, Context(), rendered(), rendered(), annotation, index=0, total=1,
+    )
+
+    assert discard is None
+    assert kept["decision_state"] == "kept"
+    assert len(completions.calls) == 2
+    assert [call["response_format"]["json_schema"]["name"] for call in completions.calls] == [
+        "fast_complete_fracture_parameter_review",
+        "final_complete_fracture_parameter_review",
+    ]
+    first_images = [
+        item["image_url"]["url"]
+        for item in completions.calls[0]["messages"][1]["content"]
+        if item.get("type") == "image_url"
+    ]
+    second_images = [
+        item["image_url"]["url"]
+        for item in completions.calls[1]["messages"][1]["content"]
+        if item.get("type") == "image_url"
+    ]
+    assert first_images[0] == second_images[0]
+    assert first_images[1] != second_images[1]
+    hashes = [item["canonical_raw_image_hash"] for item in kept["ai_correction_history"]]
+    assert len(set(hashes)) == 1
+
+
+def test_second_round_overturn_without_geometry_change_is_retained_for_review(monkeypatch):
+    pipeline = FractureVisionPipeline(Config(), evidence_scorer=Scorer())
+    workflow = pipeline.complete_workflow
+    center, amplitude, phase = 1005.0, 0.5, 90.0
+    points = [
+        [float(azimuth), center + amplitude * np.sin(np.deg2rad(azimuth + phase))]
+        for azimuth in (0, 90, 180, 270)
+    ]
+    local = Scorer().evaluate()
+    responses = [
+        {
+            "action": "adjust_parameters",
+            "aligned": False,
+            "confidence": 0.8,
+            "decision_continuity": "initial",
+            "decision_basis": "parameter_adjustment",
+            "fracture_type": "Conductive",
+            "reason": "restate the same geometry",
+            "parameters": {
+                "center_depth_m": center,
+                "amplitude_m": amplitude,
+                "phase_deg": phase,
+            },
+            "corrected_points": points,
+            "local_completeness": local,
+            "corrected_local_completeness": local,
+        },
+        {
+            "action": "discard",
+            "aligned": False,
+            "confidence": 0.8,
+            "decision_continuity": "overturn",
+            "decision_basis": "wrong_texture",
+            "fracture_type": "Conductive",
+            "reason": "reverse the first decision without new evidence",
+            "parameters": None,
+            "corrected_points": [],
+            "local_completeness": local,
+            "corrected_local_completeness": None,
+        },
+    ]
+    monkeypatch.setattr(
+        workflow,
+        "review_candidate_parameters",
+        lambda *_args, **_kwargs: responses.pop(0),
+    )
+    annotation = {
+        "candidate_id": "F1",
+        "fracture_type": "Conductive",
+        "points": points,
+        **annotation_from_fracture_parameters(center, amplitude, phase),
+    }
+
+    kept, discard = workflow._review_candidate_until_final(
+        request(), Context(), rendered(), rendered(), annotation, index=0, total=1,
+    )
+
+    assert discard is None
+    assert kept["needs_review"] is True
+    assert kept["decision_state"] == "needs_review"
+    assert "illegal_second_round_overturn_without_new_evidence" in kept[
+        "ai_review_conflict_reason"
+    ]
+
+
+def test_invalid_parameter_correction_keeps_last_valid_fit_for_review():
+    pipeline = FractureVisionPipeline(Config(), evidence_scorer=Scorer())
+    workflow = pipeline.complete_workflow
+    annotation = {
+        "candidate_id": "F1",
+        "fracture_type": "Conductive",
+        "points": [[0, 1005.0], [90, 1005.5], [180, 1005.0]],
+    }
+    normalized = workflow._normalize_review(
+        {
+            "action": "adjust_parameters",
+            "aligned": False,
+            "center_depth_m": None,
+            "amplitude_m": None,
+            "phase_deg": None,
+            "corrected_points": [],
+            "confidence": 0.8,
+            "decision_continuity": "initial",
+            "reason": "invalid correction",
+            "fracture_type": "Conductive",
+            "decision_basis": "parameter_adjustment",
+        },
+        annotation,
+        rendered(),
+        request(),
+        Scorer().evaluate(),
+    )
+
+    assert normalized["action"] == "retry"
+    assert normalized["corrected_points"] == []
+
+
+def test_conflict_audit_receives_only_flagged_candidates(monkeypatch):
+    pipeline = FractureVisionPipeline(Config(), evidence_scorer=Scorer())
+    workflow = pipeline.complete_workflow
+    safe = {
+        "candidate_id": "F-safe",
+        "fracture_type": "Conductive",
+        "needs_review": False,
+        **annotation_from_fracture_parameters(1002.0, 0.2, 45.0),
+    }
+    conflict = {
+        "candidate_id": "F-review",
+        "fracture_type": "Resistive",
+        "needs_review": True,
+        **annotation_from_fracture_parameters(1008.0, 0.2, 135.0),
+    }
+    received = []
+
+    def audit(_request, _rendered, candidates, **_kwargs):
+        received.extend(item["candidate_id"] for item in candidates)
+        return {
+            "kept": list(candidates),
+            "discarded": [],
+            "audit_status": "completed",
+            "audit_views": [],
+            "audit_events": [],
+            "audit_action_count": 1,
+            "audit_decisions": [],
+        }
+
+    monkeypatch.setattr(workflow, "audit_candidate_batch", audit)
+    result = workflow._audit_staged_candidates(
+        request(), Context(), rendered(), [safe, conflict],
+    )
+
+    assert received == ["F-review"]
+    assert {item["candidate_id"] for item in result["kept"]} == {"F-safe", "F-review"}
+
+
+def test_request_uses_provider_default_temperature():
+    class DefaultTemperatureCompletions:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return response({"ok": True})
+
+    completions = DefaultTemperatureCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    pipeline = FractureVisionPipeline(Config())
+    pipeline._reset_request_metrics()
+
+    pipeline._request(
+        client,
+        "vision-model",
+        [{"role": "user", "content": [{"type": "text", "text": "test"}]}],
+        response_schema=WINDOW_ASSESSMENT_SCHEMA,
+    )
+
+    assert len(completions.calls) == 1
+    assert "temperature" not in completions.calls[0]
+    metrics = pipeline.request_metrics_snapshot()
+    assert metrics["visual_call_count"] == 1
+    assert metrics["api_attempt_count"] == 1
+
+
+def test_combined_assessment_timeout_does_not_issue_legacy_split_requests():
+    class TimeoutCompletions:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            raise TimeoutError("Request timed out.")
+
+    completions = TimeoutCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    pipeline = FractureVisionPipeline(Config(), client_factory=lambda _config: client)
+    selected_request = replace(
+        request(),
+        pick_entry_level="confirmed",
+        fast_mode=True,
+    )
+
+    with pytest.raises(TimeoutError, match="Request timed out"):
+        pipeline.complete_workflow.assess_window(
+            selected_request,
+            rendered(),
+            context=Context(),
+            client=client,
+            model="vision-model",
+        )
+
+    assert len(completions.calls) == 1
+    schema = completions.calls[0]["response_format"]["json_schema"]["name"]
+    assert schema == "fracture_window_assessment"
+
+
+def test_create_client_disables_sdk_automatic_retries(monkeypatch):
+    captured = {}
+
+    def create_client(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(
+        "plugins.ai_assistant.services.fracture_vision_service.openai",
+        SimpleNamespace(OpenAI=create_client),
+    )
+    pipeline = FractureVisionPipeline(Config())
+
+    pipeline._create_client(Config().get_resolved_vision_config())
+
+    assert captured["max_retries"] == 0
+
+
+def test_boundary_association_reviews_only_the_new_merged_candidate(monkeypatch):
+    pipeline = FractureVisionPipeline(Config(), evidence_scorer=Scorer())
+    workflow = pipeline.complete_workflow
+    carried = {
+        "candidate_id": "W3-F1",
+        "fracture_type": "Conductive",
+        **annotation_from_fracture_parameters(1005.0, 0.5, 180.0),
+    }
+    current = {
+        "candidate_id": "W4-F1",
+        "fracture_type": "Conductive",
+        **annotation_from_fracture_parameters(1005.0, 0.5, 180.0),
+    }
+    merged = {
+        "candidate_id": "X-W3-F1+W4-F1",
+        "associated_candidate_ids": ["W3-F1", "W4-F1"],
+        "fracture_type": "Conductive",
+        **annotation_from_fracture_parameters(1005.0, 0.5, 180.0),
+    }
+    reviewed = []
+    audited = []
+    monkeypatch.setattr(
+        workflow,
+        "associate_annotations_across_windows",
+        lambda *_args, **_kwargs: ([merged], {"groups": [{"candidate_id": merged["candidate_id"]}]}),
+    )
+
+    def review(_request, _context, _rendered, annotations):
+        reviewed.extend(item["candidate_id"] for item in annotations)
+        return list(annotations), []
+
+    def audit(_request, _context, _rendered, annotations, **_kwargs):
+        audited.extend(item["candidate_id"] for item in annotations)
+        return {"kept": list(annotations), "discarded": [], "audit_status": "completed"}
+
+    monkeypatch.setattr(workflow, "review_annotations_after_association", review)
+    monkeypatch.setattr(workflow, "_audit_staged_candidates", audit)
+
+    output, _record, discards = pipeline._associate_boundary_candidates(
+        request(), Context(), rendered(), [carried], [current],
+    )
+
+    assert [item["candidate_id"] for item in output] == [merged["candidate_id"]]
+    assert reviewed == [merged["candidate_id"]]
+    assert audited == [merged["candidate_id"]]
+    assert discards == []
 
 
 def test_start_tool_renders_then_applies_one_completed_batch(monkeypatch):

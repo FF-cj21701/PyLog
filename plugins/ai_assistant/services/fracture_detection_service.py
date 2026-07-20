@@ -19,6 +19,15 @@ def _utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _failure_message(error):
+    detail = " ".join(str(error or "").split())
+    if not detail:
+        return "Detection failed"
+    if len(detail) > 240:
+        detail = detail[:237].rstrip() + "..."
+    return f"Detection failed: {detail}"
+
+
 @dataclass(frozen=True)
 class FractureDetectionRequest:
     window_id: str
@@ -424,8 +433,8 @@ class FractureDetectionManager:
             run_id,
             status="failed",
             stage="failed",
-            message="Detection failed",
-            error=error,
+            message=_failure_message(error),
+            error=str(error or ""),
         )
 
     def export_debug_bundle(self, run_id, root_directory=None):
@@ -605,7 +614,13 @@ class FractureDetectionManager:
             if context.cancelled:
                 self._update(run_id, status="cancelled", stage="cancelled", message="Cancelled")
             else:
-                self._update(run_id, status="failed", stage="failed", message="Detection failed", error=str(exc))
+                self._update(
+                    run_id,
+                    status="failed",
+                    stage="failed",
+                    message=_failure_message(exc),
+                    error=str(exc),
+                )
 
 
 _manager = FractureDetectionManager()

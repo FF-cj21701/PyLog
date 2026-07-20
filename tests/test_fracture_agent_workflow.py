@@ -201,6 +201,7 @@ def test_pipeline_runs_each_sliding_window_and_prefixes_candidate_ids():
             self.ranges = []
             self.rendered_inputs = []
             self.merged_overlays = []
+            self.audit_ranges = []
 
         def detect(self, request, context, _rendered):
             self.ranges.append((request.depth_start, request.depth_end))
@@ -239,6 +240,27 @@ def test_pipeline_runs_each_sliding_window_and_prefixes_candidate_ids():
 
         def _non_maximum_suppression(self, candidates, _rendered):
             return list(candidates), []
+
+        def _audit_staged_candidates(
+            self,
+            _request,
+            _context,
+            rendered,
+            candidates,
+            *,
+            force_visual,
+        ):
+            assert force_visual is True
+            metadata = rendered["metadata"]
+            self.audit_ranges.append((metadata["depth_start"], metadata["depth_end"]))
+            return {
+                "kept": list(candidates),
+                "discarded": [],
+                "audit_status": "completed",
+                "audit_action_count": len(candidates),
+                "audit_views": [],
+                "audit_events": [],
+            }
 
         def _build_batch_feedback_image(self, rendered, candidates, _target):
             self.merged_overlays.append([item["candidate_id"] for item in candidates])
@@ -297,12 +319,26 @@ def test_pipeline_runs_each_sliding_window_and_prefixes_candidate_ids():
     assert context.diagnostics["sliding_window_m"] == pytest.approx(3.0)
     assert len(context.diagnostics["window_diagnostics"]) == 4
     assert context.diagnostics["merged_observations"] == []
+    assert len(context.diagnostics["window_batches"]) == 2
+    assert [
+        item["source_window_indices"]
+        for item in context.diagnostics["window_batches"]
+    ] == [[1, 2, 3], [4]]
+    assert all(
+        len(item["source_window_indices"]) <= 3
+        for item in context.diagnostics["window_batches"]
+    )
     assert set(context.candidate_payloads) == {
         "W1-F1", "W2-F1", "W3-F1", "W4-F1",
     }
     assert workflow.merged_overlays == [
+        ["W1-F1", "W2-F1", "W3-F1"],
+        ["W1-F1"],
         ["W1-F1", "W2-F1", "W3-F1", "W4-F1"],
     ]
+    assert len(workflow.audit_ranges) == 2
+    assert workflow.audit_ranges[0] == pytest.approx((1000.0, 1007.8))
+    assert workflow.audit_ranges[1] == pytest.approx((1007.2, 1010.0))
     assert context.diagnostics["discarded_count"] == 1
     assert context.diagnostics["kept_candidate_ids"] == [
         "W1-F1", "W2-F1", "W3-F1", "W4-F1",
@@ -315,8 +351,15 @@ def test_pipeline_runs_each_sliding_window_and_prefixes_candidate_ids():
     assert context.monitor_media["final_overlay"]["data_url"].endswith("-overlay")
     assert context.monitor_media["final_overlay"]["metadata"]["depth_start"] == pytest.approx(1000.0)
     assert context.monitor_media["final_overlay"]["metadata"]["depth_end"] == pytest.approx(1010.0)
-    assert context.diagnostics["final_overlay_scope"] == "full_detection_depth_range"
-    assert any(event["action"] == "final_sliding_overlay_prepared" for event in context.events)
+    assert context.diagnostics["final_overlay_scope"] == "full_detection_depth_range_summary_only"
+    assert context.diagnostics["global_batch_audit"] == {
+        "audit_status": "performed_per_window_batch",
+        "visual_global_audit_skipped": True,
+    }
+    assert any(
+        event["action"] == "final_batch_summary_overlay_prepared"
+        for event in context.events
+    )
 
 
 def test_merged_observation_vision_messages_compare_raw_and_overlay_images():

@@ -12,6 +12,7 @@ import math
 import threading
 from typing import Optional, Union, Tuple, Any, Dict, List
 from ..data.db_manager import DBManager
+from ..data.fracture_table_data import load_fracture_table_data
 from ..utils.workers import DataFetchWorker, ImageSliceWorker
 from ..rendering.plot_constants import AXIS_WIDTH, NULL_MNEMONICS
 from core.app_config import app_config
@@ -867,6 +868,48 @@ class LogWidget(QWidget):
         self._show_fracture_status(f"Loaded {len(annotations)} fracture result(s).")
         self._refresh_fracture_tables(db_path, well_id)
         return annotations
+
+    def apply_fracture_table_results(self, db_path, well_id):
+        """Plot saved fracture-pick table results as sinusoid overlays plus tadpoles."""
+        annotations, _headers, _rows = load_fracture_table_data(db_path, well_id)
+        if not annotations:
+            self._show_fracture_status("No saved fracture picking results were found.")
+            return []
+
+        target_track = self.get_fracture_display_track()
+        if target_track is None:
+            self._show_fracture_status("Cannot plot Fracture Picks: no image target track.")
+            return []
+
+        for track in self.track_containers:
+            if hasattr(track, "clear_fracture_annotations"):
+                track.clear_fracture_annotations()
+
+        by_label = {
+            self._fracture_track_label(track): track
+            for track in self._image_tracks_for_fracture_display()
+        }
+        applied = []
+        for annotation in annotations:
+            if not isinstance(annotation, dict) or annotation.get("type") != "sinusoidal_fracture":
+                continue
+            clean = dict(annotation)
+            style = FRACTURE_TYPE_STYLES.get(clean.get("fracture_type"))
+            if style:
+                clean.setdefault("color", style["color"])
+            track = by_label.get(clean.get("target_track_label")) or target_track
+            clean["name"] = f"Fracture {len(getattr(track, 'fracture_annotations', [])) + 1}"
+            track.add_fracture_annotation(clean)
+            applied.append(clean)
+
+        self._fracture_results_dirty = False
+        if applied:
+            self.show_tadpole_track()
+            self._show_fracture_status(f"Plotted {len(applied)} fracture pick(s).")
+        else:
+            self.refresh_tadpole_tracks()
+            self._show_fracture_status("No plottable fracture picks were found.")
+        return applied
 
     def show_fracture_results(self):
         from ..ui.dialogs.fracture_results_dialog import FractureResultsDialog

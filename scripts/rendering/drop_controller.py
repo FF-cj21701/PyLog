@@ -1,3 +1,5 @@
+import json
+
 from PySide6.QtWidgets import QMessageBox
 from PySide6.QtCore import Qt, QTimer, QObject, QMimeData, QPoint
 from core.app_config import app_config
@@ -14,12 +16,20 @@ class DataDropController(QObject):
         self.log_widget = log_widget
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasFormat("application/x-pylog-curve"):
+        mime = event.mimeData()
+        if (
+            mime.hasFormat("application/x-pylog-curve")
+            or mime.hasFormat("application/x-pylog-fracture-table")
+        ):
             event.accept()
         else:
             event.ignore()
 
     def dropEvent(self, event):
+        if event.mimeData().hasFormat("application/x-pylog-fracture-table"):
+            self.drop_fracture_table(event)
+            return
+
         raw_data = event.mimeData().data("application/x-pylog-curve").data().decode('utf-8')
         try:
             items = raw_data.split('|') if '|' in raw_data else [raw_data]
@@ -41,6 +51,32 @@ class DataDropController(QObject):
                     self.create_new_track(well_id, curve_id, db_path=db_path)
         except Exception as e:
             print(f"Drop Error: {e}")
+
+    def drop_fracture_table(self, event):
+        lw = self.log_widget
+        try:
+            raw_data = event.mimeData().data("application/x-pylog-fracture-table").data().decode("utf-8")
+            tables = json.loads(raw_data)
+            if isinstance(tables, dict):
+                tables = [tables]
+            plotted = 0
+            for table in tables or []:
+                if not isinstance(table, dict):
+                    continue
+                db_path = table.get("db_path")
+                well_id = table.get("well_id")
+                if not db_path or well_id is None:
+                    continue
+                if hasattr(lw, "apply_fracture_table_results"):
+                    plotted += len(lw.apply_fracture_table_results(db_path, int(well_id)))
+            if plotted:
+                event.accept()
+            else:
+                event.ignore()
+        except Exception as e:
+            print(f"Fracture Table Drop Error: {e}")
+            if hasattr(lw, "_show_fracture_status"):
+                lw._show_fracture_status(f"Could not plot Fracture Picks: {e}")
 
     def get_target_container(self, pos):
         lw = self.log_widget

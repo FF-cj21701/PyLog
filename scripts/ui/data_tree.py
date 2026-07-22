@@ -1,3 +1,5 @@
+import json
+
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
                                QTreeWidget, QTreeWidgetItem, QStackedWidget, 
                                QAbstractItemView, QHeaderView, QStyle, QFrame,
@@ -56,6 +58,7 @@ class CustomTreeWidget(QTreeWidget):
         if not items: return mime
         
         valid_data = []
+        fracture_tables = []
         for item in items:
              data = item.data(0, Qt.UserRole)
              if data and isinstance(data, dict) and data.get('type') == 'curve':
@@ -64,9 +67,24 @@ class CustomTreeWidget(QTreeWidget):
                   db_p = data.get('db_path')
                   if wid is not None and cid is not None and db_p:
                       valid_data.append(f"{wid}:{cid}:{db_p}")
+             elif data and isinstance(data, dict) and data.get('type') == 'fracture_table':
+                  wid = data.get('well_id')
+                  db_p = data.get('db_path')
+                  if wid is not None and db_p:
+                      fracture_tables.append({
+                          "type": "fracture_table",
+                          "well_id": int(wid),
+                          "db_path": str(db_p),
+                          "name": data.get("name") or "Fracture Picks",
+                      })
         
         if valid_data:
             mime.setData("application/x-pylog-curve", "|".join(valid_data).encode('utf-8'))
+        if fracture_tables:
+            mime.setData(
+                "application/x-pylog-fracture-table",
+                json.dumps(fracture_tables).encode("utf-8"),
+            )
         
         return mime
 

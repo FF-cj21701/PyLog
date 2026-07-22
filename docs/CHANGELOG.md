@@ -3,6 +3,19 @@
 - This changelog now uses bilingual titles and English body text for long-term encoding stability.
 - Some older entries were historically affected by mojibake. Those sections were normalized into readable English summaries while preserving dates and main themes.
 
+## [2026-07-22] - Fracture Table Plot Drag-and-Drop / 裂缝结果表拖拽绘图
+
+- Added drag-and-drop support for saved `Fracture Picks` table nodes from the data tree into Plot windows.
+- Added a dedicated fracture-table MIME payload so saved interpretation tables can be dragged independently of curve nodes without changing existing curve drag behavior.
+- Added Plot-side application of saved fracture annotations: dropping a fracture table loads persisted sinusoidal fracture picks, applies type colors, draws the sinusoid overlays on the available image track, and opens or refreshes the Tadpole Track.
+- Kept target-track matching compatible with saved `target_track_label` metadata, with fallback to the current Plot's first available image track when the original target label is not present.
+- Added user-facing status feedback when no saved fracture picks are available or when the current Plot has no image track for fracture display.
+- Related Python files:
+  - drag payloads and drop routing: `scripts/ui/data_tree.py`, `scripts/rendering/drop_controller.py`
+  - Plot rendering bridge: `scripts/rendering/plot_widget.py`
+  - regression tests: `tests/test_fracture_plot_workflow.py`
+- Added regression coverage for fracture-table drag MIME generation and saved-result plotting into sinusoid overlays plus tadpoles.
+
 ## [2026-07-20] - AI Pick Consistency Optimization / AI Pick 一致性优化
 
 - Consolidated fast-mode window classification and candidate localization into one structured `assess_window()` vision request. Each window now returns a normalized `confirmed`, `suspected`, or `none` classification together with any candidate depth intervals, reducing contradictory decisions and duplicate model calls.

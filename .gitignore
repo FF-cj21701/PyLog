@@ -106,4 +106,7 @@ PyLog.spec
 /test_*.py
 /test_*.txt
 debug_*.py
+/evaluate_ai_pick_position_tests.py
+/evaluate_single_fracture_image.py
+/generate_ai_pick_position_test_images.py
 /*.png

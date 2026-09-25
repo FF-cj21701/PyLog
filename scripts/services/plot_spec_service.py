@@ -34,12 +34,14 @@ def _normalize_curve_spec(curve: Dict[str, Any], fallback_db_path: Optional[str]
     if not curve_settings and any(k in curve for k in (
         "title", "color", "line_width", "line_style", "log", "invert_x",
         "fill_mode", "fill_color", "visible", "min", "max", "cmap", "null_color",
+        "azimuth_start",
     )):
         curve_settings = {
             key: curve.get(key)
             for key in (
                 "title", "color", "line_width", "line_style", "log", "invert_x",
                 "fill_mode", "fill_color", "visible", "min", "max", "cmap", "null_color",
+                "azimuth_start",
             )
             if key in curve and curve.get(key) is not None
         }
@@ -164,7 +166,7 @@ def build_plot_spec_from_template(template_state: Dict[str, Any], db, well_id: O
                 curve_setting_keys = (
                     "title", "color", "line_width", "line_style", "log", "invert_x",
                     "fill_mode", "fill_color", "fill_alpha", "visible", "min", "max",
-                    "cmap", "null_color",
+                    "cmap", "null_color", "azimuth_start",
                 )
             curve_settings = {
                 key: curve_cfg.get(key)

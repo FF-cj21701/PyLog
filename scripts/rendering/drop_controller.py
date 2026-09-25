@@ -159,7 +159,7 @@ class DataDropController(QObject):
             context["db_path"] = db_p
         worker = DataFetchWorker(db_p, well_id, curve_id, context, preferences=prefs)
         worker.signals.finished.connect(self.on_data_loaded)
-        worker.signals.error.connect(lambda e: QMessageBox.critical(lw, "Error", e))
+        worker.signals.error.connect(self._on_fetch_error)
         
         lw.pending_loads += 1
         self._check_loading_status()
@@ -247,13 +247,18 @@ class DataDropController(QObject):
         else:
             lw.setCursor(Qt.ArrowCursor)
             if lw.window():
-                sb = lw.window().statusBar()
+                status_bar = getattr(lw.window(), "statusBar", None)
+                sb = status_bar() if callable(status_bar) else None
                 if sb and "Loading curve data" in sb.currentMessage():
                     sb.showMessage("Ready", 3000)
             lw.loadingFinished.emit()
 
     def _on_fetch_error(self, message):
-        print(f"Fetch Error: {message}")
+        lw = self.log_widget
+        lw.pending_loads = max(0, lw.pending_loads - 1)
+        logger.warning(f"Fetch Error: {message}")
+        self._check_loading_status()
+        QMessageBox.critical(lw, "Error", message)
 
     def _create_new_track_final(self, data, depth, info, rgb_full=None):
         lw = self.log_widget

@@ -10,6 +10,7 @@ from PySide6.QtGui import QFont, QColor, QPainter, QLinearGradient, QBrush
 from ..utils.colormap_utils import get_standard_colormap
 from ..utils.plot_style_utils import (
     DEFAULT_FILL_COLOR,
+    DEFAULT_IMAGE_AZIMUTH_START,
     DEFAULT_IMAGE_CMAP,
     DEFAULT_NULL_COLOR,
     LEGACY_DEFAULT_FILL_COLOR,
@@ -327,6 +328,20 @@ class ImageCurveSettingsWidget(BaseCurveSettingsWidget):
         
         self.invert_check = QCheckBox("Invert Colormap")
         self.specific_layout.addRow("", self.invert_check)
+
+        self.azimuth_start_spin = QDoubleSpinBox()
+        self.azimuth_start_spin.setRange(-360.0, 360.0)
+        self.azimuth_start_spin.setDecimals(1)
+        self.azimuth_start_spin.setSingleStep(1.0)
+        self.azimuth_start_spin.setSuffix("°")
+        self.azimuth_start_spin.setToolTip(
+            "Azimuth shown at the left edge. For example, -90 displays -90° to 270°."
+        )
+        self.specific_layout.addRow("Direction Start:", self.azimuth_start_spin)
+
+        self.azimuth_range_label = QLabel()
+        self.specific_layout.addRow("Displayed Range:", self.azimuth_range_label)
+        self.azimuth_start_spin.valueChanged.connect(self._update_azimuth_range_label)
         
         self.null_color_combo = QComboBox()
         self.null_color_combo.addItems(['Auto', 'White', 'Black'])
@@ -342,12 +357,20 @@ class ImageCurveSettingsWidget(BaseCurveSettingsWidget):
         _, grad = get_standard_colormap(cmap_name, invert=invert)
         self.preview.set_gradient(grad)
 
+    def _update_azimuth_range_label(self, value=None):
+        start = self.azimuth_start_spin.value() if value is None else float(value)
+        self.azimuth_range_label.setText(f"{start:g}° to {start + 360.0:g}°")
+
     def load_settings(self, info, curve_names=None, is_accum_restricted=False):
         normalized = normalize_curve_plot_style({**info, "is_image": True})
         super().load_settings(normalized)
         self.cmap_combo.setCurrentText(normalized.get('cmap', DEFAULT_IMAGE_CMAP).capitalize())
         self.invert_check.setChecked(normalized.get('invert', False))
         self.null_color_combo.setCurrentText(normalized.get('null_color', DEFAULT_NULL_COLOR))
+        self.azimuth_start_spin.setValue(
+            normalized.get('azimuth_start', DEFAULT_IMAGE_AZIMUTH_START)
+        )
+        self._update_azimuth_range_label()
         self.update_preview()
 
     def get_settings(self):
@@ -355,7 +378,8 @@ class ImageCurveSettingsWidget(BaseCurveSettingsWidget):
         s.update({
             'cmap': self.cmap_combo.currentText(),
             'invert': self.invert_check.isChecked(),
-            'null_color': self.null_color_combo.currentText()
+            'null_color': self.null_color_combo.currentText(),
+            'azimuth_start': self.azimuth_start_spin.value(),
         })
         return s
 

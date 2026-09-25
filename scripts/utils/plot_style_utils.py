@@ -3,12 +3,15 @@ from __future__ import annotations
 import math
 from typing import Any, Dict
 
+import numpy as np
+
 DEFAULT_FILL_ALPHA = 1.0
 DEFAULT_FILL_COLOR = "#ff000000"
 LEGACY_DEFAULT_FILL_COLOR = "#80000000"
 AUTO_FILL_LIGHTEN_RATIO = 0.3
 DEFAULT_IMAGE_CMAP = "thermal"
 DEFAULT_NULL_COLOR = "Auto"
+DEFAULT_IMAGE_AZIMUTH_START = 0.0
 
 
 def is_resistivity_unit(unit: str) -> bool:
@@ -33,6 +36,26 @@ def _coerce_fill_alpha(value: Any, default: float = DEFAULT_FILL_ALPHA) -> float
     if not math.isfinite(alpha):
         alpha = default
     return max(0.0, min(1.0, alpha))
+
+
+def _coerce_finite_float(value: Any, default: float = 0.0) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        result = default
+    return result if math.isfinite(result) else default
+
+
+def rotate_image_columns(values: Any, azimuth_start: Any = DEFAULT_IMAGE_AZIMUTH_START):
+    """Circularly shift image columns so the left edge is ``azimuth_start`` degrees."""
+    start = _coerce_finite_float(azimuth_start, DEFAULT_IMAGE_AZIMUTH_START)
+    shape = getattr(values, "shape", ())
+    if len(shape) < 2 or not shape[1]:
+        return values
+    shift = int(round((-start / 360.0) * int(shape[1]))) % int(shape[1])
+    if shift == 0:
+        return values
+    return np.roll(values, shift, axis=1)
 
 
 def _alpha_from_hex_color(color_name: str) -> float:
@@ -133,6 +156,10 @@ def normalize_curve_plot_style(info: Dict[str, Any]) -> Dict[str, Any]:
         normalized["cmap"] = str(normalized.get("cmap", DEFAULT_IMAGE_CMAP)).lower()
         normalized["invert"] = bool(normalized.get("invert", normalized.get("invert_x", False)))
         normalized["null_color"] = normalized.get("null_color", DEFAULT_NULL_COLOR)
+        normalized["azimuth_start"] = _coerce_finite_float(
+            normalized.get("azimuth_start", DEFAULT_IMAGE_AZIMUTH_START),
+            DEFAULT_IMAGE_AZIMUTH_START,
+        )
     else:
         normalized = normalize_fill_style(normalized)
     return normalized

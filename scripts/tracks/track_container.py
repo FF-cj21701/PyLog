@@ -1061,6 +1061,7 @@ class ImageTrackContainer(BaseTrackContainer):
             info.get('min'),
             info.get('max'),
             info.get('null_color', DEFAULT_NULL_COLOR),
+            info.get('azimuth_start', 0.0),
         )
 
     def _refresh_image_tiles(self):
@@ -1088,6 +1089,7 @@ class ImageTrackContainer(BaseTrackContainer):
                 info['cmap'] = s.get('cmap', info.get('cmap', DEFAULT_IMAGE_CMAP)).lower()
                 info['invert'] = s.get('invert', info.get('invert'))
                 info['log'] = s.get('log', info.get('log', False))
+                info['azimuth_start'] = s.get('azimuth_start', info.get('azimuth_start', 0.0))
                 if 'img_min' in s: info['min'] = s['img_min']
                 elif 'min' in s and 'cmap' in s: info['min'] = s['min']
                 if 'img_max' in s: info['max'] = s['img_max']

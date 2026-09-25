@@ -519,39 +519,43 @@ class ScrollManager(QObject):
         lw = self.lw
         track_id = id(track)
 
-        # Check for tile or full slice
-        is_tile = (tile_index >= 0)
-        tier = "tile" if is_tile else ("high" if v_step == 1 else "low")
+        # Resolve the worker by its signal object first.  Tile indices may be
+        # negative for data whose depth is near or below zero, so their sign
+        # cannot safely distinguish tiled work from the retired full-slice path.
         worker_key = None
         for key, worker in list(lw.active_image_workers.items()):
-            if is_tile:
-                if (
-                    isinstance(key, tuple)
-                    and len(key) >= 3
-                    and key[0] == track_id
-                    and key[1] == tier
-                    and key[2] == tile_index
-                    and getattr(worker, 'signals', None) is self.sender()
-                ):
-                    worker_key = key
-                    break
-            elif key == (track_id, tier):
+            if (
+                isinstance(key, tuple)
+                and key
+                and key[0] == track_id
+                and getattr(worker, 'signals', None) is self.sender()
+            ):
                 worker_key = key
                 break
 
         worker = lw.active_image_workers.get(worker_key) if worker_key is not None else None
-        if worker_key in lw.active_image_workers:
-            del lw.active_image_workers[worker_key]
+        if worker_key is not None:
+            lw.active_image_workers.pop(worker_key, None)
+
+        is_tile = (
+            isinstance(worker_key, tuple)
+            and len(worker_key) >= 2
+            and worker_key[1] == "tile"
+        )
 
         pw = track.plot_widget
         cache = getattr(pw, 'image_data_cache', None)
         if not cache:
+            self._check_loading_status()
             return
 
         if is_tile and worker is None:
             logger.debug(f"[DEBUG_UI] Dropping untracked tile data for index {tile_index}")
             self._check_loading_status()
             return
+
+        if is_tile:
+            cache['tiles_loading'].discard(tile_index)
             
         current_generation = cache.get('render_generation', 0)
         is_stale_generation = worker is not None and getattr(worker, 'render_generation', 0) != current_generation
@@ -559,9 +563,6 @@ class ScrollManager(QObject):
             logger.debug(f"[DEBUG_UI] Dropping stale tile generation for index {tile_index}")
             self._check_loading_status()
             return
-            
-        if is_tile:
-            cache['tiles_loading'].discard(tile_index)
 
         # [REFACTORED] Tiled image application (Legacy item check removed)
         item = getattr(pw, 'image_item', None)
@@ -578,9 +579,14 @@ class ScrollManager(QObject):
 
     def _on_image_worker_error(self, worker_key, error):
         lw = self.lw
-        if worker_key in lw.active_image_workers:
-            del lw.active_image_workers[worker_key]
+        worker = lw.active_image_workers.pop(worker_key, None)
+        if worker is not None and isinstance(worker_key, tuple) and len(worker_key) >= 3:
+            track = getattr(worker, 'track', None)
+            cache = getattr(getattr(track, 'plot_widget', None), 'image_data_cache', None)
+            if cache:
+                cache.get('tiles_loading', set()).discard(worker_key[2])
         logger.warning(f"Image Worker Error ({worker_key}): {error}")
+        self._check_loading_status()
 
     def _check_loading_status(self):
         if hasattr(self.lw, 'drop_controller'):

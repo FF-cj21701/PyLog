@@ -113,7 +113,19 @@ class TiledImageItem(QGraphicsObject):
         start_idx = int(np.floor(min_y / self.m_per_tile))
         end_idx = int(np.ceil(max_y / self.m_per_tile))
         
-        needed_indices = set(range(start_idx - 1, end_idx + 1))
+        # Keep the one-tile prefetch buffer inside the actual data extent.  In
+        # particular, shallow wells starting in tile 0 must not request tile
+        # -1: ``ImageSliceWorker`` historically used -1 as a non-tile sentinel,
+        # and an out-of-range request can otherwise remain registered forever.
+        data_start_idx = int(np.floor(self._rect.top() / self.m_per_tile))
+        data_end_idx = int(np.ceil(self._rect.bottom() / self.m_per_tile)) - 1
+        request_start_idx = max(start_idx - 1, data_start_idx)
+        request_end_idx = min(end_idx, data_end_idx)
+        needed_indices = (
+            set(range(request_start_idx, request_end_idx + 1))
+            if request_start_idx <= request_end_idx
+            else set()
+        )
         self._needed_indices = needed_indices
         self._center_tile_idx = (start_idx + end_idx) // 2
         now = time.monotonic()

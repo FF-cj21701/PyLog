@@ -40,15 +40,20 @@ env/
 # === 数据文件 (全部排除) ===
 /data/
 wellData/
-demo.db
+*.db
+*.sqlite
+*.sqlite3
+*.h5
+*.hdf5
+*.las
+*.dlis
 
-# === 文档 (仅保留 CHANGELOG 与截图) ===
+# === 文档 (仅保留 CHANGELOG) ===
 docs/*
 !docs/CHANGELOG.md
-!docs/Fig1.png
-!docs/CODEX_DESIGN_MIGRATION_PLAN.md
 
 # === 测试与脚本 (暂不公开) ===
+tests/
 scripts_user/*
 !scripts_user/README.md
 examples/*
@@ -87,7 +92,6 @@ coverage.xml
 # === 项目特定 ===
 *.tmp
 *.bak
-*.dlis
 tmp/
 scratch/
 projects/

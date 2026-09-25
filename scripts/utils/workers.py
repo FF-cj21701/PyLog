@@ -4,7 +4,7 @@ from PySide6.QtCore import QObject, Signal, QRunnable
 from .colormap_utils import get_standard_colormap
 from .curve_loading import load_curve_bundle_for_plot
 from .logger import logger
-from .plot_style_utils import DEFAULT_IMAGE_CMAP, DEFAULT_NULL_COLOR
+from .plot_style_utils import DEFAULT_IMAGE_CMAP, DEFAULT_NULL_COLOR, rotate_image_columns
 from core.app_config import app_config
 
 MAX_LUT_CACHE = 3
@@ -130,6 +130,7 @@ class ImageSliceWorker(QRunnable):
             # Extraction of raw slice with vertical downsampling
             # Use slice directly to avoid a copy where possible
             data_slice = raw_data[start_idx : end_idx : self.v_step, ::h_step]
+            data_slice = rotate_image_columns(data_slice, self.info.get('azimuth_start', 0.0))
 
             # [INFO] Worker slice stats
             if data_slice is not None:

@@ -721,14 +721,24 @@ class LogWidget(QWidget):
         return total
 
     def clear_fracture_selection(self):
+        cleared_count = 0
         for track in self.track_containers:
             if hasattr(track, "clear_fracture_selection"):
+                if hasattr(track, "selected_fracture_count"):
+                    cleared_count += track.selected_fracture_count()
+                else:
+                    cleared_count += len(getattr(track, "_selected_fracture_indexes", ()))
                 track.clear_fracture_selection()
+        return cleared_count
 
     def clear_fracture_interaction(self):
+        had_active_pick = self.active_fracture_track is not None
         self.cancel_current_fracture_pick(show_message=False)
-        self.clear_fracture_selection()
-        self._show_fracture_status("Fracture selection cleared.")
+        cleared_count = self.clear_fracture_selection()
+        if had_active_pick or cleared_count:
+            self._show_fracture_status("Fracture selection cleared.")
+            return True
+        return False
 
     def clear_fracture_annotations(self):
         had_annotations = any(

@@ -139,7 +139,7 @@ API_METADATA: Dict[str, Dict[str, Any]] = {
             "window_id": {"type": "str", "required": True},
             "track": {"type": "str/int", "required": True},
             "curve": {"type": "str/int", "required": True},
-            "settings": {"type": "dict", "required": True, "description": "Style settings such as color, line_width, cmap, min, max, invert, null_color."},
+            "settings": {"type": "dict", "required": True, "description": "Style settings such as color, line_width, cmap, min, max, invert, null_color, and azimuth_start for image direction."},
         },
     },
     "apply_track_style": {

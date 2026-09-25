@@ -9,7 +9,12 @@ from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QImage, QColor
 
 from ..utils.colormap_utils import get_standard_colormap
-from ..utils.plot_style_utils import DEFAULT_IMAGE_CMAP, DEFAULT_NULL_COLOR, normalize_curve_plot_style
+from ..utils.plot_style_utils import (
+    DEFAULT_IMAGE_CMAP,
+    DEFAULT_NULL_COLOR,
+    normalize_curve_plot_style,
+    rotate_image_columns,
+)
 from ..utils.plot_value_utils import build_invalid_value_mask, compute_auto_display_range
 from .tiled_image_item import TiledImageItem
 from ..utils.logger import logger
@@ -137,6 +142,7 @@ class ImageTrackManager:
         img_data, depth, info = curve.get('data'), curve.get('depth'), curve.get('info')
         idx_start, idx_end = np.searchsorted(depth, min_y), np.searchsorted(depth, max_y)
         slice_data, slice_depth = img_data[idx_start:idx_end], depth[idx_start:idx_end]
+        slice_data = rotate_image_columns(slice_data, info.get('azimuth_start', 0.0))
         
         if len(slice_data) == 0:
             return

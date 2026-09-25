@@ -132,7 +132,7 @@ PyLog/
 ├── pylog_api/               # Public Python API for scripting
 ├── examples/                # Demo scripts
 ├── docs/                    # Documentation & changelogs
-├── data/                    # Well databases (user data, git-ignored)
+├── data/                    # Runtime-created local well data directory
 └── scripts_user/            # User scripts directory
 ```
 
@@ -182,6 +182,8 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 ## 📄 License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+Third-party components and notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ---
 
